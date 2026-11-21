@@ -1,0 +1,12 @@
+/target/
+/out/
+/bin/stratad
+/bin/strata
+/plugins/strata.manager/web/
+/webui/node_modules/
+__pycache__/
+*.pyc
+*.tmp
+*.swp
+*~
+.DS_Store
