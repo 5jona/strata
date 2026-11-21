@@ -1,0 +1,4 @@
+{
+  "$schema": "https://biomejs.dev/schemas/2.6.8/schema.json",
+  "extends": ["@pochita/config/biome.json"]
+}
