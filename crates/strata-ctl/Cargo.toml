@@ -1,0 +1,19 @@
+[package]
+name = "strata-ctl"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "strata"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+strata-protocol = { workspace = true }
+strata-runtime = { workspace = true }

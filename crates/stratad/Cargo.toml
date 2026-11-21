@@ -1,0 +1,18 @@
+[package]
+name = "stratad"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+libc = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+strata-protocol = { workspace = true }
+strata-runtime = { workspace = true }
+strata-sys = { workspace = true }
+tokio = { workspace = true }
