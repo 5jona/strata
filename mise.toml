@@ -1,0 +1,47 @@
+[tools]
+android-sdk = "23.0"
+pnpm = "12.22.0"
+
+[env]
+CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER = "{{config_root}}/scripts/aarch64-android-linker.sh"
+
+[task_config]
+dir = "{{config_root}}"
+
+[tasks."rust:check"]
+description = "Run Rust fmt check, clippy (-D warnings), and workspace unit tests"
+run = "cargo fmt --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace"
+
+[tasks."webui:check"]
+description = "Lint, typecheck, build, and test Strata SideVeil plugin WebUI"
+dir = "{{config_root}}/webui"
+run = "pnpm check"
+
+[tasks."webui:format"]
+description = "Format and auto-fix Strata WebUI files with Biome"
+dir = "{{config_root}}/webui"
+run = "pnpm format"
+
+[tasks.check]
+description = "Run full Rust and WebUI quality gates"
+depends = ["rust:check", "webui:check"]
+
+[tasks.format]
+description = "Format Rust workspace with rustfmt"
+run = "cargo fmt --all"
+
+[tasks.build]
+description = "Cross-compile stratad and strata CLI for aarch64-linux-android"
+run = "cargo build --release --target aarch64-linux-android -p stratad -p strata-ctl"
+
+[tasks.archive]
+description = "Build release binaries and package KernelSU archive out/strata.zip"
+run = "bash build.sh"
+
+[tasks.reload]
+description = "Build and hot-reload Strata onto connected Android device"
+run = "bash reload.sh"
+
+[tasks.clean]
+description = "Remove Rust target directory, staged binaries, and output archive"
+run = "rm -rf target out bin/stratad bin/strata"

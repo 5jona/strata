@@ -1,0 +1,49 @@
+#!/bin/sh
+#
+# Execute a command directly inside Android PID 1 namespaces.
+# Uses the clean Android environment snapshot captured at container start.
+#
+
+set -eu
+
+if [ "$#" -eq 0 ]; then
+    echo "Usage: host-exec <command> [args...]" >&2
+    exit 2
+fi
+
+HOST_ENV_FILE="${STRATA_HOST_ENV_FILE:-/run/strata/host.env}"
+CALLER_TERM="${TERM:-xterm-256color}"
+
+if [ -r "$HOST_ENV_FILE" ]; then
+    arg_count="$#"
+    while IFS= read -r env_line || [ -n "$env_line" ]; do
+        case "$env_line" in
+            ''|'#'*|' '*|'	'*) continue ;;
+            *'='*) set -- "$@" "$env_line" ;;
+        esac
+    done < "$HOST_ENV_FILE"
+    set -- "$@" "TERM=${CALLER_TERM}"
+    i=0
+    while [ "$i" -lt "$arg_count" ]; do
+        arg="$1"
+        shift
+        set -- "$@" "$arg"
+        i=$((i + 1))
+    done
+    exec nsenter -t 1 -m -u -C -T -r -w -- /system/bin/env -i "$@"
+fi
+
+exec nsenter -t 1 -m -u -C -T -r -w -- /system/bin/env -i \
+    PATH="/product/bin:/apex/com.android.runtime/bin:/apex/com.android.art/bin:/system_ext/bin:/system/bin:/system/xbin:/odm/bin:/vendor/bin:/data/adb/ksu/bin" \
+    ANDROID_ROOT="/system" \
+    ANDROID_DATA="/data" \
+    ANDROID_STORAGE="/storage" \
+    ANDROID_ART_ROOT="/apex/com.android.art" \
+    ANDROID_I18N_ROOT="/apex/com.android.i18n" \
+    ANDROID_TZDATA_ROOT="/apex/com.android.tzdata" \
+    EXTERNAL_STORAGE="/sdcard" \
+    TMPDIR="/data/local/tmp" \
+    HOME="/" \
+    USER="root" \
+    TERM="${CALLER_TERM}" \
+    "$@"

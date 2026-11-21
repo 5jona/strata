@@ -1,0 +1,6 @@
+id=strata
+name=Strata
+version=v0.1.0
+versionCode=1
+author=pochita
+description=Zero-GKI pure-Rust multi-container Linux runtime and daemon for Android 16+ (arm64)
