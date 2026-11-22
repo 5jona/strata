@@ -2,13 +2,20 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createMockStrataTransport } from '../src/lib/mockStrataBridge.ts';
 import {
+  getCustomCharDevs,
+  getCustomMounts,
+  hasL5DiagMounts,
+  toggleCharDev,
+  toggleL5DiagMounts,
+} from '../src/lib/passthrough.ts';
+import {
   buildSshCommand,
   buildTaskCommand,
   formatBytes,
   formatUptime,
   summarizeSshKey,
 } from '../src/lib/strataFormat.ts';
-import { STRATA_METHODS } from '../src/types.ts';
+import { L5_DIAG_MOUNTS, STRATA_METHODS } from '../src/types.ts';
 
 test('formatters produce stable human-readable output', () => {
   assert.equal(formatBytes(512), '512 B');
@@ -71,4 +78,52 @@ test('mock Strata transport handles lifecycle, HUD, and streaming tasks', async 
   assert.equal(logs.summary.running, false);
   assert.equal(logs.summary.exitCode, 0);
   assert.ok(logs.entries.length >= 2);
+});
+
+test('passthrough helpers merge/strip L5 mounts and char devs without clobbering custom entries', () => {
+  const customMount = {
+    hostPath: '/data/local/tmp/work',
+    containerPath: '/mnt/work',
+    readOnly: false,
+  };
+  assert.equal(hasL5DiagMounts([customMount]), false);
+
+  const enabled = toggleL5DiagMounts([customMount], true);
+  assert.equal(hasL5DiagMounts(enabled), true);
+  assert.deepEqual(getCustomMounts(enabled), [customMount]);
+  assert.equal(enabled.length, 1 + L5_DIAG_MOUNTS.length);
+
+  // Re-enabling must not duplicate L5 mounts.
+  const enabledAgain = toggleL5DiagMounts(enabled, true);
+  assert.equal(enabledAgain.length, enabled.length);
+
+  const disabled = toggleL5DiagMounts(enabled, false);
+  assert.equal(hasL5DiagMounts(disabled), false);
+  assert.deepEqual(disabled, [customMount]);
+
+  const devs1 = toggleCharDev(['binder'], 'uinput', true);
+  assert.deepEqual(devs1, ['binder', 'uinput']);
+  assert.deepEqual(getCustomCharDevs(devs1), ['binder']);
+  const devs2 = toggleCharDev(devs1, 'uinput', false);
+  assert.deepEqual(devs2, ['binder']);
+});
+
+test('mock Strata transport persists hostRuntime, extraCharDevs, and extraMounts in configPatch', async () => {
+  const transport = createMockStrataTransport();
+  const patched = await transport.invokePlugin(STRATA_METHODS.CONTAINER_CONFIG_PATCH, {
+    container: 'main',
+    hostRuntime: true,
+    extraCharDevs: ['uinput', 'net/tun'],
+    extraMounts: [...L5_DIAG_MOUNTS],
+  });
+  assert.equal(patched.config.hostRuntime, true);
+  assert.deepEqual(patched.config.extraCharDevs, ['uinput', 'net/tun']);
+  assert.deepEqual(patched.config.extraMounts, [...L5_DIAG_MOUNTS]);
+
+  const fetched = await transport.invokePlugin(STRATA_METHODS.CONTAINER_CONFIG_GET, {
+    container: 'main',
+  });
+  assert.equal(fetched.config.hostRuntime, true);
+  assert.deepEqual(fetched.config.extraCharDevs, ['uinput', 'net/tun']);
+  assert.deepEqual(fetched.config.extraMounts, [...L5_DIAG_MOUNTS]);
 });

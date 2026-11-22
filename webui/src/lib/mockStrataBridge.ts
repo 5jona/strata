@@ -1,6 +1,7 @@
 import { MockTransport } from '@pochita/bridge';
 import { STRATA_PLUGIN_ID } from '../manifest.ts';
 import {
+  type BindMount,
   type ContainerConfig,
   type ContainerStatusSnapshot,
   type HudStateResult,
@@ -62,10 +63,18 @@ export function createMockStrataTransport(): MockTransport {
     hostBridge: true,
     hostRuntime: false,
     bindDataLocalTmp: true,
+    extraCharDevs: [],
+    extraMounts: [],
     syncAndroidDns: true,
     fsckOnMount: true,
   };
 
+  const cloneConfig = (): ContainerConfig => ({
+    ...config,
+    ssh: { ...config.ssh },
+    extraCharDevs: [...(config.extraCharDevs ?? [])],
+    extraMounts: (config.extraMounts ?? []).map((m) => ({ ...m })),
+  });
   const sshKeys = ['ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMockPreviewKeyStrata dev@workstation'];
   const dropbearLogs = [
     '[12549] Not backgrounding',
@@ -80,24 +89,17 @@ export function createMockStrataTransport(): MockTransport {
   };
   const tasks: MockTaskRecord[] = [];
   let nextTaskSeq = 1;
-
   const transport = new MockTransport({
     namespace: 'strata-manager-preview',
-    onRpc: (method) => {
-      if (method === 'config.get') {
-        return { panel: { themeId: 'coloros-glass', colorMode: 'system' } };
-      }
-      if (method === 'clipboard.set' || method === 'haptics.trigger' || method === 'ui.toast') {
-        return { ok: true };
-      }
-      return { ok: true };
-    },
+    onRpc: (method) =>
+      method === 'config.get'
+        ? { panel: { themeId: 'coloros-glass', colorMode: 'system' } }
+        : { ok: true },
     onPluginInvoke: (method, rawParams) => {
       const params = (rawParams ?? {}) as Record<string, unknown>;
       const emitPlugin = (event: string, payload: unknown) => {
         transport.emit('plugin.event', { pluginId: STRATA_PLUGIN_ID, event, payload });
       };
-
       switch (method) {
         case STRATA_METHODS.DAEMON_STATUS:
           return {
@@ -188,25 +190,34 @@ export function createMockStrataTransport(): MockTransport {
             lines: [...dropbearLogs],
           };
         case STRATA_METHODS.CONTAINER_CONFIG_GET:
-          return { container: container.id, config: { ...config, ssh: { ...config.ssh } } };
+          return { container: container.id, config: cloneConfig() };
         case STRATA_METHODS.CONTAINER_CONFIG_PATCH: {
           if (typeof params.hostname === 'string') {
-            config.hostname = params.hostname;
-            container.hostname = params.hostname;
+            config.hostname = container.hostname = params.hostname;
           }
           if (typeof params.sshPort === 'number') {
-            config.ssh.port = params.sshPort;
-            container.sshPort = params.sshPort;
+            config.ssh.port = container.sshPort = params.sshPort;
           }
           if (typeof params.autoStart === 'boolean') {
-            config.autoStart = params.autoStart;
-            container.autoStart = params.autoStart;
+            config.autoStart = container.autoStart = params.autoStart;
           }
           if (typeof params.hostBridge === 'boolean') {
-            config.hostBridge = params.hostBridge;
-            container.hostBridge = params.hostBridge;
+            config.hostBridge = container.hostBridge = params.hostBridge;
           }
-          return { container: container.id, config: { ...config, ssh: { ...config.ssh } } };
+          if (typeof params.hostRuntime === 'boolean') {
+            config.hostRuntime = container.hostRuntime = params.hostRuntime;
+          }
+          if (Array.isArray(params.extraCharDevs)) {
+            config.extraCharDevs = params.extraCharDevs.map(String);
+          }
+          if (Array.isArray(params.extraMounts)) {
+            config.extraMounts = (params.extraMounts as BindMount[]).map((m) => ({
+              hostPath: String(m.hostPath),
+              containerPath: String(m.containerPath),
+              readOnly: Boolean(m.readOnly),
+            }));
+          }
+          return { container: container.id, config: cloneConfig() };
         }
         case STRATA_METHODS.CONTAINER_SSH_KEY_LIST:
           return { container: container.id, keys: [...sshKeys], added: 0 };

@@ -11,7 +11,9 @@ import {
 import { KeyRound, Plus, RefreshCw, Save } from 'lucide-react';
 import { useEffect, useId, useState } from 'react';
 import { summarizeSshKey } from '../lib/strataFormat.ts';
-import type { ContainerConfig, ContainerConfigPatchParams } from '../types.ts';
+import type { BindMount, ContainerConfig, ContainerConfigPatchParams } from '../types.ts';
+import { DebugPassthroughCard } from './DebugPassthroughCard.tsx';
+import { StrataTraceCard } from './StrataTraceCard.tsx';
 
 export interface ConfigTabProps {
   config: ContainerConfig | null;
@@ -42,6 +44,9 @@ export function ConfigTab({
   const [sshPort, setSshPort] = useState(String(config?.ssh.port ?? 2222));
   const [autoStart, setAutoStart] = useState(config?.autoStart ?? true);
   const [hostBridge, setHostBridge] = useState(config?.hostBridge ?? true);
+  const [hostRuntime, setHostRuntime] = useState(config?.hostRuntime ?? false);
+  const [extraCharDevs, setExtraCharDevs] = useState<string[]>(config?.extraCharDevs ?? []);
+  const [extraMounts, setExtraMounts] = useState<BindMount[]>(config?.extraMounts ?? []);
   const [newKey, setNewKey] = useState('');
 
   useEffect(() => {
@@ -50,6 +55,9 @@ export function ConfigTab({
     setSshPort(String(config.ssh.port));
     setAutoStart(config.autoStart);
     setHostBridge(config.hostBridge);
+    setHostRuntime(config.hostRuntime);
+    setExtraCharDevs(config.extraCharDevs ?? []);
+    setExtraMounts(config.extraMounts ?? []);
   }, [config]);
 
   const handleSave = async () => {
@@ -62,6 +70,9 @@ export function ConfigTab({
           : undefined,
       autoStart,
       hostBridge,
+      hostRuntime,
+      extraCharDevs,
+      extraMounts,
     };
     await onSaveConfig(patch);
   };
@@ -94,6 +105,8 @@ export function ConfigTab({
       <LogConsole
         title="Dropbear 日志"
         entries={dropbearLogs}
+        searchable
+        filterable
         onCopy={onCopyLog}
         maxHeightClassName="max-h-40"
       />
@@ -169,6 +182,16 @@ export function ConfigTab({
         />
       </Card>
 
+      <DebugPassthroughCard
+        hostRuntime={hostRuntime}
+        onHostRuntimeChange={setHostRuntime}
+        extraCharDevs={extraCharDevs}
+        onExtraCharDevsChange={setExtraCharDevs}
+        extraMounts={extraMounts}
+        onExtraMountsChange={setExtraMounts}
+        disabled={busy || !config}
+      />
+
       <Card className="flex flex-col gap-2.5 p-3">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-1.5">
@@ -223,6 +246,8 @@ export function ConfigTab({
           </Button>
         </div>
       </Card>
+
+      <StrataTraceCard onCopyLog={onCopyLog} />
     </div>
   );
 }

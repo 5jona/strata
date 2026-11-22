@@ -122,6 +122,17 @@ export interface ContainerLogsResult {
   lines: string[];
 }
 
+export interface BindMount {
+  hostPath: string;
+  containerPath: string;
+  readOnly: boolean;
+}
+
+export const L5_DIAG_MOUNTS: readonly BindMount[] = [
+  { hostPath: '/sys/fs/pstore', containerPath: '/sys/fs/pstore', readOnly: true },
+  { hostPath: '/sys/kernel/tracing', containerPath: '/sys/kernel/tracing', readOnly: true },
+];
+
 export interface ContainerConfig {
   enabled: boolean;
   autoStart: boolean;
@@ -138,6 +149,8 @@ export interface ContainerConfig {
   hostBridge: boolean;
   hostRuntime: boolean;
   bindDataLocalTmp: boolean;
+  extraCharDevs?: string[];
+  extraMounts?: BindMount[];
   syncAndroidDns: boolean;
   fsckOnMount: boolean;
 }
@@ -155,6 +168,8 @@ export interface ContainerConfigPatchParams {
   sshPort?: number;
   hostBridge?: boolean;
   hostRuntime?: boolean;
+  extraCharDevs?: string[];
+  extraMounts?: BindMount[];
 }
 
 export interface SshKeysResult {

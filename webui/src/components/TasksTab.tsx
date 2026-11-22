@@ -166,6 +166,8 @@ export function TasksTab({
       <LogConsole
         title={activeTask ? `任务输出 · ${activeTask.taskId}` : '实时任务输出'}
         entries={entries}
+        searchable
+        filterable
         onClear={onClearConsole}
         onCopy={onCopyLog}
         maxHeightClassName="max-h-60"
