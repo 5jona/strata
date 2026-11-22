@@ -18,11 +18,15 @@ set_perm "$MODPATH/uninstall.sh" 0 0 0755
 set_perm "$MODPATH/bin/stratad" 0 0 0755
 set_perm "$MODPATH/bin/strata" 0 0 0755
 set_perm "$MODPATH/container/host-exec" 0 0 0755
-set_perm "$MODPATH/container/adb-shim.py" 0 0 0755
 set_perm "$MODPATH/container/setup-container.sh" 0 0 0755
 set_perm "$MODPATH/scripts/sync-sideveil-plugin.sh" 0 0 0755
 set_perm "$MODPATH/module.prop" 0 0 0644
 set_perm "$MODPATH/config.json" 0 0 0644
+if [ -d "$MODPATH/container/strata-debug" ]; then
+    set_perm_recursive "$MODPATH/container/strata-debug" 0 0 0755 0644
+    set_perm "$MODPATH/container/strata-debug/cli.py" 0 0 0755
+    set_perm "$MODPATH/container/strata-debug/forward_bridge.py" 0 0 0755
+fi
 if [ -d "$MODPATH/plugins/strata.manager" ]; then
     set_perm_recursive "$MODPATH/plugins/strata.manager" 0 0 0755 0644
 fi

@@ -20,8 +20,8 @@ This backlog records real, general-purpose gaps encountered while building `stra
    - Added optional `ephemeral: bool` on `PluginBackendEvent` routed to `emit_plugin_scoped_event_ephemeral(...)` and enforced `PluginEventRateLimiter` (120 reliable events/s) emitting `plugin.eventLagged` (`{ dropped }`) on rollover (`sideveild/src/uds_gateway/backend_session.rs`).
    - Adopted in `strata/crates/stratad/src/sideveil_seam/bridge.rs` (marking `task.output` frames `ephemeral: true`) and `strata/webui/src/hooks/useStrataTasks.ts` (listening for `plugin.eventLagged`).
 
-5. **[Resolved in Phase 3] On-Device ADB-Free Verification & Reload Harness**
-   - Promoted SideVeil live verification to `sideveil/scripts/verify-live.py` supporting `--mode auto|host-exec|local|adb` (auto-detecting Strata's on-device `host-exec` / Python 3 environment without PC ADB) and added `--ssh <host|user@host>` ADB-free deployment to `sideveil/reload.sh`.
+5. **[Resolved in Phase 3] On-Device & Container SSH Verification & Reload Harness**
+   - Promoted SideVeil live verification to `sideveil/scripts/verify-live.py` supporting `--mode auto|ssh|host-exec|local` (auto-detecting `STRATA_SSH_HOST`/`SSH_TARGET` or Strata's on-device `host-exec` / Python 3 environment) and `--ssh <host|user@host>` container deployment in `sideveil/reload.sh`.
 
 ## 2. `pochita-webui-kit` (`@pochita/sideveil-sdk`, `@pochita/ui`, `@pochita/bridge`)
 

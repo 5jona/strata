@@ -8,7 +8,7 @@ Strata is a standalone, zero-GKI-modification, pure-Rust multi-container Linux r
 - **Zero-Polling Supervision & Clean Teardown**: `pidfd_open` + Tokio `AsyncFd` monitors container init processes without polling; dual-signal teardown (cgroup v2 + mount namespace inode scan) guarantees `mounts == 0 && loops == 0` without requiring `PID_NS`.
 - **Multi-Container Control Plane**: `/data/adb/strata/run/strata.sock` (`0700 root:root`, `SO_PEERCRED` `uid == 0`) serves JSON-RPC 2.0 / NDJSON for CLI management, headless streaming command/Python execution, and future SideVeil plugin integration.
 - **Native Interactive CLI**: `strata` (symlinked at `/data/adb/ksu/bin/strata`) supports `start`, `stop`, `restart`, `status`, `list`, `enter`, `exec`, `py`, `debug`, `dns`, `logs`, `ssh-key`, `compact`, `fsck`, `backup`, and `config`, using local single-threaded `setns` for zero-overhead interactive TTY sessions.
-- **Android Host Bridge**: Syncs `/etc/resolv.conf`, `/run/strata/host.env`, POSIX `host-exec`, and local zero-ADB `adb` shim without invoking Bionic binaries inside glibc containers.
+- **Android Host Bridge**: Syncs `/etc/resolv.conf`, `/run/strata/host.env`, POSIX `host-exec`, and the Python `strata-debug` toolkit without invoking Bionic binaries inside glibc containers.
 
 ## Workspace Layout
 

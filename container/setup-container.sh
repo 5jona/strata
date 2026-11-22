@@ -2,7 +2,7 @@
 #
 # Idempotent inside-container provisioning script for Ubuntu 24.04 ARM64 under Strata.
 # Installs Python, key-only Dropbear SSH + openssh-sftp-server, debugging tools,
-# host-exec bridge, Android command wrappers, and the local zero-ADB shim.
+# host-exec bridge, strata-debug toolkit, and Android command wrappers.
 #
 
 set -eu
@@ -11,7 +11,21 @@ export DEBIAN_FRONTEND=noninteractive
 export LANG=C.UTF-8
 export LC_ALL=C.UTF-8
 
-STAGE_DIR="${1:-/data/local/tmp/strata_container_assets}"
+STAGE_DIR="/data/local/tmp/strata_container_assets"
+DEBUG_PROFILE=0
+
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --debug-profile)
+            DEBUG_PROFILE=1
+            shift
+            ;;
+        *)
+            STAGE_DIR="$1"
+            shift
+            ;;
+    esac
+done
 
 echo "[*] Configuring container APT policy and base resolvers..."
 mkdir -p /usr/sbin /run/strata /root/.ssh /root/work /etc/dropbear /usr/local/bin
@@ -81,6 +95,12 @@ apt-get install -y \
     zstd \
     tzdata
 
+if [ "$DEBUG_PROFILE" -eq 1 ]; then
+    echo "[*] Installing optional --debug-profile packages (Pillow, NumPy, WebP, bpftrace)..."
+    apt-get install -y python3-pil python3-numpy webp bpftrace || \
+        apt-get install -y python3-pil python3-numpy webp || true
+fi
+
 echo "[*] Generating persistent Dropbear host keys if missing..."
 if [ ! -f /etc/dropbear/dropbear_ed25519_host_key ]; then
     dropbearkey -t ed25519 -f /etc/dropbear/dropbear_ed25519_host_key
@@ -90,15 +110,24 @@ if [ ! -f /etc/dropbear/dropbear_rsa_host_key ]; then
 fi
 chmod 0600 /etc/dropbear/dropbear_*_host_key
 
-echo "[*] Installing host-exec and zero-ADB bridge scripts..."
+echo "[*] Installing host-exec and strata-debug bridge scripts..."
 if [ -f "${STAGE_DIR}/host-exec" ]; then
     cp "${STAGE_DIR}/host-exec" /usr/local/bin/host-exec
     chmod 0755 /usr/local/bin/host-exec
 fi
 
-if [ -f "${STAGE_DIR}/adb-shim.py" ]; then
-    cp "${STAGE_DIR}/adb-shim.py" /usr/local/bin/adb
-    chmod 0755 /usr/local/bin/adb
+rm -f /usr/local/bin/adb
+
+if [ -d "${STAGE_DIR}/strata-debug" ]; then
+    mkdir -p /usr/local/lib/strata-debug
+    cp "${STAGE_DIR}/strata-debug"/*.py /usr/local/lib/strata-debug/
+    chmod 0644 /usr/local/lib/strata-debug/*.py
+    chmod 0755 /usr/local/lib/strata-debug/cli.py /usr/local/lib/strata-debug/forward_bridge.py 2>/dev/null || true
+    cat > /usr/local/bin/strata-debug <<'EOF'
+#!/bin/sh
+exec /usr/bin/python3 /usr/local/lib/strata-debug/cli.py "$@"
+EOF
+    chmod 0755 /usr/local/bin/strata-debug
 fi
 
 if [ -f "${STAGE_DIR}/authorized_keys" ]; then

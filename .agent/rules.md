@@ -26,7 +26,7 @@ See [`docs/architecture-decisions.md`](../docs/architecture-decisions.md) for em
   - Drain container processes via dual signals (container cgroup `cgroup.procs` + `/proc/[0-9]*/ns/mnt` matching verified non-PID-1 mount namespace inode), send `SIGTERM`, wait up to 3s, then `cgroup.kill` + `SIGKILL`, remove container cgroup, recursively unmount deepest-first, and detach all matching loop devices until `mounts == 0 && loops == 0`.
 - **OEM & KernelSU Safety**:
   - Never install or run OpenSSH `sshd` inside containers on ColorOS/OPLUS kernels (`oplus_secure_guard_new.ko`); use key-only `dropbear -F -E -s -g -m` + `openssh-sftp-server` and `APT::Sandbox::User "root";`.
-  - Never execute Android Bionic binaries directly inside glibc containers; keep in-container bridge helpers (`host-exec`, `adb`) as POSIX sh / Python 3 scripts invoking `nsenter -t 1 -m -u -C -T -r -w`.
+  - Never execute Android Bionic binaries directly inside glibc containers; keep in-container bridge helpers (`host-exec`, `strata-debug`) as POSIX sh / Python 3 scripts invoking `nsenter -t 1 -m -u -C -T -r -w`.
   - Unset `ASH_STANDALONE` in KernelSU shell scripts and invoke Android binaries via explicit `/system/bin/*` paths.
 
 ## 3. Language, Privacy, Commits & Verification

@@ -67,10 +67,21 @@ explicit_files = [
     ("bin/stratad", 0o755),
     ("bin/strata", 0o755),
     ("container/host-exec", 0o755),
-    ("container/adb-shim.py", 0o755),
     ("container/setup-container.sh", 0o755),
     ("scripts/sync-sideveil-plugin.sh", 0o755),
 ]
+
+debug_pkg_root = os.path.join(script_dir, "container", "strata-debug")
+if os.path.isdir(debug_pkg_root):
+    for dirpath, dirnames, filenames in os.walk(debug_pkg_root):
+        dirnames[:] = [d for d in sorted(dirnames) if d != "__pycache__"]
+        for name in sorted(filenames):
+            if not name.endswith(".py"):
+                continue
+            full = os.path.join(dirpath, name)
+            rel = os.path.relpath(full, script_dir).replace(os.sep, "/")
+            mode = 0o755 if name in {"cli.py", "forward_bridge.py"} else 0o644
+            explicit_files.append((rel, mode))
 
 plugin_root = os.path.join(script_dir, "plugins", "strata.manager")
 if not os.path.isfile(os.path.join(plugin_root, "manifest.json")):

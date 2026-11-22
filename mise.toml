@@ -22,9 +22,13 @@ description = "Format and auto-fix Strata WebUI files with Biome"
 dir = "{{config_root}}/webui"
 run = "pnpm format"
 
+[tasks."python:check"]
+description = "Syntax-check Python tools and run host-side unit tests for strata-debug"
+run = "python3 -m py_compile container/strata-debug/*.py scripts/strata-debug-mcp.py scripts/verify-live.py scripts/verify_live/*.py tests/test_strata_debug.py && python3 -m unittest discover -s tests -v"
+
 [tasks.check]
-description = "Run full Rust and WebUI quality gates"
-depends = ["rust:check", "webui:check"]
+description = "Run full Rust, WebUI, and Python quality gates"
+depends = ["rust:check", "webui:check", "python:check"]
 
 [tasks.format]
 description = "Format Rust workspace with rustfmt"
