@@ -37,7 +37,7 @@ export const QUICK_TASK_PRESETS: readonly QuickTaskPreset[] = [
     id: 'host-prop',
     label: '宿主机桥接',
     mode: 'shell',
-    script: 'host-exec getprop ro.build.version.release && adb get-state',
+    script: 'host-exec getprop ro.build.version.release && host-exec id',
   },
   {
     id: 'net-check',

@@ -158,7 +158,7 @@ export function ConfigTab({
         <SettingRow
           variant="plain"
           title="Android 宿主机桥接"
-          description="启用 host-exec 与本地零 ADB 垫片能力"
+          description="启用 host-exec 与宿主机调试桥接能力"
           control={
             <Switch
               checked={hostBridge}

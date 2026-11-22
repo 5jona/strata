@@ -183,10 +183,10 @@ importers:
         version: file:../../../../pochita-webui-kit/packages/config(jiti@2.7.0)
       '@pochita/sideveil-sdk':
         specifier: file:../../../../pochita-webui-kit/packages/sdk
-        version: file:../../../../pochita-webui-kit/packages/sdk(react@19.3.1)
+        version: file:../../../../pochita-webui-kit/packages/sdk(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(jiti@2.7.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
       '@pochita/ui':
         specifier: file:../../../../pochita-webui-kit/packages/ui
-        version: file:../../../../pochita-webui-kit/packages/ui(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
+        version: file:../../../../pochita-webui-kit/packages/ui(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(jiti@2.7.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
       lucide-react:
         specifier: ^1.75.0
         version: 1.77.0(@types/react@19.3.0)(react@19.3.1)
@@ -1227,13 +1227,34 @@ snapshots:
       - tsx
       - yaml
 
-  '@pochita/sideveil-sdk@file:../../../../pochita-webui-kit/packages/sdk(react@19.3.1)':
+  '@pochita/sideveil-sdk@file:../../../../pochita-webui-kit/packages/sdk(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(jiti@2.7.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)':
     dependencies:
       '@pochita/bridge': file:../../../../pochita-webui-kit/packages/bridge(react@19.3.1)
+      '@pochita/ui': file:../../../../pochita-webui-kit/packages/ui(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(jiti@2.7.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
       react: 19.3.1
+    transitivePeerDependencies:
+      - '@rolldown/plugin-babel'
+      - '@types/node'
+      - '@types/react'
+      - '@types/react-dom'
+      - '@vitejs/devtools'
+      - babel-plugin-react-compiler
+      - esbuild
+      - jiti
+      - less
+      - oxc-transform-react
+      - react-dom
+      - sass
+      - sass-embedded
+      - stylus
+      - sugarss
+      - terser
+      - tsx
+      - yaml
 
-  '@pochita/ui@file:../../../../pochita-webui-kit/packages/ui(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)':
+  '@pochita/ui@file:../../../../pochita-webui-kit/packages/ui(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(jiti@2.7.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)':
     dependencies:
+      '@pochita/config': file:../../../../pochita-webui-kit/packages/config(jiti@2.7.0)
       '@radix-ui/react-slider': 1.6.1(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
       '@radix-ui/react-switch': 1.4.1(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
       '@radix-ui/react-tabs': 1.2.1(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
@@ -1244,8 +1265,23 @@ snapshots:
       react-dom: 19.3.1(react@19.3.1)
       tailwind-merge: 3.7.1
     transitivePeerDependencies:
+      - '@rolldown/plugin-babel'
+      - '@types/node'
       - '@types/react'
       - '@types/react-dom'
+      - '@vitejs/devtools'
+      - babel-plugin-react-compiler
+      - esbuild
+      - jiti
+      - less
+      - oxc-transform-react
+      - sass
+      - sass-embedded
+      - stylus
+      - sugarss
+      - terser
+      - tsx
+      - yaml
 
   '@radix-ui/number@1.1.3': {}
 
