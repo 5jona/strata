@@ -29,6 +29,13 @@ echo "[*] Running Rust quality gates (fmt, clippy -D warnings, host unit tests).
     run_in_env cargo test --workspace
 )
 
+echo "[*] Running Python syntax and unit test checks..."
+(
+    cd "${SCRIPT_DIR}"
+    python3 -m py_compile container/strata-debug/*.py scripts/*.py scripts/verify_live/*.py
+    python3 -m unittest discover -s tests
+)
+
 echo "[*] Running SideVeil plugin WebUI quality gate and Vite build..."
 (
     cd "${SCRIPT_DIR}/webui"

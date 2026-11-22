@@ -7,8 +7,21 @@ import os
 import shlex
 import shutil
 import subprocess
+import tempfile
 
 HOST_EXEC = "/usr/local/bin/host-exec"
+
+
+def _ensure_ssh_control_dir() -> str:
+    xdg = os.environ.get("XDG_RUNTIME_DIR", "").strip()
+    if xdg and os.path.isdir(xdg):
+        control_dir = os.path.join(xdg, "strata-verify")
+    else:
+        uid = os.getuid() if hasattr(os, "getuid") else 0
+        control_dir = os.path.join(tempfile.gettempdir(), f"strata-verify-{uid}")
+    os.makedirs(control_dir, mode=0o700, exist_ok=True)
+    os.chmod(control_dir, 0o700)
+    return control_dir
 
 
 def default_ssh_target(explicit: str | None = None) -> str | None:
@@ -67,6 +80,7 @@ class DeviceRunner:
 
     def _ssh_prefix(self) -> list[str]:
         assert self.ssh_target is not None
+        control_path = os.path.join(_ensure_ssh_control_dir(), "%r@%h:%p")
         return [
             "ssh",
             "-p",
@@ -82,7 +96,7 @@ class DeviceRunner:
             "-o",
             "ControlPersist=120",
             "-o",
-            "ControlPath=/tmp/strata-verify-%r@%h:%p",
+            f"ControlPath={control_path}",
             self.ssh_target,
         ]
 

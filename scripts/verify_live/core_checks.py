@@ -2,6 +2,7 @@
 
 import shlex
 
+from verify_live.debug_checks import verify_debug_tools
 from verify_live.runner import DeviceRunner
 
 
@@ -83,18 +84,7 @@ def verify_core(dev: DeviceRunner, *, non_destructive: bool = False) -> None:
     assert task_out == "strata-stream-ok", f"unexpected streaming task output: {task_out}"
 
     print("[7/12] Verifying in-container host-exec and strata-debug (zero legacy adb binary)...")
-    rel = dev.su(
-        "/data/adb/ksu/bin/strata exec host-exec getprop ro.build.version.release"
-    ).stdout.strip()
-    assert rel, "host-exec getprop returned empty"
-    fwd_list = dev.container_cmd("strata-debug forward --list", check=False)
-    assert fwd_list.returncode == 0, f"strata-debug forward --list failed: {fwd_list.stderr}"
-    probe_out = dev.container_cmd("strata-debug sys-probe --no-sf --no-sideveil", check=False)
-    assert probe_out.returncode == 0 and "package" in probe_out.stdout, (
-        f"strata-debug sys-probe failed: {probe_out.stderr or probe_out.stdout}"
-    )
-    legacy_adb = dev.container_cmd("test ! -e /usr/local/bin/adb && echo clean", check=False)
-    assert legacy_adb.stdout.strip() == "clean", "legacy /usr/local/bin/adb still exists in container"
+    verify_debug_tools(dev)
 
     if non_destructive:
         print("[8-10/12] Skipping destructive stop/debug/fsck/compact/backup (--non-destructive).")

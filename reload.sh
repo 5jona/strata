@@ -143,14 +143,30 @@ if [ -n "$SSH_TARGET" ]; then
         nohup /system/bin/sh -c \"sleep 1; ${REMOTE_MOD_DIR}/service.sh --now\" >/dev/null 2>&1 </dev/null &
     '"
     sleep 3
+    last_ssh_err=""
+    err_file="$(mktemp)"
+    trap 'rm -f "${err_file}"' EXIT
     for _ in $(seq 1 25); do
-        if ssh "${SSH_OPTS[@]}" "${SSH_TARGET}" "host-exec /data/adb/ksu/bin/strata status" 2>/dev/null; then
+        if ssh "${SSH_OPTS[@]}" "${SSH_TARGET}" "host-exec /data/adb/ksu/bin/strata status" 2>"${err_file}"; then
+            rm -f "${err_file}"
+            trap - EXIT
             echo "[+] Strata SSH hot-reload succeeded."
             exit 0
         fi
+        last_ssh_err="$(cat "${err_file}" 2>/dev/null || true)"
         sleep 1
     done
-    echo "[!] Timed out waiting for stratad after SSH reload." >&2
+    rm -f "${err_file}"
+    trap - EXIT
+    echo "[!] Timed out waiting for stratad after SSH reload (${SSH_TARGET}:${SSH_PORT})." >&2
+    if [ -n "${last_ssh_err}" ]; then
+        echo "[!] Last SSH error:" >&2
+        printf '%s\n' "${last_ssh_err}" >&2
+    fi
+    echo "[!] Troubleshooting hints:" >&2
+    echo "    - Verify device connectivity and SSH port (${SSH_PORT}) with: ssh -p ${SSH_PORT} ${SSH_TARGET} true" >&2
+    echo "    - Inspect /data/adb/strata/run/logs/stratad.log on the Android host for startup failures." >&2
+    echo "    - Check container/Dropbear status on-device via: /data/adb/ksu/bin/strata status" >&2
     exit 1
 fi
 
