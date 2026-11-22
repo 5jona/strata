@@ -14,6 +14,13 @@ fi
 HOST_ENV_FILE="${STRATA_HOST_ENV_FILE:-/run/strata/host.env}"
 CALLER_TERM="${TERM:-xterm-256color}"
 
+run_nsenter() {
+    if [ -e /proc/1/ns/time ] && [ -e /proc/self/ns/time ]; then
+        exec nsenter -t 1 -m -u -C -T -r -w -- /system/bin/env -i "$@"
+    fi
+    exec nsenter -t 1 -m -u -C -r -w -- /system/bin/env -i "$@"
+}
+
 if [ -r "$HOST_ENV_FILE" ]; then
     arg_count="$#"
     while IFS= read -r env_line || [ -n "$env_line" ]; do
@@ -30,10 +37,10 @@ if [ -r "$HOST_ENV_FILE" ]; then
         set -- "$@" "$arg"
         i=$((i + 1))
     done
-    exec nsenter -t 1 -m -u -C -T -r -w -- /system/bin/env -i "$@"
+    run_nsenter "$@"
 fi
 
-exec nsenter -t 1 -m -u -C -T -r -w -- /system/bin/env -i \
+run_nsenter \
     PATH="/product/bin:/apex/com.android.runtime/bin:/apex/com.android.art/bin:/system_ext/bin:/system/bin:/system/xbin:/odm/bin:/vendor/bin:/data/adb/ksu/bin" \
     ANDROID_ROOT="/system" \
     ANDROID_DATA="/data" \

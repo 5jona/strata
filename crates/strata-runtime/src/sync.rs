@@ -1,5 +1,7 @@
 //! Synchronization of container DNS, Android `host.env`, bridge scripts, SSH keys, and log tails.
 
+mod debug_tools;
+
 use std::fs;
 use std::path::Path;
 
@@ -8,6 +10,7 @@ use strata_sys::{net, procfs};
 
 use crate::error::{RuntimeError, RuntimeResult};
 use crate::fs_atomic::{ensure_dir_mode, sync_bytes_if_changed, write_atomic};
+use debug_tools::sync_strata_debug_package;
 
 /// Synchronizes `/etc/resolv.conf`, `/run/strata/host.env`, and POSIX/Python host bridge scripts
 /// inside a mounted container rootfs.
@@ -62,53 +65,6 @@ pub fn sync_container_dns(mount_dir: &Path, cfg: &ContainerConfig) -> RuntimeRes
     };
     let resolv = render_resolv_conf(&android_dns, &cfg.dns_servers);
     sync_bytes_if_changed(resolv.as_bytes(), &mount_dir.join("etc/resolv.conf"), 0o644)
-}
-
-const STRATA_DEBUG_LAUNCHER: &[u8] =
-    b"#!/bin/sh\nexec /usr/bin/python3 /usr/local/lib/strata-debug/cli.py \"$@\"\n";
-
-fn sync_strata_debug_package(mod_root: &Path, mount_dir: &Path) -> RuntimeResult<()> {
-    let src_dir = mod_root.join("container/strata-debug");
-    if !src_dir.is_dir() {
-        return Ok(());
-    }
-    let dst_dir = mount_dir.join("usr/local/lib/strata-debug");
-    ensure_dir_mode(&dst_dir, 0o755)?;
-
-    let entries = fs::read_dir(&src_dir).map_err(|source| RuntimeError::Io {
-        op: "read strata-debug dir",
-        source,
-    })?;
-    let mut synced_any = false;
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if !path.is_file() {
-            continue;
-        }
-        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
-            continue;
-        };
-        if !name.ends_with(".py") {
-            continue;
-        }
-        if let Ok(bytes) = fs::read(&path) {
-            let mode = if name == "cli.py" || name == "forward_bridge.py" {
-                0o755
-            } else {
-                0o644
-            };
-            sync_bytes_if_changed(&bytes, &dst_dir.join(name), mode)?;
-            synced_any = true;
-        }
-    }
-    if synced_any {
-        sync_bytes_if_changed(
-            STRATA_DEBUG_LAUNCHER,
-            &mount_dir.join("usr/local/bin/strata-debug"),
-            0o755,
-        )?;
-    }
-    Ok(())
 }
 
 /// Renders deduplicated `/etc/resolv.conf` prioritizing active Android DNS resolvers.

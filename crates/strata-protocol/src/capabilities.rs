@@ -27,6 +27,8 @@ pub mod cap {
     pub const AUDIT_WRITE: u32 = 29;
     pub const SETFCAP: u32 = 31;
     pub const SYSLOG: u32 = 34;
+    pub const PERFMON: u32 = 38;
+    pub const BPF: u32 = 39;
 
     /// Fallback highest capability number if `/proc/sys/kernel/cap_last_cap` is unreadable.
     pub const FALLBACK_LAST_CAP: u32 = 40;
@@ -124,13 +126,15 @@ const ISOLATED_CAPS: &[u32] = &[
     cap::SETFCAP,
 ];
 
-/// Additional capabilities enabling `host-exec`, `strata-debug`, `dmesg`, `gdb`/`strace`, and `insmod`.
+/// Additional capabilities enabling `host-exec`, `strata-debug`, `dmesg`, `gdb`/`strace`, `perf`/`bpf`, and `insmod`.
 const HOST_BRIDGE_EXTRA_CAPS: &[u32] = &[
     cap::DAC_READ_SEARCH,
     cap::SYS_ADMIN,
     cap::SYS_MODULE,
     cap::SYS_PTRACE,
     cap::SYSLOG,
+    cap::PERFMON,
+    cap::BPF,
 ];
 
 impl CapProfile {
@@ -172,13 +176,22 @@ mod tests {
         assert!(mask.contains(cap::SYS_MODULE));
         assert!(mask.contains(cap::SYS_PTRACE));
         assert!(mask.contains(cap::SYSLOG));
+        assert!(mask.contains(cap::PERFMON));
+        assert!(mask.contains(cap::BPF));
         assert!(mask.contains(cap::DAC_OVERRIDE));
         assert!(mask.contains(cap::DAC_READ_SEARCH));
         assert!(!mask.contains(cap::SYS_RAWIO));
 
+        // Older kernels with cap_last_cap < 38 must cleanly gate PERFMON/BPF out.
+        let older_mask = CapProfile::HostBridge.desired_mask(37);
+        assert!(!older_mask.contains(cap::PERFMON));
+        assert!(!older_mask.contains(cap::BPF));
+
         let drops = CapProfile::HostBridge.bounding_drops(40);
         assert!(drops.contains(&cap::SYS_RAWIO));
         assert!(!drops.contains(&cap::SYS_ADMIN));
+        assert!(!drops.contains(&cap::PERFMON));
+        assert!(!drops.contains(&cap::BPF));
     }
 
     #[test]
@@ -186,6 +199,8 @@ mod tests {
         let mask = CapProfile::Isolated.desired_mask(40);
         assert!(!mask.contains(cap::SYS_ADMIN));
         assert!(!mask.contains(cap::SYS_PTRACE));
+        assert!(!mask.contains(cap::PERFMON));
+        assert!(!mask.contains(cap::BPF));
         assert!(mask.contains(cap::NET_BIND_SERVICE));
         assert!(mask.contains(cap::SETUID));
     }

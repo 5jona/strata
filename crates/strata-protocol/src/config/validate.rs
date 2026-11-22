@@ -139,6 +139,13 @@ fn validate_container_config(id: &str, cfg: &ContainerConfig) -> Result<(), Conf
     for bm in &cfg.extra_mounts {
         validate_abs_path(id, &bm.host_path)?;
         validate_abs_path(id, &bm.container_path)?;
+        if is_disallowed_mount_host_path(&bm.host_path) {
+            return Err(ConfigValidationError::InvalidPath {
+                container: id.to_owned(),
+                path: bm.host_path.clone(),
+                reason: "must not bind-mount /dev/block paths",
+            });
+        }
         if bm.container_path == "/" {
             return Err(ConfigValidationError::InvalidPath {
                 container: id.to_owned(),
@@ -166,6 +173,11 @@ fn validate_abs_path(container: &str, path: &str) -> Result<(), ConfigValidation
         });
     }
     Ok(())
+}
+
+fn is_disallowed_mount_host_path(path: &str) -> bool {
+    let trimmed = path.trim_end_matches('/');
+    trimmed == "/dev/block" || trimmed.starts_with("/dev/block/")
 }
 
 fn is_valid_hostname(name: &str) -> bool {
@@ -252,30 +264,34 @@ mod tests {
 
     #[test]
     fn validates_extra_char_devs_and_extra_mounts() {
-        use crate::config::BindMount;
+        use crate::config::{BindMount, l5_diag_mounts};
 
         let mut cfg = StrataConfig::default();
         let main = cfg.containers.get_mut("main").expect("main container");
         main.extra_char_devs = vec!["uinput".to_owned(), "input/event0".to_owned()];
-        main.extra_mounts = vec![BindMount {
+        main.extra_mounts = l5_diag_mounts();
+        main.extra_mounts.push(BindMount {
             host_path: "/data/local/tmp/shared".to_owned(),
             container_path: "/mnt/shared".to_owned(),
             read_only: true,
-        }];
+        });
         assert!(cfg.validate().is_ok());
 
-        let main = cfg.containers.get_mut("main").expect("main container");
-        main.extra_mounts[0].container_path = "/".to_owned();
-        assert!(matches!(
-            cfg.validate(),
-            Err(ConfigValidationError::InvalidPath { .. })
-        ));
-
-        let main = cfg.containers.get_mut("main").expect("main container");
-        main.extra_mounts[0].container_path = "/mnt/../escape".to_owned();
-        assert!(matches!(
-            cfg.validate(),
-            Err(ConfigValidationError::InvalidPath { .. })
-        ));
+        for (host, dst) in [
+            ("/dev/block", "/mnt/b"),
+            ("/dev/block/sda", "/mnt/b"),
+            ("/data/local/tmp", "/"),
+            ("/data/local/tmp", "/mnt/../escape"),
+        ] {
+            cfg.containers.get_mut("main").expect("main").extra_mounts = vec![BindMount {
+                host_path: host.to_owned(),
+                container_path: dst.to_owned(),
+                read_only: true,
+            }];
+            assert!(matches!(
+                cfg.validate(),
+                Err(ConfigValidationError::InvalidPath { .. })
+            ));
+        }
     }
 }

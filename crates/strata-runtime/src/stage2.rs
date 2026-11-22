@@ -97,7 +97,25 @@ pub fn run_stage2(spec: Stage2Spec) -> RuntimeResult<Infallible> {
             continue;
         }
         let rel = bm.container_path.trim_start_matches('/');
-        bind_mount_into(host_path, &mount_dir.join(rel), bm.read_only)?;
+        let target_path = mount_dir.join(rel);
+        let is_sysfs_target = bm.container_path == "/sys" || bm.container_path.starts_with("/sys/");
+        if is_sysfs_target && !target_path.exists() {
+            eprintln!(
+                "strata stage2: skipping extra mount '{}' -> '{}': sysfs mountpoint does not exist on this kernel",
+                bm.host_path, bm.container_path
+            );
+            continue;
+        }
+        if let Err(err) = bind_mount_into(host_path, &target_path, bm.read_only) {
+            if is_sysfs_target {
+                eprintln!(
+                    "strata stage2: skipping optional sysfs mount '{}' -> '{}': {err}",
+                    bm.host_path, bm.container_path
+                );
+                continue;
+            }
+            return Err(err);
+        }
     }
 
     std::env::set_current_dir(mount_dir).map_err(|source| RuntimeError::Io {
@@ -147,9 +165,13 @@ pub(crate) fn exec_container_command(
 
 fn bind_mount_into(host_path: &Path, target_path: &Path, read_only: bool) -> RuntimeResult<()> {
     if host_path.is_dir() {
-        ensure_dir_mode(target_path, 0o755)?;
+        if !target_path.exists() {
+            ensure_dir_mode(target_path, 0o755)?;
+        }
     } else {
-        if let Some(parent) = target_path.parent() {
+        if let Some(parent) = target_path.parent()
+            && !parent.exists()
+        {
             ensure_dir_mode(parent, 0o755)?;
         }
         if !target_path.exists() {

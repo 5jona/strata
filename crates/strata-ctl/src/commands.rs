@@ -1,14 +1,17 @@
 //! Secondary CLI subcommand handlers (`ssh-key`, `config`, `task`, `daemon`).
 
+mod config;
+
 use std::fs;
 
 use serde_json::{Value, json};
 use strata_protocol::DaemonSummarySnapshot;
 use strata_protocol::rpc::{
-    ContainerConfigPatchParams, ContainerConfigResult, ContainerSelectorParams, SshKeyAddParams,
-    SshKeysResult, TaskCancelParams, TaskLogsParams, TaskLogsResult, TaskRunParams, TaskSummary,
-    methods,
+    ContainerSelectorParams, SshKeyAddParams, SshKeysResult, TaskCancelParams, TaskLogsParams,
+    TaskLogsResult, TaskRunParams, TaskSummary, methods,
 };
+
+pub(crate) use config::handle_config;
 
 use crate::client::StrataClient;
 use crate::format;
@@ -47,72 +50,6 @@ pub(crate) fn handle_ssh_key(
         }
         other => Err(format!(
             "unknown ssh-key action '{other}' (expected list|add)"
-        )),
-    }
-}
-
-pub(crate) fn handle_config(
-    client: &mut StrataClient,
-    container: Option<String>,
-    rest: &[String],
-    json_mode: bool,
-) -> Result<i32, String> {
-    let action = rest.first().map_or("show", String::as_str);
-    match action {
-        "show" => {
-            let params = serde_json::to_value(ContainerSelectorParams { container }).ok();
-            let val = rpc_or_err(client.call(methods::CONTAINER_CONFIG_GET, params))?;
-            if json_mode {
-                print_json(&val);
-            } else {
-                let res: ContainerConfigResult =
-                    serde_json::from_value(val).map_err(|e| e.to_string())?;
-                println!("{}", serde_json::to_string_pretty(&res).unwrap_or_default());
-            }
-            Ok(0)
-        }
-        "reload" => {
-            let val = rpc_or_err(client.call(methods::DAEMON_RELOAD_CONFIG, None))?;
-            if json_mode {
-                print_json(&val);
-            } else {
-                println!("Reloaded configuration from disk.");
-            }
-            Ok(0)
-        }
-        "set-image" | "set-mount" | "set-hostname" | "set-port" => {
-            let Some(arg) = rest.get(1) else {
-                return Err(format!("usage: strata config {action} <value>"));
-            };
-            let mut patch = ContainerConfigPatchParams {
-                container,
-                ..ContainerConfigPatchParams::default()
-            };
-            match action {
-                "set-image" => patch.image_path = Some(arg.clone()),
-                "set-mount" => patch.mount_dir = Some(arg.clone()),
-                "set-hostname" => patch.hostname = Some(arg.clone()),
-                "set-port" => {
-                    let port = arg
-                        .parse::<u16>()
-                        .map_err(|_| format!("invalid port '{arg}'"))?;
-                    patch.ssh_port = Some(port);
-                }
-                _ => {}
-            }
-            let val = rpc_or_err(client.call(
-                methods::CONTAINER_CONFIG_PATCH,
-                serde_json::to_value(patch).ok(),
-            ))?;
-            if json_mode {
-                print_json(&val);
-            } else {
-                println!("Updated container configuration ({action}={arg}).");
-            }
-            Ok(0)
-        }
-        other => Err(format!(
-            "unknown config action '{other}' (expected show|reload|set-image|set-mount|set-hostname|set-port)"
         )),
     }
 }

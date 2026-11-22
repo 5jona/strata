@@ -11,7 +11,8 @@ pub use validate::{ConfigValidationError, validate_container_id};
 use crate::capabilities::CapProfile;
 use crate::constants::{
     CONFIG_SCHEMA_VERSION, CONTAINER_DROPBEAR_PID_PATH, DEFAULT_CONTAINER_ID,
-    DEFAULT_CONTAINERS_ROOT, DEFAULT_DNS_SERVERS, DEFAULT_SIDEVEIL_HUB_SOCK, SIDEVEIL_PLUGIN_ID,
+    DEFAULT_CONTAINERS_ROOT, DEFAULT_DNS_SERVERS, DEFAULT_SIDEVEIL_HUB_SOCK, L5_DIAG_MOUNT_PATHS,
+    SIDEVEIL_PLUGIN_ID,
 };
 
 /// Top-level multi-container Strata configuration persisted at `/data/adb/strata/config.json`.
@@ -77,6 +78,19 @@ pub struct BindMount {
     pub container_path: String,
     #[serde(default)]
     pub read_only: bool,
+}
+
+/// Returns the canonical opt-in read-only L5 kernel diagnostic bind mounts.
+#[must_use]
+pub fn l5_diag_mounts() -> Vec<BindMount> {
+    L5_DIAG_MOUNT_PATHS
+        .iter()
+        .map(|path| BindMount {
+            host_path: (*path).to_owned(),
+            container_path: (*path).to_owned(),
+            read_only: true,
+        })
+        .collect()
 }
 
 /// Per-container runtime, storage, isolation, and networking specification.

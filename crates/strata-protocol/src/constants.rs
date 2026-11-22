@@ -57,3 +57,6 @@ pub const DEFAULT_LOG_MAX_BYTES: u64 = 256 * 1024;
 
 /// Configuration schema version.
 pub const CONFIG_SCHEMA_VERSION: u32 = 1;
+
+/// Canonical read-only L5 kernel diagnostic mount paths (opt-in via `strata config set-l5-diag on`).
+pub const L5_DIAG_MOUNT_PATHS: [&str; 2] = ["/sys/fs/pstore", "/sys/kernel/tracing"];

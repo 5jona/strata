@@ -226,7 +226,11 @@ Commands:
   compact                     Run native FITRIM ioctl to reclaim sparse image blocks
   fsck                        Stop container and run e2fsck -f -y on rootfs image
   backup <out.img.gz>         Stop container and write atomic gzip-compressed backup
-  config <show|reload|set-*>  Inspect or update container configuration
+  config <action> [value]     Inspect or update container configuration:
+                                show | reload | set-image | set-mount | set-hostname | set-port
+                                set-host-bridge <true|false> | set-host-runtime <true|false>
+                                set-char-devs <csv|none> | set-mounts <src:dst[:ro|rw],...|none>
+                                set-l5-diag <on|off>
   task <run|list|cancel>      Run or inspect daemon-hosted streaming tasks
   daemon <status|ping|health> Inspect stratad daemon health and summary"
     );
