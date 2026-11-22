@@ -116,6 +116,12 @@ impl ConfigStore {
         if let Some(v) = params.host_runtime {
             entry.host_runtime = v;
         }
+        if let Some(v) = params.extra_char_devs {
+            entry.extra_char_devs = v;
+        }
+        if let Some(v) = params.extra_mounts {
+            entry.extra_mounts = v;
+        }
 
         candidate
             .validate()
@@ -177,4 +183,45 @@ fn persist_config(path: &Path, cfg: &StrataConfig) -> Result<(), String> {
     rendered.push('\n');
     fs_atomic::write_atomic(path, rendered.as_bytes(), 0o600)
         .map_err(|e| format!("persist '{}': {e}", path.display()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use strata_protocol::BindMount;
+
+    #[tokio::test]
+    async fn patch_container_updates_and_validates_extra_devs_and_mounts() {
+        let dir = std::env::temp_dir().join(format!("strata-cfg-patch-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("create temp dir");
+        let path = dir.join("config.json");
+
+        let store = ConfigStore::load_or_seed(path).expect("seed config");
+        let (id, updated) = store
+            .patch_container(ContainerConfigPatchParams {
+                extra_char_devs: Some(vec!["uinput".to_owned()]),
+                extra_mounts: Some(vec![BindMount {
+                    host_path: "/data/local/tmp/work".to_owned(),
+                    container_path: "/mnt/work".to_owned(),
+                    read_only: false,
+                }]),
+                ..ContainerConfigPatchParams::default()
+            })
+            .await
+            .expect("valid patch should succeed");
+        assert_eq!(id, "main");
+        assert_eq!(updated.extra_char_devs, vec!["uinput"]);
+        assert_eq!(updated.extra_mounts.len(), 1);
+
+        let err = store
+            .patch_container(ContainerConfigPatchParams {
+                extra_char_devs: Some(vec!["block/sda".to_owned()]),
+                ..ContainerConfigPatchParams::default()
+            })
+            .await;
+        assert!(err.is_err());
+
+        let _ = fs::remove_dir_all(&dir);
+    }
 }

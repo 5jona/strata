@@ -1,19 +1,17 @@
 //! Zero-polling `pidfd` + `AsyncFd` container start, stop, restart, and crash-backoff supervision.
 
-use std::fs::OpenOptions;
-use std::os::fd::AsRawFd;
-use std::process::{Child, Command, Stdio};
+use std::process::Child;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use strata_protocol::constants::DEFAULT_LOG_MAX_BYTES;
-use strata_protocol::rpc::{StorageCleanupReport, error_codes};
-use strata_protocol::{ContainerConfig, ContainerPhase, ContainerStatusSnapshot, RestartBackoff};
-use strata_runtime::{Stage2Spec, fs_atomic, spec_pipe, storage};
+use strata_protocol::rpc::error_codes;
+use strata_protocol::{ContainerConfig, ContainerPhase, ContainerStatusSnapshot};
+use strata_runtime::storage;
 use strata_sys::{namespace, pidfd::PidFd};
 use tokio::io::unix::AsyncFd;
 
-use crate::manager::{ContainerManager, StopOutcome};
+use crate::manager::launch::{build_stage2_spec, spawn_stage2_init};
+use crate::manager::{ContainerManager, ContainerSlot, StopOutcome};
 
 impl ContainerManager {
     /// Starts a container (idempotent when already running) and attaches zero-polling supervision.
@@ -50,6 +48,7 @@ impl ContainerManager {
             live.desired_running = false;
             live.generation = live.generation.saturating_add(1);
             live.phase = ContainerPhase::Stopping;
+            live.restart_backoff.reset();
             (prev, live.ns_pid, live.mnt_ns_inode)
         };
         self.emit_state_changed(&id, prev_phase, ContainerPhase::Stopping)
@@ -90,17 +89,12 @@ impl ContainerManager {
         self: &Arc<Self>,
         id: &str,
         cfg: &ContainerConfig,
-        slot: &Arc<crate::manager::ContainerSlot>,
+        slot: &Arc<ContainerSlot>,
         is_restart: bool,
     ) -> Result<(), (i32, String)> {
         let prev_phase = {
             let mut live = slot.state.write().await;
-            let prev = live.phase;
-            live.phase = ContainerPhase::Starting;
-            live.desired_running = true;
-            live.last_error = None;
-            live.generation = live.generation.saturating_add(1);
-            prev
+            live.prepare_start(is_restart)
         };
         self.emit_state_changed(id, prev_phase, ContainerPhase::Starting)
             .await;
@@ -119,22 +113,7 @@ impl ContainerManager {
             return Err((code, msg));
         }
 
-        let init_cmd = cfg.effective_init_command();
-        let spec = Stage2Spec {
-            container_id: id.to_owned(),
-            mount_dir: cfg.mount_dir.clone(),
-            hostname: cfg.hostname.clone(),
-            oom_score_adj: cfg.oom_score_adj,
-            cap_profile: cfg.cap_profile(),
-            host_runtime: cfg.host_runtime,
-            bind_data_local_tmp: cfg.bind_data_local_tmp,
-            extra_char_devs: cfg.extra_char_devs.clone(),
-            extra_mounts: cfg.extra_mounts.clone(),
-            command: init_cmd,
-            workdir: Some("/root".to_owned()),
-            term: Some("xterm-256color".to_owned()),
-        };
-
+        let spec = build_stage2_spec(id, cfg);
         let self_exe = self.self_exe.clone();
         let log_path = self.log_file_path(id);
         let spawn_res =
@@ -171,18 +150,11 @@ impl ContainerManager {
         self.emit_state_changed(id, ContainerPhase::Starting, ContainerPhase::Running)
             .await;
 
-        self.spawn_exit_monitor(
-            id.to_owned(),
-            Arc::clone(slot),
-            child,
-            pidfd,
-            generation,
-            RestartBackoff::standard(),
-        );
+        self.spawn_exit_monitor(id.to_owned(), Arc::clone(slot), child, pidfd, generation);
         Ok(())
     }
 
-    async fn mark_failed(&self, id: &str, slot: &Arc<crate::manager::ContainerSlot>, msg: &str) {
+    async fn mark_failed(&self, id: &str, slot: &Arc<ContainerSlot>, msg: &str) {
         let prev = {
             let mut live = slot.state.write().await;
             let prev = live.phase;
@@ -200,11 +172,10 @@ impl ContainerManager {
     fn spawn_exit_monitor(
         self: &Arc<Self>,
         id: String,
-        slot: Arc<crate::manager::ContainerSlot>,
+        slot: Arc<ContainerSlot>,
         mut child: Child,
         pidfd: PidFd,
         generation: u64,
-        mut backoff: RestartBackoff,
     ) {
         let mgr = Arc::clone(self);
         tokio::spawn(async move {
@@ -218,20 +189,17 @@ impl ContainerManager {
                 .ok()
                 .and_then(Result::ok);
 
-            let should_restart = {
+            let delay_ms = {
                 let _lock = slot.lifecycle_lock.lock().await;
                 let mut live = slot.state.write().await;
                 if live.generation != generation || !live.desired_running {
                     return;
                 }
-                let prev = live.phase;
-                let ns_pid = live.ns_pid;
-                let mnt_ns = live.mnt_ns_inode;
-                live.phase = ContainerPhase::Failed;
-                live.ns_pid = None;
-                live.mnt_ns_inode = None;
-                live.started_at = None;
-                live.last_error = Some(format!("container init exited ({exit_status:?})"));
+                let ran_for_ms = started.elapsed().as_millis() as u64;
+                let (prev, ns_pid, mnt_ns, delay_ms) = live.record_unexpected_exit(
+                    ran_for_ms,
+                    format!("container init exited ({exit_status:?})"),
+                );
                 drop(live);
 
                 mgr.emit_state_changed(&id, prev, ContainerPhase::Failed)
@@ -243,13 +211,9 @@ impl ContainerManager {
                     })
                     .await;
                 }
-                true
+                delay_ms
             };
 
-            if !should_restart {
-                return;
-            }
-            let delay_ms = backoff.record_exit(started.elapsed().as_millis() as u64);
             eprintln!("stratad: container '{id}' exited unexpectedly; restarting in {delay_ms}ms");
             tokio::time::sleep(Duration::from_millis(delay_ms)).await;
 
@@ -268,56 +232,33 @@ impl ContainerManager {
     }
 }
 
-fn spawn_stage2_init(
-    self_exe: &std::path::Path,
-    log_path: &std::path::Path,
-    spec: &Stage2Spec,
-) -> Result<(Child, u32, PidFd, Option<u64>), String> {
-    let _ = fs_atomic::rotate_log_file(log_path, DEFAULT_LOG_MAX_BYTES);
-    let log_out = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(log_path)
-        .map_err(|e| format!("open log '{}': {e}", log_path.display()))?;
-    let log_err = log_out
-        .try_clone()
-        .map_err(|e| format!("clone log fd: {e}"))?;
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::manager::ContainerLiveState;
 
-    let spec_fd = spec_pipe::create_spec_pipe(spec).map_err(|e| e.to_string())?;
-    let (err_read, err_write) = spec_pipe::create_exec_error_pipe().map_err(|e| e.to_string())?;
+    #[test]
+    fn persisted_restart_backoff_escalates_across_restarts_and_resets_on_explicit_start() {
+        let mut live = ContainerLiveState::default();
+        live.prepare_start(false);
+        live.phase = ContainerPhase::Running;
 
-    let mut child = Command::new(self_exe)
-        .arg("__init")
-        .arg("--spec-fd")
-        .arg(spec_fd.as_raw_fd().to_string())
-        .arg("--err-fd")
-        .arg(err_write.as_raw_fd().to_string())
-        .stdin(Stdio::null())
-        .stdout(Stdio::from(log_out))
-        .stderr(Stdio::from(log_err))
-        .spawn()
-        .map_err(|e| format!("spawn stage2 helper: {e}"))?;
-
-    drop(spec_fd);
-    drop(err_write);
-
-    match spec_pipe::read_exec_error(err_read) {
-        Ok(None) => {}
-        Ok(Some(err_msg)) => {
-            let _ = child.wait();
-            return Err(err_msg);
+        // Consecutive rapid crashes must escalate: 2s -> 4s -> 8s -> 16s -> 30s -> 30s.
+        let mut delays = Vec::new();
+        for _ in 0..6 {
+            let (_, _, _, delay) = live.record_unexpected_exit(250, "crashed".to_owned());
+            delays.push(delay);
+            live.prepare_start(true);
+            live.phase = ContainerPhase::Running;
         }
-        Err(err) => {
-            let _ = child.wait();
-            return Err(err.to_string());
-        }
+        assert_eq!(delays, vec![2_000, 4_000, 8_000, 16_000, 30_000, 30_000]);
+
+        // Staying healthy past 60s resets the backoff window to 2s.
+        let (_, _, _, post_healthy) = live.record_unexpected_exit(90_000, "late exit".to_owned());
+        assert_eq!(post_healthy, 2_000);
+
+        // Explicit user start resets accumulated failures back to 0.
+        live.prepare_start(false);
+        assert_eq!(live.restart_backoff.failures(), 0);
     }
-
-    let pid = child.id();
-    let pidfd = PidFd::open(pid).map_err(|e| format!("pidfd_open({pid}): {e}"))?;
-    let mnt_ns = namespace::read_ns_inode(pid, "mnt").ok();
-    Ok((child, pid, pidfd, mnt_ns))
 }
-
-#[allow(dead_code)]
-fn _assert_cleanup_report(_: StorageCleanupReport) {}

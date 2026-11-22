@@ -225,4 +225,57 @@ mod tests {
             Err(ConfigValidationError::InvalidCharDev { .. })
         ));
     }
+
+    #[test]
+    fn effective_init_command_respects_ssh_disabled_and_custom_init() {
+        let mut cfg = StrataConfig::default();
+        let main = cfg.containers.get_mut("main").expect("main container");
+        main.ssh.enabled = false;
+        main.ssh.port = 0;
+        assert!(cfg.validate().is_ok());
+
+        let headless_init = cfg.containers["main"].effective_init_command();
+        assert_eq!(headless_init[0], "/bin/sh");
+        assert!(!headless_init.iter().any(|arg| arg.contains("dropbear")));
+
+        let main = cfg.containers.get_mut("main").expect("main container");
+        main.init_command = vec![
+            "/usr/bin/env".to_owned(),
+            "sleep".to_owned(),
+            "infinity".to_owned(),
+        ];
+        assert_eq!(
+            main.effective_init_command(),
+            vec!["/usr/bin/env", "sleep", "infinity"]
+        );
+    }
+
+    #[test]
+    fn validates_extra_char_devs_and_extra_mounts() {
+        use crate::config::BindMount;
+
+        let mut cfg = StrataConfig::default();
+        let main = cfg.containers.get_mut("main").expect("main container");
+        main.extra_char_devs = vec!["uinput".to_owned(), "input/event0".to_owned()];
+        main.extra_mounts = vec![BindMount {
+            host_path: "/data/local/tmp/shared".to_owned(),
+            container_path: "/mnt/shared".to_owned(),
+            read_only: true,
+        }];
+        assert!(cfg.validate().is_ok());
+
+        let main = cfg.containers.get_mut("main").expect("main container");
+        main.extra_mounts[0].container_path = "/".to_owned();
+        assert!(matches!(
+            cfg.validate(),
+            Err(ConfigValidationError::InvalidPath { .. })
+        ));
+
+        let main = cfg.containers.get_mut("main").expect("main container");
+        main.extra_mounts[0].container_path = "/mnt/../escape".to_owned();
+        assert!(matches!(
+            cfg.validate(),
+            Err(ConfigValidationError::InvalidPath { .. })
+        ));
+    }
 }

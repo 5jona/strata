@@ -1,4 +1,10 @@
-//! Pure-Rust network interface IPv4 detection (`getifaddrs`) and Android DNS property reading.
+//! Pure-Rust network interface IPv4 detection (`getifaddrs`), `NETLINK_ROUTE` watcher, and Android DNS property reading.
+
+pub mod netlink;
+
+pub use netlink::{
+    NetChangeEvent, NetlinkDrain, drain_netlink_events, open_route_netlink, parse_netlink_events,
+};
 
 use std::ffi::CStr;
 use std::net::Ipv4Addr;

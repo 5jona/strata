@@ -161,31 +161,43 @@ impl ContainerConfig {
         }
     }
 
-    /// Returns the init command to execute inside the container.
-    /// Defaults to foreground key-only Dropbear when `init_command` is empty.
+    /// Returns the init command: explicit `init_command`, foreground key-only Dropbear when
+    /// `ssh.enabled` is true, or a signal-aware idle shell holder when SSH is disabled.
     #[must_use]
     pub fn effective_init_command(&self) -> Vec<String> {
         if !self.init_command.is_empty() {
             return self.init_command.clone();
         }
-        vec![
-            "/usr/sbin/dropbear".to_owned(),
-            "-F".to_owned(),
-            "-E".to_owned(),
-            "-s".to_owned(),
-            "-g".to_owned(),
-            "-m".to_owned(),
-            "-K".to_owned(),
-            self.ssh.keepalive_secs.to_string(),
-            "-P".to_owned(),
-            CONTAINER_DROPBEAR_PID_PATH.to_owned(),
-            "-r".to_owned(),
-            "/etc/dropbear/dropbear_ed25519_host_key".to_owned(),
-            "-r".to_owned(),
-            "/etc/dropbear/dropbear_rsa_host_key".to_owned(),
-            "-p".to_owned(),
-            format!("{}:{}", self.ssh.listen_addr, self.ssh.port),
+        if !self.ssh.enabled {
+            return vec![
+                "/bin/sh".to_owned(),
+                "-c".to_owned(),
+                "trap 'exit 0' TERM INT; while :; do sleep 3600 & wait $!; done".to_owned(),
+            ];
+        }
+        let keepalive = self.ssh.keepalive_secs.to_string();
+        let bind = format!("{}:{}", self.ssh.listen_addr, self.ssh.port);
+        [
+            "/usr/sbin/dropbear",
+            "-F",
+            "-E",
+            "-s",
+            "-g",
+            "-m",
+            "-K",
+            &keepalive,
+            "-P",
+            CONTAINER_DROPBEAR_PID_PATH,
+            "-r",
+            "/etc/dropbear/dropbear_ed25519_host_key",
+            "-r",
+            "/etc/dropbear/dropbear_rsa_host_key",
+            "-p",
+            &bind,
         ]
+        .into_iter()
+        .map(str::to_owned)
+        .collect()
     }
 }
 

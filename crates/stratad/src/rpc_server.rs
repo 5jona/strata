@@ -14,7 +14,7 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::{mpsc, watch};
 
-use crate::dispatcher::Dispatcher;
+use crate::dispatcher::{Dispatcher, RpcCaller};
 use crate::manager::ContainerManager;
 use crate::sideveil_seam::EventHub;
 
@@ -149,7 +149,9 @@ async fn handle_connection(
         };
 
         let is_subscribe = req.method == methods::EVENTS_SUBSCRIBE;
-        let resp = dispatcher.handle(conn_id, req).await;
+        let resp = dispatcher
+            .handle(RpcCaller::LocalCtl { conn_id }, req)
+            .await;
         if let Ok(json) = serde_json::to_string(&resp)
             && out_tx.send(json).await.is_err()
         {
@@ -157,20 +159,32 @@ async fn handle_connection(
         }
 
         if is_subscribe && event_forwarder.is_none() {
-            let mut rx = event_hub.subscribe();
+            let mut sub = event_hub.subscribe();
             let tx = out_tx.clone();
             event_forwarder = Some(tokio::spawn(async move {
                 loop {
-                    match rx.recv().await {
-                        Ok(evt) => {
-                            if let Ok(json) = serde_json::to_string(&evt)
-                                && tx.send(json).await.is_err()
-                            {
-                                break;
+                    tokio::select! {
+                        biased;
+                        evt = sub.reliable.recv() => match evt {
+                            Ok(env) => {
+                                if let Ok(json) = serde_json::to_string(&env)
+                                    && tx.send(json).await.is_err()
+                                {
+                                    break;
+                                }
                             }
-                        }
-                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
-                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                            Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                        },
+                        evt = sub.ephemeral.recv() => match evt {
+                            Ok(env) => {
+                                if let Ok(json) = serde_json::to_string(&env) {
+                                    let _ = tx.try_send(json);
+                                }
+                            }
+                            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                            Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                        },
                     }
                 }
             }));

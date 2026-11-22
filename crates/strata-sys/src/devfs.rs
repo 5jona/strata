@@ -111,7 +111,9 @@ pub fn setup_isolated_virtual_fs(rootfs: &Path, extra_char_devs: &[String]) -> S
         }
 
         for extra in extra_char_devs {
-            expose_host_char_dev(&dev_dir, extra)?;
+            if !expose_host_char_dev_optional(&dev_dir, extra)? {
+                eprintln!("strata: optional host char dev '/dev/{extra}' not found, skipping");
+            }
         }
     }
 
@@ -166,10 +168,28 @@ fn setup_dev_shm_and_pts(dev_dir: &Path) -> SysResult<()> {
     Ok(())
 }
 
-fn expose_host_char_dev(container_dev_dir: &Path, relative_name: &str) -> SysResult<()> {
-    let host_dev = Path::new("/dev").join(relative_name);
-    let meta =
-        fs::metadata(&host_dev).map_err(|e| SysError::path_io("stat char dev", &host_dev, e))?;
+/// Exposes a host character device node inside `container_dev_dir`.
+///
+/// Returns `Ok(true)` when created, `Ok(false)` when the host node does not exist
+/// (`ErrorKind::NotFound`), and `Err` on non-character-device targets or real syscall failures.
+pub fn expose_host_char_dev_optional(
+    container_dev_dir: &Path,
+    relative_name: &str,
+) -> SysResult<bool> {
+    expose_char_dev_from_root(Path::new("/dev"), container_dev_dir, relative_name)
+}
+
+fn expose_char_dev_from_root(
+    host_dev_root: &Path,
+    container_dev_dir: &Path,
+    relative_name: &str,
+) -> SysResult<bool> {
+    let host_dev = host_dev_root.join(relative_name);
+    let meta = match fs::metadata(&host_dev) {
+        Ok(m) => m,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(e) => return Err(SysError::path_io("stat char dev", &host_dev, e)),
+    };
     if !meta.file_type().is_char_device() {
         return Err(SysError::InvalidArgument {
             op: "expose_host_char_dev",
@@ -181,7 +201,8 @@ fn expose_host_char_dev(container_dev_dir: &Path, relative_name: &str) -> SysRes
         ensure_dir(parent)?;
     }
     let perms = meta.mode() & 0o666;
-    mknod_char(&dst, if perms == 0 { 0o660 } else { perms }, meta.rdev())
+    mknod_char(&dst, if perms == 0 { 0o660 } else { perms }, meta.rdev())?;
+    Ok(true)
 }
 
 fn mknod_char(path: &Path, perms: u32, rdev: libc::dev_t) -> SysResult<()> {
@@ -198,4 +219,36 @@ fn mknod_char(path: &Path, perms: u32, rdev: libc::dev_t) -> SysResult<()> {
 
 fn ensure_dir(path: &Path) -> SysResult<()> {
     fs::create_dir_all(path).map_err(|e| SysError::path_io("mkdir", path, e))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn optional_char_dev_skips_missing_and_rejects_regular_files() {
+        let base = std::env::temp_dir().join(format!("strata-devfs-test-{}", std::process::id()));
+        let host_root = base.join("host_dev");
+        let dst_root = base.join("dst_dev");
+        let _ = fs::remove_dir_all(&base);
+        fs::create_dir_all(&host_root).expect("create host_dev");
+        fs::create_dir_all(&dst_root).expect("create dst_dev");
+
+        let missing = expose_char_dev_from_root(&host_root, &dst_root, "uinput")
+            .expect("missing optional dev should return Ok(false)");
+        assert!(!missing);
+
+        let reg_file = host_root.join("not_a_chardev");
+        fs::write(&reg_file, b"plain").expect("write regular file");
+        let err = expose_char_dev_from_root(&host_root, &dst_root, "not_a_chardev");
+        assert!(matches!(
+            err,
+            Err(SysError::InvalidArgument {
+                op: "expose_host_char_dev",
+                ..
+            })
+        ));
+
+        let _ = fs::remove_dir_all(&base);
+    }
 }

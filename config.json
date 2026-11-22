@@ -23,7 +23,9 @@
             "hostBridge": true,
             "hostRuntime": false,
             "bindDataLocalTmp": true,
-            "extraCharDevs": [],
+            "extraCharDevs": [
+                "uinput"
+            ],
             "extraMounts": [],
             "syncAndroidDns": true,
             "dnsServers": [

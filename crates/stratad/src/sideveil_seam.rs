@@ -1,14 +1,17 @@
 //! Event broadcast hub and optional auto-reconnecting SideVeil `uds-native` plugin bridge.
 
 mod bridge;
+mod reconnect;
+mod session;
 #[cfg(test)]
 mod tests;
+mod wire;
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use strata_protocol::EventEnvelope;
-use strata_protocol::rpc::{HudSetParams, HudStateResult};
+use strata_protocol::rpc::{HudSetParams, HudStateResult, events};
 use tokio::sync::{Notify, broadcast, watch};
 
 use crate::config_store::ConfigStore;
@@ -17,35 +20,60 @@ use crate::manager::ContainerManager;
 use crate::sideveil_hud::HudPreferences;
 use crate::task_runner::TaskRunner;
 
-const EVENT_CHANNEL_CAPACITY: usize = 256;
+const RELIABLE_EVENT_CAPACITY: usize = 256;
+const EPHEMERAL_EVENT_CAPACITY: usize = 256;
+
+/// Returns true for high-volume streaming events that may drop under backpressure.
+#[must_use]
+pub(crate) fn is_ephemeral_event(event: &str) -> bool {
+    event == events::TASK_OUTPUT
+}
 
 /// Transport-agnostic sink invoked whenever container state or streaming tasks emit events.
 pub(crate) trait PluginEventSink: Send + Sync {
     fn emit(&self, event: EventEnvelope);
 }
 
+/// Dual-channel subscription separating reliable control events from ephemeral streaming output.
+pub(crate) struct EventSubscription {
+    pub(crate) reliable: broadcast::Receiver<EventEnvelope>,
+    pub(crate) ephemeral: broadcast::Receiver<EventEnvelope>,
+}
+
 /// Broadcast hub fanning out `strata.sock` events and SideVeil `plugin.event` messages.
 #[derive(Debug)]
 pub(crate) struct EventHub {
-    tx: broadcast::Sender<EventEnvelope>,
+    reliable_tx: broadcast::Sender<EventEnvelope>,
+    ephemeral_tx: broadcast::Sender<EventEnvelope>,
 }
 
 impl EventHub {
     #[must_use]
     pub(crate) fn new() -> Self {
-        let (tx, _) = broadcast::channel(EVENT_CHANNEL_CAPACITY);
-        Self { tx }
+        let (reliable_tx, _) = broadcast::channel(RELIABLE_EVENT_CAPACITY);
+        let (ephemeral_tx, _) = broadcast::channel(EPHEMERAL_EVENT_CAPACITY);
+        Self {
+            reliable_tx,
+            ephemeral_tx,
+        }
     }
 
     #[must_use]
-    pub(crate) fn subscribe(&self) -> broadcast::Receiver<EventEnvelope> {
-        self.tx.subscribe()
+    pub(crate) fn subscribe(&self) -> EventSubscription {
+        EventSubscription {
+            reliable: self.reliable_tx.subscribe(),
+            ephemeral: self.ephemeral_tx.subscribe(),
+        }
     }
 }
 
 impl PluginEventSink for EventHub {
     fn emit(&self, event: EventEnvelope) {
-        let _ = self.tx.send(event);
+        if is_ephemeral_event(&event.event) {
+            let _ = self.ephemeral_tx.send(event);
+        } else {
+            let _ = self.reliable_tx.send(event);
+        }
     }
 }
 

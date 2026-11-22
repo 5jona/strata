@@ -66,6 +66,18 @@ impl HudPreferences {
         self.snapshot(sideveil_connected)
     }
 
+    /// Updates dark/light mode from SideVeil Hub appearance notifications.
+    /// Notifies the active session loop when the mode actually changes.
+    pub(crate) fn set_dark(&self, is_dark: bool) -> bool {
+        let prev = self.is_dark.swap(is_dark, Ordering::Relaxed);
+        if prev != is_dark {
+            self.changed.notify_one();
+            true
+        } else {
+            false
+        }
+    }
+
     pub(crate) async fn wait_change(&self) {
         self.changed.notified().await;
     }

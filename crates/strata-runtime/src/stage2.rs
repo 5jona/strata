@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use strata_protocol::capabilities::CapProfile;
 use strata_protocol::config::BindMount;
 use strata_protocol::constants::DEFAULT_CONTAINER_PATH;
-use strata_sys::{caps, cgroup, devfs, mount, namespace};
+use strata_sys::{caps, cgroup, devfs, mount, namespace, procfs};
 
 use crate::error::{RuntimeError, RuntimeResult};
 use crate::fs_atomic::ensure_dir_mode;
@@ -90,6 +90,10 @@ pub fn run_stage2(spec: Stage2Spec) -> RuntimeResult<Infallible> {
     for bm in &spec.extra_mounts {
         let host_path = Path::new(&bm.host_path);
         if !host_path.exists() {
+            eprintln!(
+                "strata stage2: skipping extra mount '{}': host path does not exist",
+                bm.host_path
+            );
             continue;
         }
         let rel = bm.container_path.trim_start_matches('/');
@@ -163,13 +167,16 @@ fn bind_mount_into(host_path: &Path, target_path: &Path, read_only: bool) -> Run
     .map_err(RuntimeError::from_sys)?;
 
     if read_only {
-        let _ = mount::mount(
+        let existing_flags =
+            procfs::read_mount_flags(target_path).map_err(RuntimeError::from_sys)?;
+        mount::mount(
             None,
             target_path,
             None,
-            libc::MS_BIND | libc::MS_REMOUNT | libc::MS_RDONLY,
+            existing_flags | libc::MS_BIND | libc::MS_REMOUNT | libc::MS_RDONLY,
             None,
-        );
+        )
+        .map_err(RuntimeError::from_sys)?;
     }
     Ok(())
 }

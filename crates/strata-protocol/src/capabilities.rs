@@ -124,7 +124,7 @@ const ISOLATED_CAPS: &[u32] = &[
     cap::SETFCAP,
 ];
 
-/// Additional capabilities enabling `host-exec`, `adb-shim`, `dmesg`, `gdb`/`strace`, and `insmod`.
+/// Additional capabilities enabling `host-exec`, `strata-debug`, `dmesg`, `gdb`/`strace`, and `insmod`.
 const HOST_BRIDGE_EXTRA_CAPS: &[u32] = &[
     cap::DAC_READ_SEARCH,
     cap::SYS_ADMIN,

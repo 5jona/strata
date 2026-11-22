@@ -3,6 +3,7 @@
 mod config_store;
 mod dispatcher;
 mod manager;
+mod net_watcher;
 mod rpc_server;
 mod sideveil_hud;
 mod sideveil_seam;
@@ -200,6 +201,8 @@ async fn daemon_main(opts: DaemonArgs) -> Result<(), String> {
     config_store.spawn_inotify_watcher(Arc::clone(&manager), Arc::clone(&sideveil));
 
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+    let net_watcher_handle =
+        net_watcher::spawn_net_watcher(Arc::clone(&manager), shutdown_rx.clone());
     let bridge_handle = sideveil.spawn_bridge(
         Arc::clone(&config_store),
         Arc::clone(&dispatcher),
@@ -227,6 +230,7 @@ async fn daemon_main(opts: DaemonArgs) -> Result<(), String> {
 
     let _ = tokio::time::timeout(std::time::Duration::from_secs(2), server_handle).await;
     let _ = tokio::time::timeout(std::time::Duration::from_secs(2), bridge_handle).await;
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(2), net_watcher_handle).await;
     let _ = std::fs::remove_file(&opts.socket_path);
     let _ = std::fs::remove_file(&pid_file);
     Ok(())

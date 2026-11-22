@@ -18,6 +18,15 @@ use crate::manager::ContainerManager;
 use crate::sideveil_seam::SideVeilBridgeSeam;
 use crate::task_runner::TaskRunner;
 
+/// Identifies the transport origin of an incoming JSON-RPC request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RpcCaller {
+    /// Direct root client connected over `strata.sock` (e.g., `strata` CLI).
+    LocalCtl { conn_id: u64 },
+    /// Remote plugin client forwarded over SideVeil `hub.sock`.
+    SideVeilBridge,
+}
+
 /// Central RPC dispatcher decoupled from Unix socket transport.
 #[derive(Debug)]
 pub(crate) struct Dispatcher {
@@ -47,9 +56,9 @@ impl Dispatcher {
     }
 
     /// Handles a single JSON-RPC 2.0 request and returns the serialized response envelope.
-    pub(crate) async fn handle(&self, conn_id: u64, req: RpcRequest) -> RpcResponse {
+    pub(crate) async fn handle(&self, caller: RpcCaller, req: RpcRequest) -> RpcResponse {
         let id = req.id.clone();
-        match self.dispatch(conn_id, &req.method, req.params).await {
+        match self.dispatch(caller, &req.method, req.params).await {
             Ok(result) => RpcResponse::ok(id, result),
             Err((code, message)) => RpcResponse::err(id, code, message),
         }
@@ -57,7 +66,7 @@ impl Dispatcher {
 
     async fn dispatch(
         &self,
-        conn_id: u64,
+        caller: RpcCaller,
         method: &str,
         params: Option<Value>,
     ) -> Result<Value, (i32, String)> {
@@ -168,15 +177,27 @@ impl Dispatcher {
                 let target = p.container.clone();
                 to_json(self.manager.ssh_keys(target.as_deref(), Some(p)).await?)
             }
-            methods::SESSION_ACQUIRE => {
-                let p: SessionAcquireParams = parse_optional_params(params)?;
-                to_json(self.manager.acquire_session(conn_id, p).await?)
-            }
-            methods::SESSION_RELEASE => {
-                let p: SessionReleaseParams = parse_required_params(params)?;
-                let released = self.manager.release_session(p).await?;
-                Ok(json!({ "released": released }))
-            }
+            methods::SESSION_ACQUIRE => match caller {
+                RpcCaller::LocalCtl { conn_id } => {
+                    let p: SessionAcquireParams = parse_optional_params(params)?;
+                    to_json(self.manager.acquire_session(conn_id, p).await?)
+                }
+                RpcCaller::SideVeilBridge => Err((
+                    error_codes::PERMISSION_DENIED,
+                    "session.acquire is restricted to local strata.sock clients".to_owned(),
+                )),
+            },
+            methods::SESSION_RELEASE => match caller {
+                RpcCaller::LocalCtl { .. } => {
+                    let p: SessionReleaseParams = parse_required_params(params)?;
+                    let released = self.manager.release_session(p).await?;
+                    Ok(json!({ "released": released }))
+                }
+                RpcCaller::SideVeilBridge => Err((
+                    error_codes::PERMISSION_DENIED,
+                    "session.release is restricted to local strata.sock clients".to_owned(),
+                )),
+            },
             methods::TASK_RUN => {
                 let p: TaskRunParams = parse_required_params(params)?;
                 to_json(self.task_runner.run_task(p).await?)

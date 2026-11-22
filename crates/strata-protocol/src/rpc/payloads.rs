@@ -110,6 +110,8 @@ pub struct ContainerConfigPatchParams {
     pub ssh_port: Option<u16>,
     pub host_bridge: Option<bool>,
     pub host_runtime: Option<bool>,
+    pub extra_char_devs: Option<Vec<String>>,
+    pub extra_mounts: Option<Vec<BindMount>>,
 }
 
 /// Result for `container.configGet` and `container.configPatch`.

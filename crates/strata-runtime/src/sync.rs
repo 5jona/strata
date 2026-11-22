@@ -42,12 +42,72 @@ pub fn sync_container_runtime_files(
         if let Ok(bytes) = fs::read(&host_exec_src) {
             sync_bytes_if_changed(&bytes, &mount_dir.join("usr/local/bin/host-exec"), 0o755)?;
         }
-        let adb_shim_src = mod_root.join("container/adb-shim.py");
-        if let Ok(bytes) = fs::read(&adb_shim_src) {
-            sync_bytes_if_changed(&bytes, &mount_dir.join("usr/local/bin/adb"), 0o755)?;
+        let legacy_adb = mount_dir.join("usr/local/bin/adb");
+        if legacy_adb.exists() {
+            let _ = fs::remove_file(&legacy_adb);
         }
+        sync_strata_debug_package(mod_root, mount_dir)?;
     }
 
+    Ok(())
+}
+
+/// Synchronizes only `/etc/resolv.conf` inside a mounted container rootfs when DNS changes.
+pub fn sync_container_dns(mount_dir: &Path, cfg: &ContainerConfig) -> RuntimeResult<bool> {
+    ensure_dir_mode(&mount_dir.join("etc"), 0o755)?;
+    let android_dns = if cfg.sync_android_dns {
+        net::read_android_dns_servers()
+    } else {
+        Vec::new()
+    };
+    let resolv = render_resolv_conf(&android_dns, &cfg.dns_servers);
+    sync_bytes_if_changed(resolv.as_bytes(), &mount_dir.join("etc/resolv.conf"), 0o644)
+}
+
+const STRATA_DEBUG_LAUNCHER: &[u8] =
+    b"#!/bin/sh\nexec /usr/bin/python3 /usr/local/lib/strata-debug/cli.py \"$@\"\n";
+
+fn sync_strata_debug_package(mod_root: &Path, mount_dir: &Path) -> RuntimeResult<()> {
+    let src_dir = mod_root.join("container/strata-debug");
+    if !src_dir.is_dir() {
+        return Ok(());
+    }
+    let dst_dir = mount_dir.join("usr/local/lib/strata-debug");
+    ensure_dir_mode(&dst_dir, 0o755)?;
+
+    let entries = fs::read_dir(&src_dir).map_err(|source| RuntimeError::Io {
+        op: "read strata-debug dir",
+        source,
+    })?;
+    let mut synced_any = false;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        if !name.ends_with(".py") {
+            continue;
+        }
+        if let Ok(bytes) = fs::read(&path) {
+            let mode = if name == "cli.py" || name == "forward_bridge.py" {
+                0o755
+            } else {
+                0o644
+            };
+            sync_bytes_if_changed(&bytes, &dst_dir.join(name), mode)?;
+            synced_any = true;
+        }
+    }
+    if synced_any {
+        sync_bytes_if_changed(
+            STRATA_DEBUG_LAUNCHER,
+            &mount_dir.join("usr/local/bin/strata-debug"),
+            0o755,
+        )?;
+    }
     Ok(())
 }
 
@@ -201,5 +261,33 @@ mod tests {
         let env = render_host_env(&[("BOOTCLASSPATH".to_owned(), "/apex/core.jar".to_owned())]);
         assert!(env.contains("BOOTCLASSPATH=/apex/core.jar\n"));
         assert!(env.contains("TMPDIR=/data/local/tmp\n"));
+    }
+
+    #[test]
+    fn syncs_strata_debug_package_and_launcher() {
+        let base = std::env::temp_dir().join(format!("strata-sync-test-{}", std::process::id()));
+        let mod_root = base.join("mod");
+        let mnt = base.join("mnt");
+        let _ = fs::remove_dir_all(&base);
+        fs::create_dir_all(mod_root.join("container/strata-debug")).expect("create src");
+        fs::create_dir_all(mnt.join("usr/local/bin")).expect("create mnt bin");
+        fs::write(mnt.join("usr/local/bin/adb"), b"legacy").expect("write legacy");
+        fs::write(
+            mod_root.join("container/strata-debug/cli.py"),
+            b"print(1)\n",
+        )
+        .expect("write");
+        fs::write(mod_root.join("container/strata-debug/ignore.txt"), b"skip").expect("write");
+
+        let mut cfg = ContainerConfig::default_for_id("main");
+        cfg.sync_android_dns = false;
+        sync_container_runtime_files(&mnt, &cfg, Some(&mod_root)).expect("sync");
+
+        assert!(mnt.join("usr/local/lib/strata-debug/cli.py").is_file());
+        assert!(!mnt.join("usr/local/lib/strata-debug/ignore.txt").exists());
+        assert!(mnt.join("usr/local/bin/strata-debug").is_file());
+        assert!(!mnt.join("usr/local/bin/adb").exists());
+
+        let _ = fs::remove_dir_all(&base);
     }
 }

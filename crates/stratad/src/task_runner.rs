@@ -1,36 +1,35 @@
 //! Headless streaming command and Python task runner reusable by RPC clients and Phase 2 WebUI.
 
+mod io;
+
 use std::collections::VecDeque;
 use std::os::fd::AsRawFd;
-use std::os::unix::process::ExitStatusExt;
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use strata_protocol::EventEnvelope;
 use strata_protocol::rpc::{
-    TaskCancelParams, TaskExitPayload, TaskLogsParams, TaskLogsResult, TaskOutputPayload,
-    TaskRunParams, TaskRunResult, TaskStream, TaskSummary, error_codes, events,
+    TaskCancelParams, TaskLogsParams, TaskLogsResult, TaskOutputPayload, TaskRunParams,
+    TaskRunResult, TaskStream, TaskSummary, error_codes,
 };
 use strata_runtime::{EnterSpec, spec_pipe};
 use strata_sys::pidfd::PidFd;
-use tokio::io::{AsyncBufReadExt, AsyncRead, BufReader};
 use tokio::process::Command;
 use tokio::sync::Mutex;
 
 use crate::manager::ContainerManager;
-use crate::sideveil_seam::{EventHub, PluginEventSink};
+use crate::sideveil_seam::EventHub;
+use crate::task_runner::io::{now_unix_ms, spawn_stream_reader, spawn_task_waiter};
 
 const MAX_RETAINED_TASKS: usize = 32;
-const MAX_TASK_OUTPUT_LINES: usize = 256;
+pub(super) const MAX_TASK_OUTPUT_LINES: usize = 256;
 
 #[derive(Debug)]
-struct TrackedTask {
-    summary: TaskSummary,
-    pidfd: Option<Arc<PidFd>>,
-    output: VecDeque<TaskOutputPayload>,
+pub(super) struct TrackedTask {
+    pub(super) summary: TaskSummary,
+    pub(super) pidfd: Option<Arc<PidFd>>,
+    pub(super) output: VecDeque<TaskOutputPayload>,
 }
 
 /// Manages daemon-hosted streaming commands inside running containers.
@@ -176,55 +175,15 @@ impl TaskRunner {
             );
         }
 
-        let tasks_ref = Arc::clone(&self.tasks);
-        let hub_ref = Arc::clone(&self.event_hub);
-        let tid = task_id.clone();
-        let cid = container_id.clone();
-        let timeout_secs = params.timeout_secs;
-
-        tokio::spawn(async move {
-            let mut timed_out = false;
-            let status = if let Some(secs) = timeout_secs {
-                match tokio::time::timeout(Duration::from_secs(secs.max(1)), child.wait()).await {
-                    Ok(res) => res.ok(),
-                    Err(_) => {
-                        timed_out = true;
-                        if let Some(pfd) = &pidfd {
-                            let _ = pfd.send_signal(libc::SIGTERM);
-                            tokio::time::sleep(Duration::from_millis(500)).await;
-                            let _ = pfd.send_signal(libc::SIGKILL);
-                        } else {
-                            let _ = child.kill().await;
-                        }
-                        child.wait().await.ok()
-                    }
-                }
-            } else {
-                child.wait().await.ok()
-            };
-
-            let exit_code = status.and_then(|s| s.code()).unwrap_or(-1);
-            let signal = status.and_then(|s| s.signal());
-
-            {
-                let mut guard = tasks_ref.lock().await;
-                if let Some(entry) = guard.iter_mut().find(|t| t.summary.task_id == tid) {
-                    entry.summary.running = false;
-                    entry.summary.exit_code = Some(exit_code);
-                    entry.pidfd = None;
-                }
-            }
-
-            let payload = serde_json::to_value(TaskExitPayload {
-                task_id: tid,
-                container: cid,
-                exit_code,
-                signal,
-                timed_out,
-            })
-            .ok();
-            hub_ref.emit(EventEnvelope::new(events::TASK_EXIT, payload));
-        });
+        spawn_task_waiter(
+            child,
+            pidfd,
+            task_id.clone(),
+            container_id.clone(),
+            params.timeout_secs,
+            Arc::clone(&self.tasks),
+            Arc::clone(&self.event_hub),
+        );
 
         Ok(TaskRunResult {
             task_id,
@@ -314,45 +273,4 @@ impl TaskRunner {
             let _ = pfd.send_signal(libc::SIGTERM);
         }
     }
-}
-
-fn spawn_stream_reader<R: AsyncRead + Unpin + Send + 'static>(
-    reader: R,
-    stream: TaskStream,
-    task_id: String,
-    container: String,
-    seq: Arc<AtomicU64>,
-    tasks: Arc<Mutex<VecDeque<TrackedTask>>>,
-    event_hub: Arc<EventHub>,
-) {
-    tokio::spawn(async move {
-        let mut lines = BufReader::new(reader).lines();
-        while let Ok(Some(line)) = lines.next_line().await {
-            let next_seq = seq.fetch_add(1, Ordering::Relaxed);
-            let item = TaskOutputPayload {
-                task_id: task_id.clone(),
-                container: container.clone(),
-                stream,
-                chunk: line,
-                seq: next_seq,
-            };
-            {
-                let mut guard = tasks.lock().await;
-                if let Some(entry) = guard.iter_mut().find(|t| t.summary.task_id == task_id) {
-                    if entry.output.len() >= MAX_TASK_OUTPUT_LINES {
-                        entry.output.pop_front();
-                    }
-                    entry.output.push_back(item.clone());
-                }
-            }
-            let payload = serde_json::to_value(&item).ok();
-            event_hub.emit(EventEnvelope::new(events::TASK_OUTPUT, payload));
-        }
-    });
-}
-
-fn now_unix_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |d| d.as_millis() as u64)
 }

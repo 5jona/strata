@@ -135,6 +135,30 @@ pub fn statvfs_bytes(path: &Path) -> SysResult<(u64, u64, u64)> {
     Ok((total, used, avail))
 }
 
+/// Reads existing per-mount flags via `statvfs(2)` and masks them to valid `mount(2)` flags
+/// so `MS_BIND | MS_REMOUNT | MS_RDONLY` preserves existing attributes such as `nosuid`/`nodev`.
+pub fn read_mount_flags(path: &Path) -> SysResult<libc::c_ulong> {
+    const PRESERVED_MOUNT_FLAGS: libc::c_ulong = libc::MS_NOSUID
+        | libc::MS_NODEV
+        | libc::MS_NOEXEC
+        | libc::MS_SYNCHRONOUS
+        | libc::MS_NOATIME
+        | libc::MS_NODIRATIME
+        | libc::MS_RELATIME;
+
+    let c_path = CString::new(path.as_os_str().as_bytes())
+        .map_err(|_| SysError::InvalidCString(path.to_string_lossy().into_owned()))?;
+    let mut vfs: libc::statvfs =
+        // SAFETY: `libc::statvfs` is a plain C struct safe to zero-initialize before `statvfs(2)`.
+        unsafe { std::mem::zeroed() };
+    // SAFETY: `c_path` is a valid NUL-terminated string and `vfs` is writable `statvfs` storage.
+    let rc = unsafe { libc::statvfs(c_path.as_ptr(), &mut vfs) };
+    if rc < 0 {
+        return Err(SysError::path_os("statvfs", path));
+    }
+    Ok(vfs.f_flag & PRESERVED_MOUNT_FLAGS)
+}
+
 /// Parses a NUL-delimited `/proc/<pid>/environ` byte buffer into `(KEY, VALUE)` pairs.
 #[must_use]
 pub fn parse_proc_environ(raw: &[u8]) -> Vec<(String, String)> {

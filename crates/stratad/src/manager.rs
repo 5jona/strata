@@ -1,7 +1,9 @@
 //! Multi-container lifecycle manager owning per-container serialization, supervision, and leases.
 
+mod launch;
 pub(crate) mod leases;
 pub(crate) mod ops;
+mod snapshot;
 pub(crate) mod supervisor;
 
 use std::collections::HashMap;
@@ -9,31 +11,75 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
 
-use strata_protocol::rpc::{
-    ContainerStateChangedPayload, StorageCleanupReport, error_codes, events,
-};
-use strata_protocol::{
-    ContainerConfig, ContainerDiskStats, ContainerPhase, ContainerStatusSnapshot, EventEnvelope,
-};
+use strata_protocol::rpc::{StorageCleanupReport, error_codes};
+use strata_protocol::{ContainerConfig, ContainerPhase, ContainerStatusSnapshot, RestartBackoff};
 use strata_runtime::sync;
-use strata_sys::{cgroup, loopdev, mount, namespace, net, procfs};
+use strata_sys::{mount, namespace};
 use tokio::sync::{Mutex, RwLock};
 
 use crate::config_store::ConfigStore;
 use crate::manager::leases::LeaseRegistry;
-use crate::sideveil_seam::{EventHub, PluginEventSink};
+use crate::sideveil_seam::EventHub;
 
 /// Per-container live state tracked inside `stratad`.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub(crate) struct ContainerLiveState {
     pub(crate) phase: ContainerPhase,
     pub(crate) ns_pid: Option<u32>,
     pub(crate) mnt_ns_inode: Option<u64>,
     pub(crate) started_at: Option<Instant>,
     pub(crate) restart_count: u32,
+    pub(crate) restart_backoff: RestartBackoff,
     pub(crate) last_error: Option<String>,
     pub(crate) desired_running: bool,
     pub(crate) generation: u64,
+}
+
+impl Default for ContainerLiveState {
+    fn default() -> Self {
+        Self {
+            phase: ContainerPhase::default(),
+            ns_pid: None,
+            mnt_ns_inode: None,
+            started_at: None,
+            restart_count: 0,
+            restart_backoff: RestartBackoff::standard(),
+            last_error: None,
+            desired_running: false,
+            generation: 0,
+        }
+    }
+}
+
+impl ContainerLiveState {
+    pub(crate) fn prepare_start(&mut self, is_restart: bool) -> ContainerPhase {
+        let prev = self.phase;
+        self.phase = ContainerPhase::Starting;
+        self.desired_running = true;
+        self.last_error = None;
+        self.generation = self.generation.saturating_add(1);
+        if !is_restart {
+            self.restart_backoff.reset();
+        }
+        prev
+    }
+
+    pub(crate) fn record_unexpected_exit(
+        &mut self,
+        ran_for_ms: u64,
+        reason: String,
+    ) -> (ContainerPhase, Option<u32>, Option<u64>, u64) {
+        let prev = self.phase;
+        let ns_pid = self.ns_pid;
+        let mnt_ns = self.mnt_ns_inode;
+        self.phase = ContainerPhase::Failed;
+        self.ns_pid = None;
+        self.mnt_ns_inode = None;
+        self.started_at = None;
+        self.last_error = Some(reason);
+        let delay_ms = self.restart_backoff.record_exit(ran_for_ms);
+        (prev, ns_pid, mnt_ns, delay_ms)
+    }
 }
 
 #[derive(Debug)]
@@ -162,6 +208,37 @@ impl ContainerManager {
         }
     }
 
+    /// Re-synchronizes `/etc/resolv.conf` across all running containers with `syncAndroidDns`.
+    pub(crate) async fn sync_dns_all(&self) {
+        let cfg = self.config_store.snapshot().await;
+        for (id, entry) in &cfg.containers {
+            if !entry.sync_android_dns {
+                continue;
+            }
+            let is_running = {
+                let slots = self.slots.read().await;
+                match slots.get(id) {
+                    Some(slot) => slot.state.read().await.phase.is_running(),
+                    None => false,
+                }
+            };
+            if !is_running {
+                continue;
+            }
+            let mount_dir = PathBuf::from(&entry.mount_dir);
+            let c = entry.clone();
+            let cid = id.clone();
+            let _ = tokio::task::spawn_blocking(move || {
+                if mount::is_ext4_mounted(&mount_dir).unwrap_or(false)
+                    && let Err(err) = sync::sync_container_dns(&mount_dir, &c)
+                {
+                    eprintln!("stratad: DNS sync for '{cid}' failed: {err}");
+                }
+            })
+            .await;
+        }
+    }
+
     /// Returns status snapshots for all configured containers.
     pub(crate) async fn list_containers(&self) -> Vec<ContainerStatusSnapshot> {
         let cfg = self.config_store.snapshot().await;
@@ -217,110 +294,7 @@ impl ContainerManager {
     pub(crate) fn log_file_path(&self, container_id: &str) -> PathBuf {
         self.logs_dir.join(format!("{container_id}-sshd.log"))
     }
-
-    pub(crate) async fn emit_state_changed(
-        &self,
-        id: &str,
-        previous: ContainerPhase,
-        current: ContainerPhase,
-    ) {
-        if previous == current {
-            return;
-        }
-        if let Ok((cid, entry, is_default)) = self.resolve_container(Some(id)).await {
-            let snapshot = self.build_snapshot(&cid, &entry, is_default).await;
-            let payload = serde_json::to_value(ContainerStateChangedPayload {
-                container: cid,
-                previous,
-                current,
-                snapshot,
-            })
-            .ok();
-            self.event_hub
-                .emit(EventEnvelope::new(events::CONTAINER_STATE_CHANGED, payload));
-        }
-    }
-
-    pub(crate) async fn build_snapshot(
-        &self,
-        id: &str,
-        cfg: &ContainerConfig,
-        is_default: bool,
-    ) -> ContainerStatusSnapshot {
-        let slot = self.get_or_create_slot(id).await;
-        let live = slot.state.read().await;
-        let mount_dir = Path::new(&cfg.mount_dir);
-        let image_path = Path::new(&cfg.image_path);
-
-        let mounted = mount::is_ext4_mounted(mount_dir).unwrap_or(false);
-        let loop_devices = loopdev::find_image_loops(image_path)
-            .unwrap_or_default()
-            .into_iter()
-            .map(|p| p.to_string_lossy().into_owned())
-            .collect();
-
-        let disk = collect_disk_stats(image_path, mount_dir, mounted);
-        let cgroup_path = {
-            let p = cgroup::container_cgroup_v2_path(id);
-            p.exists().then(|| p.to_string_lossy().into_owned())
-        };
-
-        ContainerStatusSnapshot {
-            id: id.to_owned(),
-            is_default,
-            enabled: cfg.enabled,
-            auto_start: cfg.auto_start,
-            phase: live.phase,
-            ns_pid: live.ns_pid,
-            mnt_ns_inode: live.mnt_ns_inode,
-            cgroup_path,
-            mounted,
-            mount_dir: cfg.mount_dir.clone(),
-            image_path: cfg.image_path.clone(),
-            loop_devices,
-            hostname: cfg.hostname.clone(),
-            ssh_enabled: cfg.ssh.enabled,
-            ssh_listen_addr: cfg.ssh.listen_addr.clone(),
-            ssh_port: cfg.ssh.port,
-            primary_ipv4: net::detect_primary_ipv4(),
-            host_bridge: cfg.host_bridge,
-            host_runtime: cfg.host_runtime,
-            uptime_ms: live
-                .started_at
-                .map_or(0, |t| t.elapsed().as_millis() as u64),
-            restart_count: live.restart_count,
-            active_leases: self.leases.active_count_for(id).await,
-            last_error: live.last_error.clone(),
-            disk,
-        }
-    }
 }
 
 /// Helper alias used by `supervisor` teardown return path.
 pub(crate) type StopOutcome = Result<StorageCleanupReport, (i32, String)>;
-
-fn collect_disk_stats(image_path: &Path, mount_dir: &Path, mounted: bool) -> ContainerDiskStats {
-    let image_exists = image_path.is_file();
-    let (image_allocated_bytes, image_virtual_bytes) = if image_exists {
-        procfs::image_disk_usage(image_path).unwrap_or((0, 0))
-    } else {
-        (0, 0)
-    };
-    let (rootfs_total_bytes, rootfs_used_bytes, rootfs_available_bytes) = if mounted {
-        match procfs::statvfs_bytes(mount_dir) {
-            Ok((total, used, avail)) => (Some(total), Some(used), Some(avail)),
-            Err(_) => (None, None, None),
-        }
-    } else {
-        (None, None, None)
-    };
-
-    ContainerDiskStats {
-        image_exists,
-        image_allocated_bytes,
-        image_virtual_bytes,
-        rootfs_total_bytes,
-        rootfs_used_bytes,
-        rootfs_available_bytes,
-    }
-}
