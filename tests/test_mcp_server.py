@@ -186,6 +186,96 @@ class TestMcpServerDispatch(unittest.TestCase):
             self.assertIn("--cursor /tmp/o.cur", captured_cmds[-1])
             self.assertIn("--no-visual", captured_cmds[-1])
 
+    def test_all_24_tools_and_schemas(self) -> None:
+        mcp = _load_mcp_module()
+        listed = mcp.handle_rpc_request({"jsonrpc": "2.0", "id": 10, "method": "tools/list", "params": {}})
+        assert listed is not None
+        tools = listed["result"]["tools"]
+        self.assertEqual(len(tools), 24)
+        expected_new = {
+            "ui_dump", "ui_tap", "app_inspect", "app_control", "apk_install",
+            "lsposed_inspect", "sqlite_query", "ksu_inspect", "device_exec", "file_transfer",
+        }
+        self.assertTrue(expected_new.issubset({t["name"] for t in tools}))
+        for tool in tools:
+            s = tool["inputSchema"]
+            self.assertEqual((s["type"], s["additionalProperties"]), ("object", False))
+            self.assertTrue({"host", "port"}.issubset(s["properties"]))
+
+    def test_ssh_alias_and_ip_defaults(self) -> None:
+        mcp = _load_mcp_module()
+        with mock.patch.dict(os.environ, {"STRATA_SSH_HOST": "demo-device"}, clear=True):
+            host, port, user = mcp._ssh_config()
+            self.assertEqual((host, port, user), ("demo-device", "", ""))
+            args = mcp.build_ssh_base_args(host, port, user)
+            self.assertNotIn("-p", args)
+            self.assertEqual(args[-1], "demo-device")
+        with mock.patch.dict(os.environ, {"STRATA_SSH_HOST": "192.0.2.10"}, clear=True):
+            host, port, user = mcp._ssh_config()
+            self.assertEqual((host, port, user), ("192.0.2.10", "2222", "root"))
+            args = mcp.build_ssh_base_args(host, port, user)
+            self.assertIn("-p", args)
+            self.assertEqual(args[-1], "root@192.0.2.10")
+
+    def test_android_tools_dispatch_and_quoting(self) -> None:
+        mcp = _load_mcp_module()
+        cmds: list[tuple[str, dict]] = []
+        xfers: list[tuple[str, tuple, dict]] = []
+
+        def _exec(cmd: str, timeout: float = 30.0, **kw):
+            cmds.append((cmd, kw))
+            return {"rc": 0, "json": {"ok": True}, "stdout": '{"ok": true}', "stderr": ""}
+
+        def _call(name: str, arguments: dict) -> dict:
+            r = mcp.handle_rpc_request({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": name, "arguments": arguments}})
+            assert r is not None and not r["result"].get("isError"), r
+            return json.loads(r["result"]["content"][0]["text"])
+
+        with mock.patch.object(mcp, "ssh_exec", side_effect=_exec), \
+             mock.patch.object(mcp, "scp_push", side_effect=lambda *a, **kw: (xfers.append(("push", a, kw)) or {"ok": True, "rc": 0})), \
+             mock.patch.object(mcp, "scp_pull", side_effect=lambda *a, **kw: (xfers.append(("pull", a, kw)) or {"ok": True, "rc": 0})):
+            _call("ui_dump", {"compressed": True, "query": "Allow; $(id)", "clickableOnly": True, "limit": 5})
+            self.assertIn("strata-debug ui dump --compressed --query 'Allow; $(id)' --clickable-only --limit 5", cmds[-1][0])
+            _call("ui_tap", {"text": "OK", "method": "uinput", "host": "demo-device", "port": 2200})
+            self.assertEqual((cmds[-1][0], cmds[-1][1]), ("strata-debug ui tap --text OK --method uinput", {"host": "demo-device", "port": 2200}))
+            _call("app_inspect", {"topOnly": True})
+            self.assertEqual(cmds[-1][0], "strata-debug app top")
+            _call("app_control", {"action": "start", "package": "com.example.app", "activity": ".Main", "intentAction": "android.intent.action.VIEW", "dataUri": "https://example.com"})
+            self.assertEqual(cmds[-1][0], "strata-debug app start com.example.app --activity .Main --action android.intent.action.VIEW --data https://example.com")
+            _call("lsposed_inspect", {"mode": "logs", "module": "com.example.mod", "limit": 20})
+            self.assertEqual(cmds[-1][0], "strata-debug lsposed logs --module com.example.mod --limit 20")
+            _call("sqlite_query", {"dbPath": "/data/tmp/a.db", "sql": "SELECT 'x;rm'"})
+            self.assertIn("strata-debug db query /data/tmp/a.db --sql 'SELECT '\"'\"'x;rm'\"'\"''", cmds[-1][0])
+            _call("ksu_inspect", {"mode": "sysfs", "path": "/proc/version"})
+            self.assertEqual(cmds[-1][0], "strata-debug ksu sysfs /proc/version")
+            _call("device_exec", {"command": "echo 'hi'", "scope": "host", "timeoutSec": 99})
+            self.assertIn("host-exec /system/bin/sh -c", cmds[-1][0])
+            _call("file_transfer", {"direction": "pull", "localPath": "/tmp/a", "remotePath": "/data/b", "hostScope": True})
+            self.assertEqual(xfers[-1], ("pull", ("/data/b", "/tmp/a"), {"host_scope": True}))
+            with tempfile.NamedTemporaryFile(suffix=".apk") as apk:
+                apk.write(b"PK\x03\x04")
+                apk.flush()
+                _call("apk_install", {"localPath": apk.name, "allowDowngrade": True, "grantPermissions": False})
+                self.assertEqual(xfers[-1][0], "push")
+                self.assertTrue(xfers[-1][2].get("host_scope"))
+                self.assertIn("strata-debug app install /data/local/tmp/strata_apk_", cmds[-2][0])
+                self.assertIn("--no-grant --downgrade", cmds[-2][0])
+                self.assertTrue(cmds[-1][0].startswith("host-exec /system/bin/rm -f /data/local/tmp/strata_apk_"))
+
+    def test_visual_check_pull_to_local(self) -> None:
+        mcp = _load_mcp_module()
+        cmds: list[str] = []
+        pulls: list[tuple[str, str]] = []
+        with mock.patch.object(mcp, "ssh_exec", side_effect=lambda c, timeout=30.0: (cmds.append(c) or {"rc": 0, "json": {"ok": True}, "stdout": '{"ok": true}', "stderr": ""})), \
+             mock.patch.object(mcp, "scp_pull", side_effect=lambda r, l, **kw: (pulls.append((r, l)) or {"ok": True, "rc": 0, "bytes": 100})):
+            resp = mcp.handle_rpc_request({"jsonrpc": "2.0", "id": 11, "method": "tools/call", "params": {"name": "visual_check", "arguments": {"format": "png", "pullToLocal": True}}})
+            assert resp is not None and not resp["result"].get("isError")
+            payload = json.loads(resp["result"]["content"][0]["text"])
+            self.assertTrue(payload["pulled"] and payload["localPath"].endswith(".png"))
+            self.assertEqual(len(pulls), 1)
+            self.assertTrue(pulls[0][0].startswith("/tmp/strata-mcp-cap-"))
+            self.assertTrue(cmds[-1].startswith("rm -f /tmp/strata-mcp-cap-"))
+
 
 if __name__ == "__main__":
     unittest.main()

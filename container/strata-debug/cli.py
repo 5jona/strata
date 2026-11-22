@@ -13,6 +13,7 @@ if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
 
 import cdp_bridge
+import cli_android
 import forward_bridge
 import gesture_replay
 import kernel_probe
@@ -112,8 +113,9 @@ def _cmd_logcat(args: argparse.Namespace) -> int:
 
 
 def _cmd_sys_probe(args: argparse.Namespace) -> int:
+    inc_sv: bool | None = False if args.no_sideveil else (True if args.include_sideveil else None)
     return _emit(sys_probe.collect_sys_probe(
-        package=args.package, include_surfaceflinger=not args.no_sf, include_sideveil=not args.no_sideveil
+        package=args.package, include_surfaceflinger=not args.no_sf, include_sideveil=inc_sv
     ))
 
 
@@ -159,22 +161,22 @@ def build_parser() -> argparse.ArgumentParser:
     p_cl.add_argument("--pid", type=int)
     p_cs = cdp_sub.add_parser("serve")
     p_cs.add_argument("--port", type=int, default=9222)
-    p_cs.add_argument("--target", default="pochita.sideveil.host")
+    p_cs.add_argument("--target", default=None)
     p_cs.add_argument("--pid", type=int)
     p_ce = cdp_sub.add_parser("eval")
     p_ce.add_argument("expression")
-    p_ce.add_argument("--target", default="pochita.sideveil.host")
+    p_ce.add_argument("--target", default=None)
     p_ce.add_argument("--pid", type=int)
     p_ce.add_argument("--url-match")
     p_ce.add_argument("--timeout", type=float, default=5.0)
     p_cc = cdp_sub.add_parser("console")
-    p_cc.add_argument("--target", default="pochita.sideveil.host")
+    p_cc.add_argument("--target", default=None)
     p_cc.add_argument("--pid", type=int)
     p_cc.add_argument("--url-match")
     p_cc.add_argument("--duration", type=float, default=2.0)
     p_cc.add_argument("--timeout", type=float, default=5.0)
     p_ca = cdp_sub.add_parser("audit")
-    p_ca.add_argument("--target", default="pochita.sideveil.host")
+    p_ca.add_argument("--target", default=None)
     p_ca.add_argument("--pid", type=int)
     p_ca.add_argument("--url-contains")
     p_ca.add_argument("--url-match")
@@ -223,8 +225,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_l.add_argument("--no-advance", action="store_true")
 
     p_sp = sub.add_parser("sys-probe")
-    p_sp.add_argument("--package", default="pochita.sideveil.host")
+    p_sp.add_argument("--package", default="auto")
     p_sp.add_argument("--no-sf", action="store_true")
+    p_sp.add_argument("--include-sideveil", action="store_true")
     p_sp.add_argument("--no-sideveil", action="store_true")
 
     p_v = sub.add_parser("visual")
@@ -257,7 +260,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_o.add_argument("--action-gesture", help="JSON gesture spec")
     p_o.add_argument("--cursor", help="Incremental logcat cursor path")
     p_o.add_argument("--settle-ms", type=int, default=350)
-    p_o.add_argument("--package", default="pochita.sideveil.host")
+    p_o.add_argument("--package", default="auto")
     p_o.add_argument("--priority", default="W")
     p_o.add_argument("--tag")
     p_o.add_argument("--no-cdp", action="store_true")
@@ -268,6 +271,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_o.add_argument("--visual-out")
     p_o.add_argument("--golden")
 
+    cli_android.register_android_subparsers(sub)
     return p
 
 
@@ -282,6 +286,7 @@ def main(argv: list[str] | None = None) -> int:
         "visual": _cmd_visual,
         "kernel": _cmd_kernel,
         "observe": _cmd_observe,
+        **cli_android.ANDROID_DISPATCH,
     }
     return dispatch[args.cmd](args)
 

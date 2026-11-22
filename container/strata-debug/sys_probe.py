@@ -15,6 +15,35 @@ FRAME_RE = re.compile(r"mFrame=\[(\d+),(\d+)\]\[(\d+),(\d+)\]")
 BOUNDS_RE = re.compile(r"\[(-?\d+(?:\.\d+)?),\s*(-?\d+(?:\.\d+)?),\s*(-?\d+(?:\.\d+)?),\s*(-?\d+(?:\.\d+)?)\]")
 TYPE_RE = re.compile(r"ty=(\S+)")
 LAYER_RE = re.compile(r"mBaseLayer=(\d+)")
+FG_PATTERNS = (
+    re.compile(r"topResumedActivity=ActivityRecord\{[^}]+\s+u\d+\s+([A-Za-z0-9._]+)/([A-Za-z0-9._/$]+)"),
+    re.compile(r"(?:mResumedActivity|ResumedActivity):\s*ActivityRecord\{[^}]+\s+u\d+\s+([A-Za-z0-9._]+)/([A-Za-z0-9._/$]+)"),
+    re.compile(r"mCurrentFocus=Window\{[^}]+\s+u\d+\s+([A-Za-z0-9._]+)/([A-Za-z0-9._/$]+)"),
+    re.compile(r"mFocusedApp=ActivityRecord\{[^}]+\s+u\d+\s+([A-Za-z0-9._]+)/([A-Za-z0-9._/$]+)"),
+)
+
+
+def parse_foreground_activity(text: str) -> dict[str, Any]:
+    for pat in FG_PATTERNS:
+        m = pat.search(text)
+        if m:
+            pkg, act = m.group(1), m.group(2).rstrip("}")
+            return {"package": pkg, "activity": act, "component": f"{pkg}/{act}"}
+    return {"package": None, "activity": None, "component": None}
+
+
+def detect_foreground_package() -> str | None:
+    for cmd in (
+        ["/system/bin/dumpsys", "activity", "activities"],
+        ["/system/bin/dumpsys", "window", "displays"],
+        ["/system/bin/dumpsys", "window", "windows"],
+    ):
+        res = _run_host(cmd)
+        if res.returncode == 0 and res.stdout:
+            pkg = parse_foreground_activity(res.stdout).get("package")
+            if pkg:
+                return str(pkg)
+    return None
 
 
 def parse_window_windows(text: str, *, visible_only: bool = True) -> list[dict[str, Any]]:
@@ -131,30 +160,45 @@ def inspect_sideveil_ui() -> dict[str, Any] | None:
 
 
 def collect_sys_probe(
-    package: str = "pochita.sideveil.host",
+    package: str = "auto",
     *,
     include_surfaceflinger: bool = True,
-    include_sideveil: bool = True,
+    include_sideveil: bool | None = None,
 ) -> dict[str, Any]:
+    if not package or package == "auto":
+        resolved_pkg = detect_foreground_package() or "unknown"
+    else:
+        resolved_pkg = package
+
     win_res = _run_host(["/system/bin/dumpsys", "window", "windows"])
     windows = parse_window_windows(win_res.stdout)
-    pkg_windows = [w for w in windows if package in w["name"] or package in w["package"]]
+    pkg_windows = (
+        [w for w in windows if resolved_pkg in w["name"] or resolved_pkg in w["package"]]
+        if resolved_pkg != "unknown"
+        else []
+    )
 
-    gfx_res = _run_host(["/system/bin/dumpsys", "gfxinfo", package])
-    gfx = parse_gfxinfo(gfx_res.stdout)
+    gfx: dict[str, Any] = {}
+    if resolved_pkg != "unknown":
+        gfx_res = _run_host(["/system/bin/dumpsys", "gfxinfo", resolved_pkg])
+        gfx = parse_gfxinfo(gfx_res.stdout)
 
     sf_layers: list[dict[str, Any]] = []
-    if include_surfaceflinger:
+    if include_surfaceflinger and resolved_pkg != "unknown":
         sf_res = _run_host(["/system/bin/dumpsys", "SurfaceFlinger", "--list"])
         if sf_res.returncode == 0 and sf_res.stdout:
-            sf_layers = [{"name": ln.strip()} for ln in sf_res.stdout.splitlines() if package in ln][:20]
+            sf_layers = [{"name": ln.strip()} for ln in sf_res.stdout.splitlines() if resolved_pkg in ln][:20]
+
+    probe_sideveil = (
+        resolved_pkg == "pochita.sideveil.host" if include_sideveil is None else bool(include_sideveil)
+    )
 
     return {
         "ok": True,
-        "package": package,
+        "package": resolved_pkg,
         "visibleWindowCount": len(windows),
         "packageWindows": pkg_windows,
         "gfxinfo": gfx,
         "surfaceFlingerMatches": sf_layers,
-        "sideveilInspect": inspect_sideveil_ui() if include_sideveil else None,
+        "sideveilInspect": inspect_sideveil_ui() if probe_sideveil else None,
     }

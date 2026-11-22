@@ -84,8 +84,13 @@ apt-get install -y \
     python3-dev \
     python3-pytest \
     ripgrep \
+    fd-find \
+    htop \
     rsync \
+    socat \
+    sqlite3 \
     strace \
+    tcpdump \
     gdb \
     tmux \
     tree \
@@ -95,10 +100,21 @@ apt-get install -y \
     zstd \
     tzdata
 
+if [ -x /usr/bin/fdfind ] && [ ! -e /usr/local/bin/fd ]; then
+    ln -sf /usr/bin/fdfind /usr/local/bin/fd
+fi
+
+if ! command -v uv >/dev/null 2>&1; then
+    echo "[*] Installing uv Python toolchain manager (best-effort)..."
+    curl -LsSf --connect-timeout 10 --max-time 90 https://astral.sh/uv/install.sh \
+        | env UV_INSTALL_DIR=/usr/local/bin UV_NO_MODIFY_PATH=1 sh \
+        || echo "[!] Warning: uv installation skipped (network or mirror unavailable)."
+fi
+
 if [ "$DEBUG_PROFILE" -eq 1 ]; then
-    echo "[*] Installing optional --debug-profile packages (Pillow, NumPy, WebP, bpftrace)..."
-    apt-get install -y python3-pil python3-numpy webp bpftrace || \
-        apt-get install -y python3-pil python3-numpy webp || true
+    echo "[*] Installing optional --debug-profile packages (Pillow, NumPy, WebP, bpftrace, binutils, patchelf)..."
+    apt-get install -y python3-pil python3-numpy webp bpftrace binutils patchelf || \
+        apt-get install -y python3-pil python3-numpy webp binutils patchelf || true
 fi
 
 echo "[*] Generating persistent Dropbear host keys if missing..."
@@ -142,7 +158,7 @@ if [ -f "${STAGE_DIR}/authorized_keys" ]; then
 fi
 
 echo "[*] Creating Android host tool wrappers in /usr/local/bin..."
-ANDROID_TOOLS="getprop setprop dumpsys logcat am pm cmd wm settings input service screencap toybox resetprop ksud strata"
+ANDROID_TOOLS="getprop setprop dumpsys logcat am pm cmd wm settings input service screencap uiautomator getevent toybox resetprop ksud strata"
 for tool in $ANDROID_TOOLS; do
     cat > "/usr/local/bin/${tool}" <<EOF
 #!/bin/sh

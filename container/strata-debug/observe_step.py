@@ -24,7 +24,7 @@ def _run_action(
     action_shell: str | None = None,
     action_cdp_eval: str | None = None,
     action_gesture: dict[str, Any] | None = None,
-    cdp_target: str = "pochita.sideveil.host",
+    cdp_target: str | None = None,
     cdp_pid: int | None = None,
 ) -> dict[str, Any] | None:
     if action_rpc:
@@ -105,7 +105,7 @@ def run_observe_step(
     action_cdp_eval: str | None = None,
     action_gesture: dict[str, Any] | None = None,
     settle_ms: int = 350,
-    package: str = "pochita.sideveil.host",
+    package: str = "auto",
     logcat_priority: str = "W",
     logcat_tag: str | None = None,
     include_cdp: bool = True,
@@ -118,6 +118,9 @@ def run_observe_step(
     cursor_path: str | None = None,
 ) -> dict[str, Any]:
     t0 = time.monotonic()
+    resolved_pkg: str | None = (
+        sys_probe.detect_foreground_package() if package in ("", "auto") else package
+    )
     has_action = any(x is not None for x in (action_rpc, action_shell, action_cdp_eval, action_gesture))
     eff_cursor = cursor_path or logcat_cursor.DEFAULT_CURSOR_PATH
 
@@ -135,7 +138,7 @@ def run_observe_step(
             action_shell=action_shell,
             action_cdp_eval=action_cdp_eval,
             action_gesture=action_gesture,
-            cdp_target=package,
+            cdp_target=resolved_pkg,
             cdp_pid=cdp_pid,
         )
     except Exception as exc:
@@ -147,12 +150,14 @@ def run_observe_step(
     logs = logcat_cursor.read_incremental(
         eff_cursor, priority=logcat_priority, tag=logcat_tag, limit=60, advance=True
     )
-    sys_info = sys_probe.collect_sys_probe(package=package, include_sideveil=True)
+    sys_info = sys_probe.collect_sys_probe(
+        package=resolved_pkg or "unknown", include_sideveil=None
+    )
 
     cdp_info: dict[str, Any] | None = None
     if include_cdp:
         try:
-            cdp_info = cdp_bridge.audit_webview(target=package, pid=cdp_pid)
+            cdp_info = cdp_bridge.audit_webview(target=resolved_pkg, pid=cdp_pid)
         except Exception as exc:
             cdp_info = {"ok": False, "error": str(exc)}
 

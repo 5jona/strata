@@ -56,7 +56,7 @@ def scan_devtools_sockets(proc_unix_path: str = "/proc/net/unix") -> list[dict[s
 
 
 def match_devtools_socket(
-    target: str | None = "pochita.sideveil.host",
+    target: str | None = None,
     pid: int | None = None,
     proc_unix_path: str = "/proc/net/unix",
 ) -> dict[str, Any] | None:
@@ -109,7 +109,7 @@ def list_targets(
 
 def _select_page(
     *,
-    target: str | None = "pochita.sideveil.host",
+    target: str | None = None,
     pid: int | None = None,
     url_match: str | None = None,
     timeout: float = 4.0,
@@ -145,7 +145,7 @@ def _ws_path_from_page(page: dict[str, Any]) -> str:
 def eval_js(
     expression: str,
     *,
-    target: str | None = "pochita.sideveil.host",
+    target: str | None = None,
     pid: int | None = None,
     url_match: str | None = None,
     timeout: float = 5.0,
@@ -183,7 +183,7 @@ def eval_js(
 
 def collect_console(
     *,
-    target: str | None = "pochita.sideveil.host",
+    target: str | None = None,
     pid: int | None = None,
     url_match: str | None = None,
     duration_s: float = 2.0,
@@ -215,7 +215,7 @@ def collect_console(
 
 
 def audit_webview(
-    target: str | None = "pochita.sideveil.host",
+    target: str | None = None,
     pid: int | None = None,
     url_contains: str | None = None,
     eval_js_expr: str | None = None,
