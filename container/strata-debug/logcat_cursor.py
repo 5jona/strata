@@ -1,4 +1,4 @@
-"""L2a incremental logcat cursor manager with atomic state persistence."""
+"""L2a incremental logcat cursor manager with atomic state persistence and crash detection."""
 
 from __future__ import annotations
 
@@ -16,6 +16,10 @@ DEFAULT_CURSOR_PATH = "/tmp/strata-debug-logcat.cursor"
 PRIORITY_ORDER = {"V": 0, "D": 1, "I": 2, "W": 3, "E": 4, "F": 5, "A": 5}
 THREADTIME_RE = re.compile(
     r"^(\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}\.\d{3})\s+(\d+)\s+(\d+)\s+([VDIWEFA])\s+([^:]+?)\s*:\s?(.*)$"
+)
+CRASH_RE = re.compile(
+    r"(FATAL EXCEPTION|AndroidRuntime|SIGSEGV|SIGABRT|SIGBUS|ANR in |Build fingerprint:|backtrace:|tombstone)",
+    re.IGNORECASE,
 )
 
 
@@ -49,49 +53,62 @@ def _atomic_write_json(path: str, data: dict[str, Any]) -> None:
         raise
 
 
-def _load_cursor(cursor_path: str) -> dict[str, Any]:
+def _load_cursor(cursor_path: str) -> tuple[dict[str, Any], str | None]:
     if not os.path.isfile(cursor_path):
-        return {}
+        return {}, f"cursor file '{cursor_path}' not found; falling back to recent tail"
     try:
         with open(cursor_path, encoding="utf-8") as f:
             data = json.load(f)
-            return data if isinstance(data, dict) else {}
-    except (OSError, json.JSONDecodeError):
-        return {}
+    except (OSError, json.JSONDecodeError) as exc:
+        return {}, f"corrupt cursor file '{cursor_path}': {exc}; falling back to recent tail"
+    if not isinstance(data, dict) or not isinstance(data.get("ts"), str) or not data["ts"].strip():
+        return {}, f"invalid cursor payload in '{cursor_path}'; falling back to recent tail"
+    return data, None
 
 
 def _line_digest(line: str) -> str:
     return hashlib.sha1(line.encode("utf-8", errors="replace")).hexdigest()[:12]
 
 
-def _host_timestamp() -> str:
-    res = subprocess.run(
-        [HOST_EXEC, "/system/bin/date", "+%m-%d %H:%M:%S.000"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    ts = res.stdout.strip()
-    if ts:
-        return ts
+def _probe_latest_watermark(timeout: float = 8.0) -> dict[str, str]:
+    """Queries the latest logcat line for an exact watermark, falling back to host date."""
     tail = subprocess.run(
         [HOST_EXEC, "/system/bin/logcat", "-d", "-v", "threadtime", "-t", "1"],
         capture_output=True,
         text=True,
+        timeout=timeout,
         check=False,
     )
     for line in reversed(tail.stdout.splitlines()):
         parsed = parse_threadtime_line(line)
         if parsed:
-            return parsed["ts"]
-    return "01-01 00:00:00.000"
+            return {"ts": parsed["ts"], "lastDigest": _line_digest(line)}
+
+    res = subprocess.run(
+        [HOST_EXEC, "/system/bin/date", "+%m-%d %H:%M:%S.000"],
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        check=False,
+    )
+    ts = res.stdout.strip() or "01-01 00:00:00.000"
+    return {"ts": ts, "lastDigest": ""}
 
 
 def mark_cursor(cursor_path: str = DEFAULT_CURSOR_PATH) -> dict[str, Any]:
-    ts = _host_timestamp()
-    state = {"ts": ts, "lastDigest": ""}
+    state = _probe_latest_watermark()
     _atomic_write_json(cursor_path, state)
     return state
+
+
+def extract_crash_highlights(entries: list[dict[str, Any]], *, limit: int = 20) -> list[dict[str, Any]]:
+    hits = [
+        e for e in entries
+        if e.get("priority") in {"F", "A"}
+        or CRASH_RE.search(e.get("tag", ""))
+        or CRASH_RE.search(e.get("msg", ""))
+    ]
+    return hits[-limit:] if limit > 0 else hits
 
 
 def filter_logcat_lines(
@@ -144,8 +161,9 @@ def read_incremental(
     pid: int | None = None,
     limit: int = 100,
     advance: bool = True,
+    timeout: float = 10.0,
 ) -> dict[str, Any]:
-    state = _load_cursor(cursor_path)
+    state, warning = _load_cursor(cursor_path)
     since_ts = state.get("ts")
     cmd = [HOST_EXEC, "/system/bin/logcat", "-d", "-v", "threadtime"]
     if since_ts:
@@ -153,7 +171,7 @@ def read_incremental(
     else:
         cmd.extend(["-t", str(max(limit * 4, 200))])
 
-    res = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    res = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, check=False)
     lines = res.stdout.splitlines()
     entries, latest_ts, latest_digest = filter_logcat_lines(
         lines,
@@ -163,11 +181,20 @@ def read_incremental(
         last_digest=str(state.get("lastDigest", "")),
         limit=limit,
     )
-    if advance and latest_ts:
+    if res.returncode == 0 and advance and latest_ts:
         _atomic_write_json(cursor_path, {"ts": latest_ts, "lastDigest": latest_digest})
-    return {
+
+    out: dict[str, Any] = {
         "ok": res.returncode == 0,
         "cursor": latest_ts or since_ts or "",
         "count": len(entries),
         "entries": entries,
     }
+    crashes = extract_crash_highlights(entries)
+    if crashes:
+        out["crashes"] = crashes
+    if warning:
+        out["warning"] = warning
+    if res.returncode != 0 and res.stderr.strip():
+        out["error"] = res.stderr.strip()[:400]
+    return out

@@ -29,15 +29,26 @@ def _emit(payload: object) -> int:
 
 def _cmd_cdp(args: argparse.Namespace) -> int:
     if args.cdp_cmd == "list-targets":
-        return _emit({"ok": True, "sockets": cdp_bridge.scan_devtools_sockets()})
+        return _emit(cdp_bridge.list_targets(target=args.target, pid=args.pid))
     if args.cdp_cmd == "serve":
         matched = cdp_bridge.match_devtools_socket(target=args.target, pid=args.pid)
         if not matched:
             return _emit({"ok": False, "error": "no devtools socket found"})
-        return forward_bridge.run_proxy(f"tcp:{args.port}", f"localabstract:{matched['socket']}")
+        return cdp_bridge.serve_cdp_proxy(args.port, matched["socket"])
+    if args.cdp_cmd == "eval":
+        return _emit(cdp_bridge.eval_js(
+            args.expression, target=args.target, pid=args.pid, url_match=args.url_match, timeout=args.timeout
+        ))
+    if args.cdp_cmd == "console":
+        return _emit(cdp_bridge.collect_console(
+            target=args.target, pid=args.pid, url_match=args.url_match,
+            duration_s=args.duration, timeout=args.timeout,
+        ))
     if args.cdp_cmd == "audit":
         return _emit(cdp_bridge.audit_webview(
-            target=args.target, pid=args.pid, url_contains=args.url_contains, eval_js=args.eval_js
+            target=args.target, pid=args.pid,
+            url_contains=args.url_contains or args.url_match,
+            eval_js=args.eval_js, timeout=args.timeout,
         ))
     return 1
 
@@ -116,6 +127,10 @@ def _cmd_visual(args: argparse.Namespace) -> int:
 def _cmd_kernel(args: argparse.Namespace) -> int:
     if args.kernel_cmd == "pstore":
         return _emit(kernel_probe.collect_pstore(args.dir))
+    if args.kernel_cmd == "dmesg":
+        return _emit(kernel_probe.collect_dmesg(limit=args.limit, filter_pattern=args.filter))
+    if args.kernel_cmd == "tracing":
+        return _emit(kernel_probe.inspect_tracing(args.dir, limit=args.limit))
     if args.kernel_cmd == "trace":
         return _emit(kernel_probe.run_trace_preset(args.preset, duration_s=args.duration))
     return 1
@@ -127,8 +142,9 @@ def _cmd_observe(args: argparse.Namespace) -> int:
     return _emit(observe_step.run_observe_step(
         action_rpc=rpc, action_shell=args.action_shell, action_cdp_eval=args.action_cdp_eval,  # type: ignore[arg-type]
         action_gesture=gesture, settle_ms=args.settle_ms, package=args.package, logcat_priority=args.priority,
-        logcat_tag=args.tag, include_cdp=not args.no_cdp, cdp_pid=args.cdp_pid, include_visual=args.visual,
-        roi_spec=args.roi, visual_out=args.visual_out, golden_raw=args.golden,
+        logcat_tag=args.tag, include_cdp=not args.no_cdp, cdp_pid=args.cdp_pid,
+        include_visual=args.visual, no_visual=args.no_visual,
+        roi_spec=args.roi, visual_out=args.visual_out, golden_raw=args.golden, cursor_path=args.cursor,
     ))
 
 
@@ -138,16 +154,32 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_cdp = sub.add_parser("cdp")
     cdp_sub = p_cdp.add_subparsers(dest="cdp_cmd", required=True)
-    cdp_sub.add_parser("list-targets")
+    p_cl = cdp_sub.add_parser("list-targets")
+    p_cl.add_argument("--target")
+    p_cl.add_argument("--pid", type=int)
     p_cs = cdp_sub.add_parser("serve")
     p_cs.add_argument("--port", type=int, default=9222)
     p_cs.add_argument("--target", default="pochita.sideveil.host")
     p_cs.add_argument("--pid", type=int)
+    p_ce = cdp_sub.add_parser("eval")
+    p_ce.add_argument("expression")
+    p_ce.add_argument("--target", default="pochita.sideveil.host")
+    p_ce.add_argument("--pid", type=int)
+    p_ce.add_argument("--url-match")
+    p_ce.add_argument("--timeout", type=float, default=5.0)
+    p_cc = cdp_sub.add_parser("console")
+    p_cc.add_argument("--target", default="pochita.sideveil.host")
+    p_cc.add_argument("--pid", type=int)
+    p_cc.add_argument("--url-match")
+    p_cc.add_argument("--duration", type=float, default=2.0)
+    p_cc.add_argument("--timeout", type=float, default=5.0)
     p_ca = cdp_sub.add_parser("audit")
     p_ca.add_argument("--target", default="pochita.sideveil.host")
     p_ca.add_argument("--pid", type=int)
     p_ca.add_argument("--url-contains")
+    p_ca.add_argument("--url-match")
     p_ca.add_argument("--eval-js")
+    p_ca.add_argument("--timeout", type=float, default=5.0)
 
     p_f = sub.add_parser("forward")
     p_f.add_argument("--list", dest="list_forwards", action="store_true")
@@ -208,6 +240,12 @@ def build_parser() -> argparse.ArgumentParser:
     k_sub = p_k.add_subparsers(dest="kernel_cmd", required=True)
     p_kp = k_sub.add_parser("pstore")
     p_kp.add_argument("--dir", default="/sys/fs/pstore")
+    p_kd = k_sub.add_parser("dmesg")
+    p_kd.add_argument("--limit", type=int, default=80)
+    p_kd.add_argument("--filter")
+    p_ktr = k_sub.add_parser("tracing")
+    p_ktr.add_argument("--dir", default="/sys/kernel/tracing")
+    p_ktr.add_argument("--limit", type=int, default=40)
     p_kt = k_sub.add_parser("trace")
     p_kt.add_argument("preset", choices=["guard-audit", "net-uid", "sched-lat"])
     p_kt.add_argument("--duration", type=int, default=5)
@@ -217,6 +255,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_o.add_argument("--action-shell")
     p_o.add_argument("--action-cdp-eval")
     p_o.add_argument("--action-gesture", help="JSON gesture spec")
+    p_o.add_argument("--cursor", help="Incremental logcat cursor path")
     p_o.add_argument("--settle-ms", type=int, default=350)
     p_o.add_argument("--package", default="pochita.sideveil.host")
     p_o.add_argument("--priority", default="W")
@@ -224,6 +263,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_o.add_argument("--no-cdp", action="store_true")
     p_o.add_argument("--cdp-pid", type=int)
     p_o.add_argument("--visual", action="store_true")
+    p_o.add_argument("--no-visual", action="store_true")
     p_o.add_argument("--roi")
     p_o.add_argument("--visual-out")
     p_o.add_argument("--golden")

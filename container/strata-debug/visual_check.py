@@ -7,6 +7,7 @@ import os
 import shutil
 import struct
 import subprocess
+import tempfile
 import time
 import zlib
 from typing import Any
@@ -80,6 +81,24 @@ def analyze_rgba_health(rgba: bytes, width: int, height: int) -> dict[str, Any]:
     var = sum((v - mean) ** 2 for v in luma) / n
     std = math.sqrt(var)
 
+    # Check RGB uniformity across sampled grid to detect solid-color screens accurately
+    step_x = max(1, width // 160)
+    step_y = max(1, height // 160)
+    stride = width * 4
+    first_rgb = (rgba[0], rgba[1], rgba[2]) if len(rgba) >= 3 else (0, 0, 0)
+    max_rgb_delta = 0
+    for gy in range(gh):
+        row_off = (gy * step_y) * stride
+        for gx in range(gw):
+            off = row_off + (gx * step_x) * 4
+            d = max(
+                abs(rgba[off] - first_rgb[0]),
+                abs(rgba[off + 1] - first_rgb[1]),
+                abs(rgba[off + 2] - first_rgb[2]),
+            )
+            if d > max_rgb_delta:
+                max_rgb_delta = d
+
     # Discrete 4-neighbor Laplacian variance (sharpness / blur proxy)
     lap_vals: list[float] = []
     for y in range(1, gh - 1):
@@ -94,6 +113,7 @@ def analyze_rgba_health(rgba: bytes, width: int, height: int) -> dict[str, Any]:
     else:
         lap_var = 0.0
 
+    is_solid = max_rgb_delta <= 2
     return {
         "width": width,
         "height": height,
@@ -102,6 +122,7 @@ def analyze_rgba_health(rgba: bytes, width: int, height: int) -> dict[str, Any]:
         "laplacianVar": round(lap_var, 2),
         "isBlack": mean < 3.0 and std < 2.0,
         "isBlank": std < 1.5,
+        "isSolidColor": is_solid,
     }
 
 
@@ -142,35 +163,55 @@ def encode_png_pure(rgba: bytes, width: int, height: int) -> bytes:
 def save_encoded_image(
     rgba: bytes, width: int, height: int, out_path: str, fmt: str = "webp", quality: int = 75
 ) -> dict[str, Any]:
-    os.makedirs(os.path.dirname(os.path.abspath(out_path)) or ".", exist_ok=True)
+    parent = os.path.dirname(os.path.abspath(out_path)) or "."
+    os.makedirs(parent, exist_ok=True)
+    tmp_out: str | None = None
+    tmp_png: str | None = None
     try:
-        from PIL import Image  # type: ignore[import-not-found]
+        try:
+            from PIL import Image  # type: ignore[import-not-found]
 
-        img = Image.frombytes("RGBA", (width, height), rgba)
-        eff_fmt = fmt.upper()
-        if eff_fmt in {"JPG", "JPEG"}:
-            img = img.convert("RGB")
-            eff_fmt = "JPEG"
-        img.save(out_path, format=eff_fmt, quality=quality)
-        return {"path": out_path, "format": eff_fmt.lower(), "bytes": os.path.getsize(out_path)}
-    except ImportError:
-        png_bytes = encode_png_pure(rgba, width, height)
-        if fmt.lower() == "webp" and shutil.which("cwebp"):
-            tmp_png = f"{out_path}.tmp.png"
-            with open(tmp_png, "wb") as f:
-                f.write(png_bytes)
-            try:
+            img = Image.frombytes("RGBA", (width, height), rgba)
+            eff_fmt = fmt.upper()
+            if eff_fmt in {"JPG", "JPEG"}:
+                img = img.convert("RGB")
+                eff_fmt = "JPEG"
+            fd, tmp_out = tempfile.mkstemp(prefix=".strata-vis-", dir=parent)
+            os.close(fd)
+            img.save(tmp_out, format=eff_fmt, quality=quality)
+            os.replace(tmp_out, out_path)
+            tmp_out = None
+            return {"path": out_path, "format": eff_fmt.lower(), "bytes": os.path.getsize(out_path)}
+        except ImportError:
+            png_bytes = encode_png_pure(rgba, width, height)
+            if fmt.lower() == "webp" and shutil.which("cwebp"):
+                fd_p, tmp_png = tempfile.mkstemp(prefix=".strata-vis-", suffix=".png", dir=parent)
+                with os.fdopen(fd_p, "wb") as f:
+                    f.write(png_bytes)
+                fd_o, tmp_out = tempfile.mkstemp(prefix=".strata-vis-", suffix=".webp", dir=parent)
+                os.close(fd_o)
                 res = subprocess.run(
-                    ["cwebp", "-quiet", "-q", str(quality), tmp_png, "-o", out_path], check=False
+                    ["cwebp", "-quiet", "-q", str(quality), tmp_png, "-o", tmp_out],
+                    timeout=15.0,
+                    check=False,
                 )
-                if res.returncode == 0 and os.path.isfile(out_path):
+                if res.returncode == 0 and os.path.isfile(tmp_out):
+                    os.replace(tmp_out, out_path)
+                    tmp_out = None
                     return {"path": out_path, "format": "webp", "bytes": os.path.getsize(out_path)}
-            finally:
-                if os.path.exists(tmp_png):
-                    os.unlink(tmp_png)
-        with open(out_path, "wb") as f:
-            f.write(png_bytes)
-        return {"path": out_path, "format": "png", "bytes": len(png_bytes)}
+            fd_o, tmp_out = tempfile.mkstemp(prefix=".strata-vis-", suffix=".png", dir=parent)
+            with os.fdopen(fd_o, "wb") as f:
+                f.write(png_bytes)
+            os.replace(tmp_out, out_path)
+            tmp_out = None
+            return {"path": out_path, "format": "png", "bytes": len(png_bytes)}
+    finally:
+        for p in (tmp_png, tmp_out):
+            if p and os.path.exists(p):
+                try:
+                    os.unlink(p)
+                except OSError:
+                    pass
 
 
 def stitch_burst_sheet(frames: list[tuple[bytes, int, int]]) -> tuple[bytes, int, int]:
@@ -192,8 +233,10 @@ def stitch_burst_sheet(frames: list[tuple[bytes, int, int]]) -> tuple[bytes, int
     return b"".join(rows), out_w, out_h
 
 
-def capture_raw_frame() -> tuple[bytes, int, int]:
-    res = subprocess.run([HOST_EXEC, "/system/bin/screencap"], capture_output=True, check=False)
+def capture_raw_frame(timeout: float = 10.0) -> tuple[bytes, int, int]:
+    res = subprocess.run(
+        [HOST_EXEC, "/system/bin/screencap"], capture_output=True, timeout=timeout, check=False
+    )
     if res.returncode != 0 or not res.stdout:
         raise RuntimeError(f"raw screencap failed (rc={res.returncode})")
     w, h, _fmt, rgba = parse_screencap_header(res.stdout)

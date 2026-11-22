@@ -1,4 +1,4 @@
-"""L5 read-only kernel observability: pstore ramoops parser and safe tracefs/bpftrace presets.
+"""L5 read-only kernel observability: pstore ramoops, dmesg, tracefs status, and bpftrace presets.
 
 Zero out-of-tree kernel modules, zero GKI patches, zero panic risk.
 """
@@ -8,6 +8,7 @@ from __future__ import annotations
 import glob
 import os
 import re
+import shlex
 import shutil
 import subprocess
 from typing import Any
@@ -50,25 +51,56 @@ def parse_pstore_text(text: str, *, max_lines: int = 40) -> dict[str, Any]:
 
 def collect_pstore(pstore_dir: str = "/sys/fs/pstore") -> dict[str, Any]:
     patterns = ("console-ramoops*", "dmesg-ramoops*")
+    local_exists = os.path.isdir(pstore_dir)
     files: list[str] = []
-    for pat in patterns:
-        files.extend(sorted(glob.glob(os.path.join(pstore_dir, pat))))
+    if local_exists:
+        for pat in patterns:
+            files.extend(sorted(glob.glob(os.path.join(pstore_dir, pat))))
 
     if not files and os.path.exists(HOST_EXEC):
+        quoted = shlex.quote(pstore_dir)
         res = subprocess.run(
-            [HOST_EXEC, "/system/bin/sh", "-c", f"ls {pstore_dir}/console-ramoops* {pstore_dir}/dmesg-ramoops* 2>/dev/null"],
+            [HOST_EXEC, "/system/bin/sh", "-c", f"ls {quoted}/console-ramoops* {quoted}/dmesg-ramoops* 2>/dev/null"],
             capture_output=True,
             text=True,
+            timeout=6.0,
             check=False,
         )
         remote_files = [ln.strip() for ln in res.stdout.splitlines() if ln.strip()]
         if remote_files:
             parsed: dict[str, Any] = {}
             for rf in remote_files[:4]:
-                cat = subprocess.run([HOST_EXEC, "/system/bin/cat", rf], capture_output=True, text=True, check=False)
+                cat = subprocess.run(
+                    [HOST_EXEC, "/system/bin/cat", rf],
+                    capture_output=True,
+                    text=True,
+                    timeout=6.0,
+                    check=False,
+                )
                 parsed[os.path.basename(rf)] = parse_pstore_text(cat.stdout)
             return {"ok": True, "available": True, "source": "host-exec", "files": parsed}
-        return {"ok": True, "available": False, "reason": "no ramoops files in /sys/fs/pstore", "files": {}}
+        return {
+            "ok": True,
+            "available": False,
+            "reason": f"no ramoops files in {pstore_dir}",
+            "files": {},
+        }
+
+    if not local_exists:
+        return {
+            "ok": True,
+            "available": False,
+            "reason": f"pstore directory not mounted or missing: {pstore_dir}",
+            "files": {},
+        }
+
+    if not files:
+        return {
+            "ok": True,
+            "available": False,
+            "reason": f"no ramoops files in {pstore_dir}",
+            "files": {},
+        }
 
     parsed = {}
     for path in files[:4]:
@@ -80,18 +112,107 @@ def collect_pstore(pstore_dir: str = "/sys/fs/pstore") -> dict[str, Any]:
     return {"ok": True, "available": bool(parsed), "source": "local", "files": parsed}
 
 
-def probe_trace_capabilities() -> dict[str, Any]:
+def collect_dmesg(
+    *,
+    limit: int = 80,
+    filter_pattern: str | None = None,
+    timeout: float = 6.0,
+) -> dict[str, Any]:
+    """Read-only kernel ring buffer (dmesg) collector with watchdog hit extraction."""
+    if os.path.exists(HOST_EXEC):
+        cmd = [HOST_EXEC, "/system/bin/dmesg"]
+        source = "host-exec"
+    elif shutil.which("dmesg"):
+        cmd = ["dmesg"]
+        source = "local"
+    else:
+        return {"ok": True, "available": False, "reason": "dmesg binary unavailable", "lines": []}
+
+    try:
+        res = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, check=False)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return {"ok": True, "available": False, "reason": f"dmesg execution failed: {exc}", "lines": []}
+
+    if res.returncode != 0:
+        reason = res.stderr.strip()[:240] or f"dmesg exited with rc={res.returncode}"
+        return {"ok": True, "available": False, "source": source, "reason": reason, "lines": []}
+
+    lines = [ln for ln in res.stdout.splitlines() if ln.strip()]
+    if filter_pattern:
+        try:
+            rx = re.compile(filter_pattern, re.IGNORECASE)
+            lines = [ln for ln in lines if rx.search(ln)]
+        except re.error as exc:
+            return {"ok": False, "error": f"invalid filter regex: {exc}"}
+
+    hits = [ln.strip() for ln in lines if WATCHDOG_RE.search(ln)][-20:]
+    tail = lines[-max(1, limit) :]
+    return {
+        "ok": True,
+        "available": True,
+        "source": source,
+        "totalLines": len(lines),
+        "watchdogHits": hits,
+        "lines": tail,
+    }
+
+
+def _read_small_text(path: str, max_bytes: int = 4096) -> str | None:
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            return f.read(max_bytes).strip()
+    except OSError:
+        return None
+
+
+def probe_trace_capabilities(tracing_dir: str = "/sys/kernel/tracing") -> dict[str, Any]:
     return {
         "btfVmlinux": os.path.exists("/sys/kernel/btf/vmlinux"),
-        "tracefs": os.path.isdir("/sys/kernel/tracing"),
+        "tracefs": os.path.isdir(tracing_dir) and os.path.exists(os.path.join(tracing_dir, "current_tracer")),
         "bpftraceBin": shutil.which("bpftrace") or "",
     }
 
 
-def run_trace_preset(preset: str, duration_s: int = 5) -> dict[str, Any]:
+def inspect_tracing(tracing_dir: str = "/sys/kernel/tracing", *, limit: int = 40) -> dict[str, Any]:
+    """Read-only tracefs inspection; degrades gracefully when tracefs is not mounted."""
+    caps = probe_trace_capabilities(tracing_dir)
+    if not os.path.isdir(tracing_dir):
+        return {
+            "ok": True,
+            "available": False,
+            "reason": f"tracefs not mounted at {tracing_dir}",
+            "capabilities": caps,
+        }
+    current_tracer = _read_small_text(os.path.join(tracing_dir, "current_tracer"))
+    tracing_on = _read_small_text(os.path.join(tracing_dir, "tracing_on"))
+    if current_tracer is None and tracing_on is None:
+        return {
+            "ok": True,
+            "available": False,
+            "reason": f"tracefs at {tracing_dir} is unreadable or not mounted",
+            "capabilities": caps,
+        }
+    avail_raw = _read_small_text(os.path.join(tracing_dir, "available_tracers")) or ""
+    trace_raw = _read_small_text(os.path.join(tracing_dir, "trace"), max_bytes=32768) or ""
+    trace_lines = [ln for ln in trace_raw.splitlines() if ln and not ln.startswith("#")][-max(1, limit) :]
+    return {
+        "ok": True,
+        "available": True,
+        "tracingDir": tracing_dir,
+        "tracingOn": tracing_on == "1",
+        "currentTracer": current_tracer or "",
+        "availableTracers": avail_raw.split(),
+        "traceTail": trace_lines,
+        "capabilities": caps,
+    }
+
+
+def run_trace_preset(
+    preset: str, duration_s: int = 5, *, tracing_dir: str = "/sys/kernel/tracing"
+) -> dict[str, Any]:
     if preset not in BPFTRACE_PRESETS:
         return {"ok": False, "error": f"unknown preset '{preset}', expected {sorted(BPFTRACE_PRESETS)}"}
-    caps = probe_trace_capabilities()
+    caps = probe_trace_capabilities(tracing_dir)
     duration = max(1, min(30, duration_s))
 
     if caps["bpftraceBin"] and caps["tracefs"]:
@@ -105,6 +226,7 @@ def run_trace_preset(preset: str, duration_s: int = 5) -> dict[str, Any]:
         )
         return {
             "ok": res.returncode == 0,
+            "available": True,
             "backend": "bpftrace",
             "preset": preset,
             "durationSec": duration,
