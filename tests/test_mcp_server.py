@@ -186,21 +186,24 @@ class TestMcpServerDispatch(unittest.TestCase):
             self.assertIn("--cursor /tmp/o.cur", captured_cmds[-1])
             self.assertIn("--no-visual", captured_cmds[-1])
 
-    def test_all_24_tools_and_schemas(self) -> None:
+    def test_all_27_tools_and_schemas(self) -> None:
         mcp = _load_mcp_module()
         listed = mcp.handle_rpc_request({"jsonrpc": "2.0", "id": 10, "method": "tools/list", "params": {}})
         assert listed is not None
         tools = listed["result"]["tools"]
-        self.assertEqual(len(tools), 24)
+        self.assertEqual(len(tools), 27)
         expected_new = {
             "ui_dump", "ui_tap", "app_inspect", "app_control", "apk_install",
             "lsposed_inspect", "sqlite_query", "ksu_inspect", "device_exec", "file_transfer",
+            "devices_list", "device_select", "perfetto_trace",
         }
         self.assertTrue(expected_new.issubset({t["name"] for t in tools}))
+        local_only = {"devices_list", "device_select"}
         for tool in tools:
             s = tool["inputSchema"]
             self.assertEqual((s["type"], s["additionalProperties"]), ("object", False))
-            self.assertTrue({"host", "port"}.issubset(s["properties"]))
+            if tool["name"] not in local_only:
+                self.assertTrue({"device", "host", "port"}.issubset(s["properties"]))
 
     def test_ssh_alias_and_ip_defaults(self) -> None:
         mcp = _load_mcp_module()

@@ -16,10 +16,10 @@ REPO_ROOT = os.path.dirname(SCRIPT_DIR)
 if SCRIPT_DIR not in sys.path:
     sys.path.insert(0, SCRIPT_DIR)
 
-from strata_mcp import TOOLS, dispatch_tool, transport
+from strata_mcp import TOOLS, devices, dispatch_tool, transport
 
 PROTOCOL_VERSION = "2024-11-05"
-SERVER_INFO = {"name": "strata-debug-mcp", "version": "0.3.0"}
+SERVER_INFO = {"name": "strata-debug-mcp", "version": "0.4.0"}
 MAX_TIMEOUT_SEC = transport.MAX_TIMEOUT_SEC
 
 _control_path = transport.control_path

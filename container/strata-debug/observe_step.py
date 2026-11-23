@@ -63,8 +63,10 @@ def _run_action(
 
     if action_gesture:
         kind = action_gesture.get("kind", "edge-swipe")
-        w, h, dpi = gesture_replay.get_screen_metrics()
-        with gesture_replay.UInputTouchDevice(w, h) as dev:
+        geom = gesture_replay.get_display_geometry()
+        w, h, dpi = geom["logical_w"], geom["logical_h"], geom["dpi"]
+        pw, ph, rot = geom["phys_w"], geom["phys_h"], geom["rotation"]
+        with gesture_replay.UInputTouchDevice(pw, ph, logical_width=w, logical_height=h, rotation=rot) as dev:
             if kind == "tap":
                 dev.tap(int(action_gesture["x"]), int(action_gesture["y"]))
             elif kind == "long-press":
@@ -93,7 +95,14 @@ def _run_action(
                     cancel_back=bool(action_gesture.get("cancelBack", False)),
                 )
                 dev.replay_points(pts)
-        return {"type": "gesture", "kind": kind, "screen": {"width": w, "height": h, "dpi": dpi}}
+        return {
+            "type": "gesture",
+            "kind": kind,
+            "rotation": rot,
+            "logicalSize": [w, h],
+            "physicalSize": [pw, ph],
+            "screen": {"width": w, "height": h, "dpi": dpi},
+        }
 
     return None
 

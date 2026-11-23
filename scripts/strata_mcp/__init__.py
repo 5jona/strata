@@ -4,11 +4,12 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
-from . import transport
+from . import devices, transport
 from .tools_android import ANDROID_TOOL_NAMES, ANDROID_TOOLS, dispatch_android_tool
 from .tools_core import CORE_TOOL_NAMES, CORE_TOOLS, dispatch_core_tool
+from .tools_devices import DEVICE_TOOL_NAMES, DEVICE_TOOLS, dispatch_device_tool
 
-TOOLS: list[dict[str, Any]] = CORE_TOOLS + ANDROID_TOOLS
+TOOLS: list[dict[str, Any]] = CORE_TOOLS + ANDROID_TOOLS + DEVICE_TOOLS
 
 
 def dispatch_tool(
@@ -38,13 +39,22 @@ def dispatch_tool(
             push_fn=push_fn,
             pull_fn=pull_fn,
         )
+    if name in DEVICE_TOOL_NAMES:
+        return dispatch_device_tool(
+            name,
+            args,
+            exec_fn=exec_fn,
+            pull_fn=pull_fn,
+        )
     raise KeyError(f"unknown tool '{name}'")
 
 
 __all__ = [
     "ANDROID_TOOLS",
     "CORE_TOOLS",
+    "DEVICE_TOOLS",
     "TOOLS",
+    "devices",
     "dispatch_tool",
     "transport",
 ]

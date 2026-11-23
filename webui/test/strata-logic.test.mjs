@@ -91,6 +91,12 @@ test('passthrough helpers merge/strip L5 mounts and char devs without clobbering
   const enabled = toggleL5DiagMounts([customMount], true);
   assert.equal(hasL5DiagMounts(enabled), true);
   assert.deepEqual(getCustomMounts(enabled), [customMount]);
+  assert.equal(L5_DIAG_MOUNTS.length, 3);
+  assert.ok(
+    L5_DIAG_MOUNTS.some(
+      (m) => m.hostPath === '/sys/fs/bpf' && m.containerPath === '/sys/fs/bpf' && m.readOnly,
+    ),
+  );
   assert.equal(enabled.length, 1 + L5_DIAG_MOUNTS.length);
 
   // Re-enabling must not duplicate L5 mounts.

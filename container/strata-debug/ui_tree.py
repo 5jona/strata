@@ -213,8 +213,14 @@ def tap_ui_node(
                 "error": tap_res.stderr.strip()[:240] or f"input tap exited rc={tap_res.returncode}",
             }
     else:
-        w, h, _ = gesture_replay.get_screen_metrics()
-        with gesture_replay.UInputTouchDevice(w, h) as dev:
+        geom = gesture_replay.get_display_geometry()
+        with gesture_replay.UInputTouchDevice(
+            geom["phys_w"],
+            geom["phys_h"],
+            logical_width=geom["logical_w"],
+            logical_height=geom["logical_h"],
+            rotation=geom["rotation"],
+        ) as dev:
             dev.tap(cx, cy)
 
     return {"ok": True, "method": method, "center": [cx, cy], "node": node}

@@ -62,7 +62,7 @@ export function DebugPassthroughCard({
       <SettingRow
         variant="plain"
         title="L5 内核诊断只读挂载"
-        description="只读挂载 /sys/fs/pstore 与 /sys/kernel/tracing"
+        description="只读挂载 /sys/fs/pstore、/sys/kernel/tracing 与 /sys/fs/bpf"
         control={
           <Switch
             checked={l5Enabled}

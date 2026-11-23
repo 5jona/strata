@@ -16,13 +16,13 @@ from .transport import (
     N,
     S,
     argv_to_cmd,
-    control_path,
     extract_ssh_overrides,
     invoke_exec,
     make_tool,
+    open_ssh_port_forward,
     opt_flag,
+    resolve_ssh_target,
     scp_pull,
-    ssh_config,
     ssh_exec,
 )
 
@@ -251,7 +251,7 @@ def dispatch_core_tool(
 
     if name == "reload_and_verify":
         ssh_kw = extract_ssh_overrides(args)
-        host, port, user = ssh_config(**ssh_kw)
+        host, port, user = resolve_ssh_target(**ssh_kw)
         target = f"{user}@{host}" if user else host
         port_args = ["--ssh-port", port] if port else []
         r_cmd = ["bash", os.path.join(repo_root, "reload.sh"), "--ssh", target, *port_args] + (["--skip-build"] if args.get("skipBuild", True) else [])
@@ -273,14 +273,13 @@ def dispatch_core_tool(
         if not chosen:
             return {"ok": False, "error": "no devtools socket found on device"}
         fwd = run_argv(["strata-debug", "forward", f"tcp:{port_num}", f"localabstract:{chosen['socket']}"])
-        host, ssh_port, user = ssh_config(**extract_ssh_overrides(args))
-        tunnel_cmd = ["ssh"] + (["-p", ssh_port] if ssh_port else []) + [
-            "-f", "-N", "-o", "BatchMode=yes", "-o", "ExitOnForwardFailure=yes",
-            "-o", f"ControlPath={control_path()}",
-            "-L", f"127.0.0.1:{port_num}:127.0.0.1:{port_num}",
-            f"{user}@{host}" if user else host,
-        ]
-        tunnel = subprocess.run(tunnel_cmd, capture_output=True, text=True, timeout=15.0, check=False)
-        return {"ok": fwd["rc"] == 0 and tunnel.returncode == 0, "localPort": port_num, "socket": chosen["socket"], "stderr": tunnel.stderr.strip()}
+        tunnel = open_ssh_port_forward(port_num, port_num, **extract_ssh_overrides(args))
+        return {
+            "ok": fwd["rc"] == 0 and bool(tunnel.get("ok")),
+            "localPort": port_num,
+            "socket": chosen["socket"],
+            "route": tunnel.get("route"),
+            "stderr": tunnel.get("stderr", ""),
+        }
 
     raise KeyError(f"unknown core tool '{name}'")

@@ -9,6 +9,9 @@ from typing import Callable
 import app_ops
 import host_inspect
 import lsposed_ops
+import perfetto_analyze
+import perfetto_ops
+import perfetto_session
 import ui_tree
 
 
@@ -108,12 +111,53 @@ def _cmd_ksu(args: argparse.Namespace) -> int:
     return 1
 
 
+def _cmd_perfetto(args: argparse.Namespace) -> int:
+    action = args.action
+    if action == "start":
+        buf = args.buffer_kb if args.buffer_kb is not None else perfetto_session.DEFAULT_RING_BUFFER_KB
+        res = perfetto_session.start_ring_session(
+            preset=args.preset,
+            buffer_kb=buf,
+            max_duration_sec=args.max_duration,
+            session_key=args.session,
+            out_path=args.out,
+        )
+    elif action == "status":
+        res = perfetto_session.ring_session_status(session_key=args.session)
+    elif action == "snapshot":
+        res = perfetto_session.snapshot_ring_session(
+            session_key=args.session,
+            keep_running=args.keep_running,
+            analyze=args.analyze,
+        )
+    elif action == "stop":
+        res = perfetto_session.stop_ring_session(session_key=args.session, analyze=args.analyze)
+    elif action == "analyze":
+        target = args.path or args.out
+        if not target:
+            res = {"ok": False, "error": "--path is required for --action analyze"}
+        else:
+            res = perfetto_analyze.analyze_trace_file(target)
+    else:
+        buf = args.buffer_kb if args.buffer_kb is not None else perfetto_ops.DEFAULT_BUFFER_KB
+        res = perfetto_ops.capture_perfetto(
+            preset=args.preset,
+            duration_sec=args.duration,
+            buffer_kb=buf,
+            out_path=args.out,
+            analyze=args.analyze,
+        )
+    _emit(res)
+    return 0 if res.get("ok") else 1
+
+
 ANDROID_DISPATCH: dict[str, Callable[[argparse.Namespace], int]] = {
     "ui": _cmd_ui,
     "app": _cmd_app,
     "lsposed": _cmd_lsposed,
     "db": _cmd_db,
     "ksu": _cmd_ksu,
+    "perfetto": _cmd_perfetto,
 }
 
 
@@ -179,3 +223,19 @@ def register_android_subparsers(sub: argparse._SubParsersAction[argparse.Argumen
     ksu_sub.add_parser("inputs")
     p_ks = ksu_sub.add_parser("sysfs")
     p_ks.add_argument("path")
+
+    p_pf = sub.add_parser("perfetto")
+    p_pf.add_argument(
+        "--action",
+        choices=["capture", "start", "status", "snapshot", "stop", "analyze"],
+        default="capture",
+    )
+    p_pf.add_argument("--preset", choices=list(perfetto_ops.PRESETS), default="ui-jank")
+    p_pf.add_argument("--duration", type=int, default=perfetto_ops.DEFAULT_DURATION_SEC)
+    p_pf.add_argument("--buffer-kb", type=int, default=None)
+    p_pf.add_argument("--max-duration", type=int, default=perfetto_session.DEFAULT_RING_DURATION_SEC)
+    p_pf.add_argument("--session", default=perfetto_session.DEFAULT_SESSION_KEY)
+    p_pf.add_argument("--keep-running", action=argparse.BooleanOptionalAction, default=True)
+    p_pf.add_argument("--analyze", action=argparse.BooleanOptionalAction, default=True)
+    p_pf.add_argument("--out")
+    p_pf.add_argument("--path")

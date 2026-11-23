@@ -131,6 +131,7 @@ export interface BindMount {
 export const L5_DIAG_MOUNTS: readonly BindMount[] = [
   { hostPath: '/sys/fs/pstore', containerPath: '/sys/fs/pstore', readOnly: true },
   { hostPath: '/sys/kernel/tracing', containerPath: '/sys/kernel/tracing', readOnly: true },
+  { hostPath: '/sys/fs/bpf', containerPath: '/sys/fs/bpf', readOnly: true },
 ];
 
 export interface ContainerConfig {

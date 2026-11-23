@@ -19,9 +19,13 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Live device verification for Strata")
     parser.add_argument(
         "--mode",
-        choices=["auto", "ssh", "host-exec", "local"],
+        choices=["auto", "ssh", "adb", "host-exec", "local"],
         default="auto",
-        help="Transport mode (default: auto; checks STRATA_SSH_HOST / SSH_TARGET, host-exec, local)",
+        help="Transport mode (default: auto; checks --adb / STRATA_SSH_HOST / STRATA_ADB_SERIAL, host-exec, local)",
+    )
+    parser.add_argument(
+        "--adb",
+        help="Target ADB device serial; creates an isolated temporary local SSH forward (default: $STRATA_ADB_SERIAL)",
     )
     parser.add_argument(
         "--ssh",
@@ -53,20 +57,21 @@ def main(argv: list[str] | None = None) -> int:
         help="Optional local path to save a compact visual capture during UI check",
     )
     args = parser.parse_args(argv)
-    dev = DeviceRunner(
+    with DeviceRunner(
         mode=args.mode,
         ssh_target=args.ssh,
         ssh_port=args.ssh_port,
-    )
-    non_destructive = args.non_destructive or (
-        dev.mode in {"ssh", "host-exec"} and not args.allow_destructive
-    )
-    if args.ui_only:
-        verify_sideveil_ui(dev, args.screenshot)
-    else:
-        verify(dev, non_destructive=non_destructive)
-        if args.screenshot:
+        adb_serial=args.adb,
+    ) as dev:
+        non_destructive = args.non_destructive or (
+            dev.mode in {"ssh", "host-exec"} and not args.allow_destructive
+        )
+        if args.ui_only:
             verify_sideveil_ui(dev, args.screenshot)
+        else:
+            verify(dev, non_destructive=non_destructive)
+            if args.screenshot:
+                verify_sideveil_ui(dev, args.screenshot)
     return 0
 
 

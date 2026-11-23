@@ -82,25 +82,27 @@ def _cmd_forward(args: argparse.Namespace) -> int:
 
 
 def _cmd_gesture(args: argparse.Namespace) -> int:
-    w, h, dpi = gesture_replay.get_screen_metrics()
-    w, h, dpi = args.width or w, args.height or h, args.dpi or dpi
-    with gesture_replay.UInputTouchDevice(w, h) as dev:
+    geom = gesture_replay.get_display_geometry()
+    lw, lh, dpi = args.width or geom["logical_w"], args.height or geom["logical_h"], args.dpi or geom["dpi"]
+    pw, ph, rot = geom["phys_w"], geom["phys_h"], geom["rotation"]
+    meta = {"rotation": rot, "logicalSize": [lw, lh], "physicalSize": [pw, ph]}
+    with gesture_replay.UInputTouchDevice(pw, ph, logical_width=lw, logical_height=lh, rotation=rot) as dev:
         if args.gesture_cmd == "edge-swipe":
             pts = gesture_replay.compute_edge_swipe_points(
-                w, h, dpi, side=args.side, y_percent=args.y_percent,
+                lw, lh, dpi, side=args.side, y_percent=args.y_percent,
                 distance_dp=args.distance_dp, duration_ms=args.duration_ms, cancel_back=args.cancel_back,
             )
             dev.replay_points(pts)
-            return _emit({"ok": True, "gesture": "edge-swipe", "points": len(pts), "screen": [w, h, dpi]})
+            return _emit({"ok": True, "gesture": "edge-swipe", "points": len(pts), "screen": [lw, lh, dpi], **meta})
         if args.gesture_cmd == "tap":
             dev.tap(args.x, args.y)
-            return _emit({"ok": True, "gesture": "tap", "x": args.x, "y": args.y})
+            return _emit({"ok": True, "gesture": "tap", "x": args.x, "y": args.y, **meta})
         if args.gesture_cmd == "long-press":
             dev.tap(args.x, args.y, hold_ms=args.duration_ms)
-            return _emit({"ok": True, "gesture": "long-press", "x": args.x, "y": args.y, "durationMs": args.duration_ms})
+            return _emit({"ok": True, "gesture": "long-press", "x": args.x, "y": args.y, "durationMs": args.duration_ms, **meta})
         if args.gesture_cmd == "swipe":
             dev.swipe(args.x0, args.y0, args.x1, args.y1, duration_ms=args.duration_ms)
-            return _emit({"ok": True, "gesture": "swipe"})
+            return _emit({"ok": True, "gesture": "swipe", **meta})
     return 1
 
 

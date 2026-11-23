@@ -157,6 +157,9 @@ def collect_dmesg(
     }
 
 
+L5_DIAG_HINT = "Enable L5 tracefs/bpffs mounts with: strata config set-l5-diag on"
+
+
 def _read_small_text(path: str, max_bytes: int = 4096) -> str | None:
     try:
         with open(path, encoding="utf-8", errors="replace") as f:
@@ -165,54 +168,86 @@ def _read_small_text(path: str, max_bytes: int = 4096) -> str | None:
         return None
 
 
-def probe_trace_capabilities(tracing_dir: str = "/sys/kernel/tracing") -> dict[str, Any]:
+def is_bpffs_mounted(bpffs_dir: str = "/sys/fs/bpf", *, mounts_path: str = "/proc/mounts") -> bool:
+    """Checks whether `bpffs_dir` exists, is readable, and is mounted as a `bpf` filesystem."""
+    if not os.path.isdir(bpffs_dir) or not os.access(bpffs_dir, os.R_OK):
+        return False
+    norm = os.path.normpath(bpffs_dir)
+    try:
+        with open(mounts_path, encoding="utf-8", errors="replace") as f:
+            for line in f:
+                parts = line.split()
+                if len(parts) >= 3 and os.path.normpath(parts[1]) == norm and parts[2] == "bpf":
+                    return True
+        return False
+    except OSError:
+        return os.access(bpffs_dir, os.R_OK)
+
+
+def probe_trace_capabilities(
+    tracing_dir: str = "/sys/kernel/tracing",
+    bpffs_dir: str = "/sys/fs/bpf",
+    *,
+    mounts_path: str = "/proc/mounts",
+) -> dict[str, Any]:
     return {
         "btfVmlinux": os.path.exists("/sys/kernel/btf/vmlinux"),
         "tracefs": os.path.isdir(tracing_dir) and os.path.exists(os.path.join(tracing_dir, "current_tracer")),
+        "bpffsMounted": is_bpffs_mounted(bpffs_dir, mounts_path=mounts_path),
         "bpftraceBin": shutil.which("bpftrace") or "",
     }
 
 
-def inspect_tracing(tracing_dir: str = "/sys/kernel/tracing", *, limit: int = 40) -> dict[str, Any]:
-    """Read-only tracefs inspection; degrades gracefully when tracefs is not mounted."""
-    caps = probe_trace_capabilities(tracing_dir)
+def inspect_tracing(
+    tracing_dir: str = "/sys/kernel/tracing", *, limit: int = 40,
+    bpffs_dir: str = "/sys/fs/bpf", mounts_path: str = "/proc/mounts",
+) -> dict[str, Any]:
+    """Read-only tracefs and bpffs inspection; degrades gracefully when not mounted."""
+    caps = probe_trace_capabilities(tracing_dir, bpffs_dir, mounts_path=mounts_path)
     if not os.path.isdir(tracing_dir):
         return {
-            "ok": True,
-            "available": False,
-            "reason": f"tracefs not mounted at {tracing_dir}",
-            "capabilities": caps,
+            "ok": True, "available": False, "bpffsMounted": caps["bpffsMounted"],
+            "reason": f"tracefs not mounted at {tracing_dir}; {L5_DIAG_HINT}",
+            "hint": L5_DIAG_HINT, "capabilities": caps,
         }
     current_tracer = _read_small_text(os.path.join(tracing_dir, "current_tracer"))
     tracing_on = _read_small_text(os.path.join(tracing_dir, "tracing_on"))
     if current_tracer is None and tracing_on is None:
         return {
-            "ok": True,
-            "available": False,
-            "reason": f"tracefs at {tracing_dir} is unreadable or not mounted",
-            "capabilities": caps,
+            "ok": True, "available": False, "bpffsMounted": caps["bpffsMounted"],
+            "reason": f"tracefs at {tracing_dir} is unreadable or not mounted; {L5_DIAG_HINT}",
+            "hint": L5_DIAG_HINT, "capabilities": caps,
         }
     avail_raw = _read_small_text(os.path.join(tracing_dir, "available_tracers")) or ""
     trace_raw = _read_small_text(os.path.join(tracing_dir, "trace"), max_bytes=32768) or ""
     trace_lines = [ln for ln in trace_raw.splitlines() if ln and not ln.startswith("#")][-max(1, limit) :]
-    return {
+    result: dict[str, Any] = {
         "ok": True,
         "available": True,
         "tracingDir": tracing_dir,
+        "bpffsMounted": caps["bpffsMounted"],
         "tracingOn": tracing_on == "1",
         "currentTracer": current_tracer or "",
         "availableTracers": avail_raw.split(),
         "traceTail": trace_lines,
         "capabilities": caps,
     }
+    if not caps["bpffsMounted"]:
+        result["hint"] = f"bpffs not mounted at {bpffs_dir}; {L5_DIAG_HINT}"
+    return result
 
 
 def run_trace_preset(
-    preset: str, duration_s: int = 5, *, tracing_dir: str = "/sys/kernel/tracing"
+    preset: str,
+    duration_s: int = 5,
+    *,
+    tracing_dir: str = "/sys/kernel/tracing",
+    bpffs_dir: str = "/sys/fs/bpf",
+    mounts_path: str = "/proc/mounts",
 ) -> dict[str, Any]:
     if preset not in BPFTRACE_PRESETS:
         return {"ok": False, "error": f"unknown preset '{preset}', expected {sorted(BPFTRACE_PRESETS)}"}
-    caps = probe_trace_capabilities(tracing_dir)
+    caps = probe_trace_capabilities(tracing_dir, bpffs_dir, mounts_path=mounts_path)
     duration = max(1, min(30, duration_s))
 
     if caps["bpftraceBin"] and caps["tracefs"]:
@@ -224,22 +259,34 @@ def run_trace_preset(
             timeout=duration + 10,
             check=False,
         )
-        return {
+        out: dict[str, Any] = {
             "ok": res.returncode == 0,
             "available": True,
             "backend": "bpftrace",
             "preset": preset,
             "durationSec": duration,
+            "bpffsMounted": caps["bpffsMounted"],
             "capabilities": caps,
             "output": res.stdout.strip()[-4000:],
             "stderr": res.stderr.strip()[-1000:],
         }
+        if not caps["bpffsMounted"]:
+            out["hint"] = f"bpffs not mounted at {bpffs_dir}; {L5_DIAG_HINT}"
+        return out
 
+    hints: list[str] = []
+    if not caps["tracefs"] or not caps["bpffsMounted"]:
+        hints.append(L5_DIAG_HINT)
+    if not caps["bpftraceBin"]:
+        hints.append("Install bpftrace with: setup-container.sh --debug-profile")
+    hint_msg = "; ".join(hints)
     return {
         "ok": True,
         "available": False,
         "backend": "none",
         "preset": preset,
+        "bpffsMounted": caps["bpffsMounted"],
         "capabilities": caps,
-        "reason": "bpftrace or /sys/kernel/tracing unavailable; install with setup-container.sh --debug-profile",
+        "hint": hint_msg,
+        "reason": f"bpftrace or /sys/kernel/tracing unavailable; {hint_msg}",
     }

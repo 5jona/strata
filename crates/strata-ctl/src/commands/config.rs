@@ -261,7 +261,7 @@ mod tests {
             read_only: false,
         };
         let enabled = merge_l5_diag_mounts(std::slice::from_ref(&user_mount), true);
-        assert_eq!(enabled.len(), 3);
+        assert_eq!(enabled.len(), 4);
         assert_eq!(enabled[0], user_mount);
         assert_eq!(enabled[1..], l5_diag_mounts()[..]);
 

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 #
 # Zero-reboot development deploy and hot-reload script for Strata.
-# Deploys over container SSH (--ssh <host|user@host> or STRATA_SSH_HOST / SSH_TARGET)
-# or locally on-device (host-exec / Android root).
+# Deploys over container SSH (--ssh <host|user@host> or STRATA_SSH_HOST / SSH_TARGET),
+# over ADB (--adb <serial> or STRATA_ADB_SERIAL), or locally on-device (host-exec / Android root).
 #
 
 set -euo pipefail
@@ -17,6 +17,18 @@ RESET_CONFIG=0
 LOCAL_MODE=0
 SSH_TARGET="${SSH_TARGET:-${STRATA_SSH_HOST:-}}"
 SSH_PORT="${SSH_PORT:-${STRATA_SSH_PORT:-2222}}"
+ADB_SERIAL=""
+ADB_LOCAL_PORT=""
+ADB_SSH_ISOLATED=0
+ERR_FILE=""
+
+cleanup() {
+    [ -n "${ERR_FILE}" ] && rm -f "${ERR_FILE}" 2>/dev/null || true
+    if [ -n "${ADB_SERIAL}" ] && [ -n "${ADB_LOCAL_PORT}" ]; then
+        adb -s "${ADB_SERIAL}" forward --remove "tcp:${ADB_LOCAL_PORT}" >/dev/null 2>&1 || true
+    fi
+}
+trap cleanup EXIT
 
 usage() {
     cat <<'EOF'
@@ -25,6 +37,8 @@ Usage: ./reload.sh [options] [ssh-target]
 Options:
   --ssh <host|user@host>  Deploy and reload over Strata container SSH
   --ssh-port <port>       Container SSH port (default: $STRATA_SSH_PORT / $SSH_PORT / 2222)
+  --adb <serial>          Deploy via ADB serial (temp local SSH forward or su fallback;
+                          default env: $STRATA_ADB_SERIAL)
   --local                 Deploy locally on-device via host-exec or Android UID 0
   --skip-build            Skip build.sh quality gate and cross-build
   --reset-config          Overwrite /data/adb/strata/config.json with repo defaults
@@ -36,19 +50,22 @@ while [ "$#" -gt 0 ]; do
     case "$1" in
         --skip-build) SKIP_BUILD=1; shift ;;
         --reset-config) RESET_CONFIG=1; shift ;;
-        --local) LOCAL_MODE=1; SSH_TARGET=""; shift ;;
-        --ssh) SSH_TARGET="$2"; shift 2 ;;
+        --local) LOCAL_MODE=1; SSH_TARGET=""; ADB_SERIAL=""; shift ;;
+        --ssh) SSH_TARGET="$2"; ADB_SERIAL=""; shift 2 ;;
         --ssh-port) SSH_PORT="$2"; shift 2 ;;
+        --adb) ADB_SERIAL="$2"; SSH_TARGET=""; LOCAL_MODE=0; shift 2 ;;
         -h|--help) usage; exit 0 ;;
-        *) SSH_TARGET="$1"; shift ;;
+        *) SSH_TARGET="$1"; ADB_SERIAL=""; shift ;;
     esac
 done
 
-if [ "$LOCAL_MODE" -eq 0 ] && [ -z "$SSH_TARGET" ]; then
-    if [ -x /usr/local/bin/host-exec ] || { [ -x /system/bin/getprop ] && [ "$(id -u)" -eq 0 ]; }; then
+if [ "$LOCAL_MODE" -eq 0 ] && [ -z "$SSH_TARGET" ] && [ -z "$ADB_SERIAL" ]; then
+    if [ -n "${STRATA_ADB_SERIAL:-}" ]; then
+        ADB_SERIAL="${STRATA_ADB_SERIAL}"
+    elif [ -x /usr/local/bin/host-exec ] || { [ -x /system/bin/getprop ] && [ "$(id -u)" -eq 0 ]; }; then
         LOCAL_MODE=1
     else
-        echo "[!] Error: Specify --ssh <host|user@host> (or set STRATA_SSH_HOST / SSH_TARGET), or run on-device." >&2
+        echo "[!] Error: Specify --ssh <host|user@host>, --adb <serial> (or STRATA_SSH_HOST / STRATA_ADB_SERIAL), or run on-device." >&2
         exit 1
     fi
 fi
@@ -127,8 +144,52 @@ fi
 EOF
 }
 
+if [ -n "$ADB_SERIAL" ]; then
+    ADB_LOCAL_PORT="$(adb -s "${ADB_SERIAL}" forward tcp:0 "tcp:${SSH_PORT}" 2>/dev/null | tr -d '\r\n' || true)"
+    if [[ "${ADB_LOCAL_PORT}" =~ ^[0-9]+$ ]] && ssh \
+        -p "${ADB_LOCAL_PORT}" \
+        -o BatchMode=yes \
+        -o ConnectTimeout=4 \
+        -o StrictHostKeyChecking=no \
+        -o UserKnownHostsFile=/dev/null \
+        -o LogLevel=ERROR \
+        root@127.0.0.1 true >/dev/null 2>&1; then
+        echo "[*] Using isolated ADB forward (${ADB_SERIAL} -> 127.0.0.1:${ADB_LOCAL_PORT})..."
+        SSH_TARGET="root@127.0.0.1"
+        SSH_PORT="${ADB_LOCAL_PORT}"
+        ADB_SSH_ISOLATED=1
+    else
+        echo "[*] Container SSH unavailable over ADB forward; deploying via adb -s ${ADB_SERIAL} su..."
+        STAGE_TAR="/data/local/tmp/strata_stage.tar"
+        LOCAL_TAR="$(mktemp)"
+        ERR_FILE="${LOCAL_TAR}"
+        tar -C "${SCRIPT_DIR}" -cf "${LOCAL_TAR}" "${MODULE_FILES[@]}"
+        adb -s "${ADB_SERIAL}" push "${LOCAL_TAR}" "${STAGE_TAR}" >/dev/null
+        adb -s "${ADB_SERIAL}" shell "su -c 'set -e; rm -rf ${STAGE_DIR}; mkdir -p ${STAGE_DIR}; tar -xf ${STAGE_TAR} -C ${STAGE_DIR}; rm -f ${STAGE_TAR}'"
+        install_staged_script | adb -s "${ADB_SERIAL}" shell "su -c '/system/bin/sh -s'"
+        echo "[*] Restarting stratad on ${ADB_SERIAL}..."
+        adb -s "${ADB_SERIAL}" shell "su -c 'nohup /system/bin/sh ${REMOTE_MOD_DIR}/service.sh --now >/dev/null 2>&1 </dev/null &'"
+        for _ in $(seq 1 25); do
+            if adb -s "${ADB_SERIAL}" shell "su -c '/data/adb/ksu/bin/strata daemon ping'" >/dev/null 2>&1; then
+                adb -s "${ADB_SERIAL}" shell "su -c '/data/adb/ksu/bin/strata status'"
+                echo "[+] Strata ADB hot-reload succeeded (${ADB_SERIAL})."
+                exit 0
+            fi
+            sleep 0.5
+        done
+        echo "[!] Timed out waiting for stratad after ADB reload (${ADB_SERIAL})." >&2
+        adb -s "${ADB_SERIAL}" shell "su -c '/system/bin/cat /data/adb/strata/run/logs/stratad.log 2>/dev/null || true'" >&2
+        exit 1
+    fi
+fi
+
 if [ -n "$SSH_TARGET" ]; then
-    SSH_OPTS=(-p "${SSH_PORT}" -o BatchMode=yes -o ConnectTimeout=6 -o StrictHostKeyChecking=accept-new)
+    SSH_OPTS=(-p "${SSH_PORT}" -o BatchMode=yes -o ConnectTimeout=6)
+    if [ "${ADB_SSH_ISOLATED}" -eq 1 ]; then
+        SSH_OPTS+=(-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR)
+    else
+        SSH_OPTS+=(-o StrictHostKeyChecking=accept-new)
+    fi
     echo "[*] Deploying via SSH to ${SSH_TARGET}:${SSH_PORT}..."
     tar -C "${SCRIPT_DIR}" -cf - "${MODULE_FILES[@]}" \
         | ssh "${SSH_OPTS[@]}" "${SSH_TARGET}" \
@@ -144,20 +205,15 @@ if [ -n "$SSH_TARGET" ]; then
     '"
     sleep 3
     last_ssh_err=""
-    err_file="$(mktemp)"
-    trap 'rm -f "${err_file}"' EXIT
+    ERR_FILE="$(mktemp)"
     for _ in $(seq 1 25); do
-        if ssh "${SSH_OPTS[@]}" "${SSH_TARGET}" "host-exec /data/adb/ksu/bin/strata status" 2>"${err_file}"; then
-            rm -f "${err_file}"
-            trap - EXIT
+        if ssh "${SSH_OPTS[@]}" "${SSH_TARGET}" "host-exec /data/adb/ksu/bin/strata status" 2>"${ERR_FILE}"; then
             echo "[+] Strata SSH hot-reload succeeded."
             exit 0
         fi
-        last_ssh_err="$(cat "${err_file}" 2>/dev/null || true)"
+        last_ssh_err="$(cat "${ERR_FILE}" 2>/dev/null || true)"
         sleep 1
     done
-    rm -f "${err_file}"
-    trap - EXIT
     echo "[!] Timed out waiting for stratad after SSH reload (${SSH_TARGET}:${SSH_PORT})." >&2
     if [ -n "${last_ssh_err}" ]; then
         echo "[!] Last SSH error:" >&2
