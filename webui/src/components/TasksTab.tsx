@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { buildTaskCommand, QUICK_TASK_PRESETS, type TaskRunnerMode } from '../lib/strataFormat.ts';
 import type { TaskSummary } from '../types.ts';
 
+/** Props accepted by `TasksTab`. */
 export interface TasksTabProps {
   containerRunning: boolean;
   tasks: readonly TaskSummary[];
@@ -18,6 +19,7 @@ export interface TasksTabProps {
   onImeFocusChange: (focused: boolean) => void;
 }
 
+/** Headless task runner tab supporting quick presets, shell/Python execution, and streaming logs. */
 export function TasksTab({
   containerRunning,
   tasks,
@@ -46,11 +48,13 @@ export function TasksTab({
     <div className="flex flex-col gap-2.5">
       <Card className="flex flex-col gap-2.5 p-3">
         <div className="flex items-center justify-between gap-2">
-          <div className="flex items-center gap-1.5">
-            <Terminal className="size-3.5 text-[var(--accent)]" />
-            <span className="text-xs font-medium text-[var(--text-primary)]">端侧脚本执行器</span>
+          <div className="flex min-w-0 items-center gap-1.5">
+            <Terminal className="size-3.5 shrink-0 text-[var(--accent)]" />
+            <span className="truncate text-xs font-medium text-[var(--text-primary)]">
+              端侧脚本执行器
+            </span>
           </div>
-          <div className="flex items-center gap-1">
+          <div className="flex shrink-0 items-center gap-1">
             <Button
               size="sm"
               variant={mode === 'shell' ? 'pill' : 'ghost'}
@@ -74,6 +78,7 @@ export function TasksTab({
           {QUICK_TASK_PRESETS.map((preset) => (
             <Button
               key={preset.id}
+              className="shrink-0"
               size="sm"
               variant="secondary"
               disabled={!containerRunning || busy}
@@ -108,6 +113,7 @@ export function TasksTab({
           />
           {activeTask?.running ? (
             <Button
+              className="shrink-0"
               size="sm"
               variant="danger"
               aria-label="中止当前任务"
@@ -118,6 +124,7 @@ export function TasksTab({
             </Button>
           ) : (
             <Button
+              className="shrink-0"
               size="sm"
               variant="primary"
               disabled={!containerRunning || busy || input.trim().length === 0}
@@ -144,6 +151,7 @@ export function TasksTab({
             return (
               <Button
                 key={task.taskId}
+                className="shrink-0"
                 size="sm"
                 variant={selected ? 'pill' : 'secondary'}
                 aria-label={`查看任务 ${task.taskId}`}
@@ -151,6 +159,7 @@ export function TasksTab({
               >
                 <span className="font-mono">{task.taskId}</span>
                 <Badge
+                  className="shrink-0"
                   variant={task.running ? 'accent' : task.exitCode === 0 ? 'success' : 'danger'}
                   dot
                   pulse={task.running}

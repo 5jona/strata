@@ -2,12 +2,16 @@ import type { InvokeOptions } from '@pochita/bridge';
 import { usePluginEvent } from '@pochita/sideveil-sdk';
 import type { StrataEventPayloadMap, StrataRpcMethodMap } from '../types.ts';
 
+/** Union of all Strata JSON-RPC method names supported by the SideVeil plugin bridge. */
 export type StrataRpcMethod = keyof StrataRpcMethodMap;
+
+/** Union of all Strata domain event names pushed over the SideVeil plugin bridge. */
 export type StrataEventName = keyof StrataEventPayloadMap;
 
 type RpcParams<M extends StrataRpcMethod> = StrataRpcMethodMap[M]['params'];
 type RpcResult<M extends StrataRpcMethod> = StrataRpcMethodMap[M]['result'];
 
+/** Minimal plugin RPC invoker interface compatible with SideVeil bridge instances. */
 export interface StrataPluginInvoker {
   invokePlugin: <T = unknown>(
     method: string,

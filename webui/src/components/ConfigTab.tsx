@@ -1,16 +1,7 @@
-import {
-  Badge,
-  Button,
-  Card,
-  Input,
-  LogConsole,
-  type LogEntry,
-  SettingRow,
-  Switch,
-} from '@pochita/ui';
-import { KeyRound, Plus, RefreshCw, Save } from 'lucide-react';
+import { Button, Card, Input, LogConsole, type LogEntry, SettingRow, Switch } from '@pochita/ui';
+import { RefreshCw, Save } from 'lucide-react';
 import { useEffect, useId, useState } from 'react';
-import { summarizeSshKey } from '../lib/strataFormat.ts';
+import { parseSshPort } from '../lib/strataFormat.ts';
 import {
   type BindMount,
   type ContainerConfig,
@@ -18,8 +9,10 @@ import {
   STRATA_PROTOCOL,
 } from '../types.ts';
 import { DebugPassthroughCard } from './DebugPassthroughCard.tsx';
+import { SshKeysCard } from './SshKeysCard.tsx';
 import { StrataTraceCard } from './StrataTraceCard.tsx';
 
+/** Props accepted by `ConfigTab`. */
 export interface ConfigTabProps {
   config: ContainerConfig | null;
   dropbearLogs: readonly LogEntry[];
@@ -32,6 +25,7 @@ export interface ConfigTabProps {
   onImeFocusChange: (focused: boolean) => void;
 }
 
+/** Configuration, Dropbear log, SSH authorized-key, and bridge trace management tab. */
 export function ConfigTab({
   config,
   dropbearLogs,
@@ -49,17 +43,18 @@ export function ConfigTab({
   const [sshPort, setSshPort] = useState(
     String(config?.ssh.port ?? STRATA_PROTOCOL.DEFAULT_SSH_PORT),
   );
+  const [sshPortError, setSshPortError] = useState<string | null>(null);
   const [autoStart, setAutoStart] = useState(config?.autoStart ?? true);
   const [hostBridge, setHostBridge] = useState(config?.hostBridge ?? true);
   const [hostRuntime, setHostRuntime] = useState(config?.hostRuntime ?? false);
   const [extraCharDevs, setExtraCharDevs] = useState<string[]>(config?.extraCharDevs ?? []);
   const [extraMounts, setExtraMounts] = useState<BindMount[]>(config?.extraMounts ?? []);
-  const [newKey, setNewKey] = useState('');
 
   useEffect(() => {
     if (!config) return;
     setHostname(config.hostname);
     setSshPort(String(config.ssh.port));
+    setSshPortError(null);
     setAutoStart(config.autoStart);
     setHostBridge(config.hostBridge);
     setHostRuntime(config.hostRuntime);
@@ -67,14 +62,23 @@ export function ConfigTab({
     setExtraMounts(config.extraMounts ?? []);
   }, [config]);
 
+  const handleSshPortChange = (value: string) => {
+    setSshPort(value);
+    if (sshPortError && parseSshPort(value) !== null) {
+      setSshPortError(null);
+    }
+  };
+
   const handleSave = async () => {
-    const parsedPort = Number.parseInt(sshPort, 10);
+    const parsedPort = parseSshPort(sshPort);
+    if (parsedPort === null) {
+      setSshPortError('SSH 端口需为 1–65535 之间的有效整数');
+      return;
+    }
+    setSshPortError(null);
     const patch: ContainerConfigPatchParams = {
       hostname: hostname.trim() || undefined,
-      sshPort:
-        Number.isFinite(parsedPort) && parsedPort > 0 && parsedPort <= 65535
-          ? parsedPort
-          : undefined,
+      sshPort: parsedPort,
       autoStart,
       hostBridge,
       hostRuntime,
@@ -84,20 +88,14 @@ export function ConfigTab({
     await onSaveConfig(patch);
   };
 
-  const handleAddKey = async () => {
-    const trimmed = newKey.trim();
-    if (!trimmed) return;
-    const ok = await onAddSshKey(trimmed);
-    if (ok) setNewKey('');
-  };
-
   return (
     <div className="flex flex-col gap-2.5">
-      <div className="flex items-center justify-between">
-        <span className="text-xs font-medium text-[var(--text-secondary)]">
+      <div className="flex items-center justify-between gap-2">
+        <span className="truncate text-xs font-medium text-[var(--text-secondary)]">
           Dropbear 初始化日志
         </span>
         <Button
+          className="shrink-0"
           size="sm"
           variant="ghost"
           disabled={busy}
@@ -119,9 +117,10 @@ export function ConfigTab({
       />
 
       <Card className="flex flex-col gap-2.5 p-3">
-        <div className="flex items-center justify-between">
-          <span className="text-xs font-medium text-[var(--text-primary)]">容器参数</span>
+        <div className="flex items-center justify-between gap-2">
+          <span className="truncate text-xs font-medium text-[var(--text-primary)]">容器参数</span>
           <Button
+            className="shrink-0"
             size="sm"
             variant="primary"
             disabled={busy || !config}
@@ -158,12 +157,19 @@ export function ConfigTab({
               inputMode="numeric"
               value={sshPort}
               aria-label="Dropbear SSH 端口"
+              aria-invalid={sshPortError !== null}
               onFocus={() => onImeFocusChange(true)}
               onBlur={() => onImeFocusChange(false)}
-              onChange={(e) => setSshPort(e.target.value)}
+              onChange={(e) => handleSshPortChange(e.target.value)}
             />
           </div>
         </div>
+
+        {sshPortError ? (
+          <p role="alert" className="text-[11px] text-[var(--danger)]">
+            {sshPortError}
+          </p>
+        ) : null}
 
         <div className="pochita-divider" />
         <SettingRow
@@ -199,60 +205,12 @@ export function ConfigTab({
         disabled={busy || !config}
       />
 
-      <Card className="flex flex-col gap-2.5 p-3">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-1.5">
-            <KeyRound className="size-3.5 text-[var(--accent)]" />
-            <span className="text-xs font-medium text-[var(--text-primary)]">SSH 授权公钥</span>
-          </div>
-          <Badge variant="neutral">{sshKeys.length} 条</Badge>
-        </div>
-
-        <div className="flex flex-col gap-1.5">
-          {sshKeys.length === 0 ? (
-            <p className="text-[11px] text-[var(--text-secondary)]">
-              尚未配置公钥（Dropbear 仅允许公钥登录）。
-            </p>
-          ) : (
-            sshKeys.map((line) => {
-              const summary = summarizeSshKey(line);
-              return (
-                <div
-                  key={line}
-                  className="flex items-center justify-between gap-2 rounded-[var(--radius-control)] border border-[var(--border-hairline)] bg-[var(--surface-elevated)] px-2.5 py-1.5"
-                >
-                  <span className="truncate font-mono text-[11px] text-[var(--text-primary)]">
-                    {summary.label}
-                  </span>
-                  <Badge variant="accent">{summary.algo}</Badge>
-                </div>
-              );
-            })
-          )}
-        </div>
-
-        <div className="flex items-center gap-1.5">
-          <Input
-            mono
-            value={newKey}
-            placeholder="粘贴 ssh-ed25519 / ssh-rsa 公钥…"
-            aria-label="新增 SSH 公钥输入框"
-            onFocus={() => onImeFocusChange(true)}
-            onBlur={() => onImeFocusChange(false)}
-            onChange={(e) => setNewKey(e.target.value)}
-          />
-          <Button
-            size="sm"
-            variant="secondary"
-            disabled={busy || newKey.trim().length === 0}
-            aria-label="追加 SSH 公钥"
-            onClick={() => void handleAddKey()}
-          >
-            <Plus className="size-3.5" />
-            添加
-          </Button>
-        </div>
-      </Card>
+      <SshKeysCard
+        sshKeys={sshKeys}
+        busy={busy}
+        onAddSshKey={onAddSshKey}
+        onImeFocusChange={onImeFocusChange}
+      />
 
       <StrataTraceCard onCopyLog={onCopyLog} />
     </div>

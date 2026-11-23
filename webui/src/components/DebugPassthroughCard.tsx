@@ -10,6 +10,7 @@ import {
 } from '../lib/passthrough.ts';
 import type { BindMount } from '../types.ts';
 
+/** Props accepted by `DebugPassthroughCard`. */
 export interface DebugPassthroughCardProps {
   hostRuntime: boolean;
   onHostRuntimeChange: (next: boolean) => void;
@@ -20,6 +21,7 @@ export interface DebugPassthroughCardProps {
   disabled?: boolean;
 }
 
+/** Card controlling opt-in host runtime virtual FS passthrough, L5 read-only mounts, and char devices. */
 export function DebugPassthroughCard({
   hostRuntime,
   onHostRuntimeChange,
@@ -36,17 +38,21 @@ export function DebugPassthroughCard({
   return (
     <Card className="flex flex-col gap-2.5 p-3">
       <div className="flex items-center justify-between gap-2">
-        <div className="flex items-center gap-1.5">
-          <Cpu className="size-3.5 text-[var(--accent)]" />
-          <span className="text-xs font-medium text-[var(--text-primary)]">调试透传与 L5 诊断</span>
+        <div className="flex min-w-0 items-center gap-1.5">
+          <Cpu className="size-3.5 shrink-0 text-[var(--accent)]" />
+          <span className="truncate text-xs font-medium text-[var(--text-primary)]">
+            调试透传与 L5 诊断
+          </span>
         </div>
-        <Badge variant="neutral">重启容器生效</Badge>
+        <Badge className="shrink-0" variant="neutral">
+          重启容器生效
+        </Badge>
       </div>
 
       <SettingRow
         variant="plain"
         title="宿主机运行时"
-        description="暴露 Android 宿主机运行时二进制与动态库（重启容器后生效）"
+        description="直通宿主机 /proc、/sys、/dev 并启用 FullHostRuntime 完整权限集（重启容器后生效）"
         control={
           <Switch
             checked={hostRuntime}
@@ -87,6 +93,7 @@ export function DebugPassthroughCard({
             return (
               <Button
                 key={opt.name}
+                className="shrink-0"
                 size="sm"
                 variant={active ? 'pill' : 'secondary'}
                 disabled={disabled}
@@ -107,7 +114,7 @@ export function DebugPassthroughCard({
           <div className="flex flex-wrap items-center gap-1 pt-0.5">
             <span className="text-[10px] text-[var(--text-secondary)]">其他已配置：</span>
             {customCharDevs.map((dev) => (
-              <Badge key={dev} variant="neutral">
+              <Badge key={dev} className="shrink-0" variant="neutral">
                 <span className="font-mono">{dev}</span>
               </Badge>
             ))}
@@ -124,7 +131,11 @@ export function DebugPassthroughCard({
             </span>
             <div className="flex flex-wrap gap-1">
               {customMounts.map((mount) => (
-                <Badge key={`${mount.hostPath}:${mount.containerPath}`} variant="neutral">
+                <Badge
+                  key={`${mount.hostPath}:${mount.containerPath}`}
+                  className="shrink-0"
+                  variant="neutral"
+                >
                   <span className="font-mono">
                     {mount.hostPath === mount.containerPath
                       ? mount.hostPath

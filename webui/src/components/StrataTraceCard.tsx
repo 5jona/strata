@@ -2,12 +2,14 @@ import { type BridgeTraceEvent, useBridge } from '@pochita/bridge';
 import { BridgeTraceInspector } from '@pochita/ui';
 import { useCallback, useEffect, useState } from 'react';
 
+/** Props accepted by `StrataTraceCard`. */
 export interface StrataTraceCardProps {
   onCopyLog?: (text: string) => Promise<boolean> | boolean;
 }
 
 const MAX_TRACE_ENTRIES = 100;
 
+/** Live inspector displaying recent SideVeil bridge RPC and event trace entries. */
 export function StrataTraceCard({ onCopyLog }: StrataTraceCardProps) {
   const bridge = useBridge();
   const [entries, setEntries] = useState<BridgeTraceEvent[]>(() =>

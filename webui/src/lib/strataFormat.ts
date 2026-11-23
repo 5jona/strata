@@ -1,7 +1,9 @@
-import type { ContainerPhase, ContainerStatusSnapshot } from '../types.ts';
+import type { ContainerPhase, ContainerStatusSnapshot, MaintenanceDonePayload } from '../types.ts';
 
+/** Execution mode supported by the headless task runner input. */
 export type TaskRunnerMode = 'shell' | 'python';
 
+/** Built-in one-click diagnostic command preset for the Tasks tab. */
 export interface QuickTaskPreset {
   id: string;
   label: string;
@@ -9,6 +11,14 @@ export interface QuickTaskPreset {
   script: string;
 }
 
+/** Toast presentation descriptor derived from a maintenance completion event. */
+export interface MaintenanceToastDescriptor {
+  title: string;
+  tone: 'success' | 'danger';
+  description?: string;
+}
+
+/** Display metadata mapping each container lifecycle phase to a badge variant and label. */
 export const PHASE_META: Record<
   ContainerPhase,
   { label: string; variant: 'success' | 'neutral' | 'warning' | 'danger' | 'accent' }
@@ -20,6 +30,14 @@ export const PHASE_META: Record<
   failed: { label: '异常', variant: 'danger' },
 };
 
+const MAINTENANCE_OP_LABELS: Readonly<Record<string, string>> = {
+  backup: '后台备份',
+  compact: '空间回收',
+  fsck: '磁盘检查',
+  dns: 'DNS 同步',
+};
+
+/** Built-in quick task presets exposed in the Tasks tab. */
 export const QUICK_TASK_PRESETS: readonly QuickTaskPreset[] = [
   {
     id: 'sysinfo',
@@ -47,11 +65,13 @@ export const QUICK_TASK_PRESETS: readonly QuickTaskPreset[] = [
   },
 ];
 
+/** Formats a byte count into a human-readable IEC unit string. */
 export function formatBytes(bytes: number): string {
   const { value, unit } = splitBytes(bytes);
   return `${value} ${unit}`;
 }
 
+/** Splits a byte count into a formatted numeric value and IEC unit suffix. */
 export function splitBytes(bytes: number): { value: string; unit: string } {
   if (!Number.isFinite(bytes) || bytes < 0) return { value: '0', unit: 'B' };
   const kib = 1024;
@@ -63,6 +83,7 @@ export function splitBytes(bytes: number): { value: string; unit: string } {
   return { value: String(Math.round(bytes)), unit: 'B' };
 }
 
+/** Formats container uptime in milliseconds as a concise duration string. */
 export function formatUptime(uptimeMs: number): string {
   if (!Number.isFinite(uptimeMs) || uptimeMs <= 0) return '未运行';
   const totalSecs = Math.floor(uptimeMs / 1000);
@@ -74,11 +95,13 @@ export function formatUptime(uptimeMs: number): string {
   return `${secs}s`;
 }
 
+/** Builds a ready-to-copy SSH CLI command for connecting to a container. */
 export function buildSshCommand(snapshot: ContainerStatusSnapshot): string {
   const host = snapshot.primaryIpv4 || '127.0.0.1';
   return `ssh -p ${snapshot.sshPort} root@${host}`;
 }
 
+/** Wraps a user command string into an argv array for shell or Python execution. */
 export function buildTaskCommand(mode: TaskRunnerMode, input: string): string[] {
   const trimmed = input.trim();
   if (!trimmed) return [];
@@ -88,6 +111,7 @@ export function buildTaskCommand(mode: TaskRunnerMode, input: string): string[] 
   return ['/bin/sh', '-c', trimmed];
 }
 
+/** Formats a Unix timestamp in milliseconds as `HH:MM:SS` in local time. */
 export function formatClockTime(tsMs: number): string {
   const date = new Date(tsMs);
   const hh = String(date.getHours()).padStart(2, '0');
@@ -96,6 +120,7 @@ export function formatClockTime(tsMs: number): string {
   return `${hh}:${mm}:${ss}`;
 }
 
+/** Extracts the key algorithm and a redacted display label from an authorized_keys line. */
 export function summarizeSshKey(keyLine: string): { algo: string; label: string } {
   const parts = keyLine.trim().split(/\s+/);
   const algo = parts[0] ?? 'ssh-key';
@@ -106,5 +131,38 @@ export function summarizeSshKey(keyLine: string): { algo: string; label: string 
   return {
     algo,
     label: comment ? `${comment} (${fingerprintHint})` : fingerprintHint,
+  };
+}
+
+/** Parses and validates a TCP port string within the `[1, 65535]` range. */
+export function parseSshPort(raw: string): number | null {
+  const trimmed = raw.trim();
+  if (!/^\d+$/.test(trimmed)) return null;
+  const parsed = Number.parseInt(trimmed, 10);
+  if (!Number.isSafeInteger(parsed) || parsed < 1 || parsed > 65535) return null;
+  return parsed;
+}
+
+/** Resolves a maintenance operation identifier to its localized display label. */
+export function formatMaintenanceOpLabel(op: string): string {
+  return MAINTENANCE_OP_LABELS[op] ?? `维护任务 (${op})`;
+}
+
+/** Formats toast title, tone, and description from a `container.maintenanceDone` payload. */
+export function formatMaintenanceToast(
+  payload: MaintenanceDonePayload,
+): MaintenanceToastDescriptor {
+  const label = formatMaintenanceOpLabel(payload.op);
+  if (payload.ok) {
+    return {
+      title: `${label}完成`,
+      tone: 'success',
+      description: payload.summary,
+    };
+  }
+  return {
+    title: `${label}失败`,
+    tone: 'danger',
+    description: payload.error ?? payload.summary,
   };
 }

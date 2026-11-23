@@ -5,7 +5,7 @@ import {
   useSideVeilPlugin,
 } from '@pochita/sideveil-sdk';
 import type { LogEntry } from '@pochita/ui';
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { formatClockTime } from '../lib/strataFormat.ts';
 import { invokeStrataRpc, useStrataEvent } from '../lib/strataRpc.ts';
 import {
@@ -14,11 +14,11 @@ import {
   type TaskOutputPayload,
   type TaskSummary,
 } from '../types.ts';
+import type { StrataNotifyFn } from './useStrataContainers.ts';
 
 const MAX_LOG_ENTRIES = 240;
 
-type NotifyFn = (title: string, tone?: 'info' | 'success' | 'danger', description?: string) => void;
-
+/** Headless task list, active console stream, and execution controls for the active container. */
 export interface StrataTasksApi {
   tasks: TaskSummary[];
   activeTaskId: string | null;
@@ -40,11 +40,15 @@ function toTaskLogEntry(item: TaskOutputPayload): LogEntry {
   };
 }
 
-export function useStrataTasks(containerId: string, notify: NotifyFn): StrataTasksApi {
+/**
+ * Manages headless container tasks and streaming console output, filtering visible tasks
+ * to the currently selected container and resetting active console state on container switches.
+ */
+export function useStrataTasks(containerId: string, notify: StrataNotifyFn): StrataTasksApi {
   const { bridge } = useSideVeilPlugin();
   const { trigger: triggerHaptic } = useHaptics();
 
-  const [tasks, setTasks] = useState<TaskSummary[]>([]);
+  const [allTasks, setAllTasks] = useState<TaskSummary[]>([]);
   const [activeTaskId, setActiveTaskId] = useState<string | null>(null);
   const [taskEntries, setTaskEntries] = useState<LogEntry[]>([]);
   const [runningTaskAction, setRunningTaskAction] = useState(false);
@@ -53,9 +57,25 @@ export function useStrataTasks(containerId: string, notify: NotifyFn): StrataTas
   activeTaskIdRef.current = activeTaskId;
   const containerIdRef = useRef<string>(containerId);
   containerIdRef.current = containerId;
+  const prevContainerIdRef = useRef<string>(containerId);
+
+  useEffect(() => {
+    if (prevContainerIdRef.current !== containerId) {
+      prevContainerIdRef.current = containerId;
+      activeTaskIdRef.current = null;
+      setActiveTaskId(null);
+      setTaskEntries([]);
+    }
+  }, [containerId]);
 
   useStrataEvent(STRATA_EVENTS.TASK_OUTPUT, (payload) => {
-    if (!payload || payload.taskId !== activeTaskIdRef.current) return;
+    if (
+      !payload ||
+      payload.taskId !== activeTaskIdRef.current ||
+      payload.container !== containerIdRef.current
+    ) {
+      return;
+    }
     setTaskEntries((prev) => [...prev.slice(-(MAX_LOG_ENTRIES - 1)), toTaskLogEntry(payload)]);
   });
 
@@ -75,14 +95,17 @@ export function useStrataTasks(containerId: string, notify: NotifyFn): StrataTas
 
   useStrataEvent(STRATA_EVENTS.TASK_EXIT, (payload) => {
     if (!payload) return;
-    setTasks((prev) =>
+    setAllTasks((prev) =>
       prev.map((item) =>
         item.taskId === payload.taskId
           ? { ...item, running: false, exitCode: payload.exitCode }
           : item,
       ),
     );
-    if (payload.taskId === activeTaskIdRef.current) {
+    if (
+      payload.taskId === activeTaskIdRef.current &&
+      payload.container === containerIdRef.current
+    ) {
       const level = payload.exitCode === 0 && !payload.timedOut ? 'info' : 'error';
       const detail = payload.timedOut ? '任务超时已终止' : `任务已退出 (exit=${payload.exitCode})`;
       setTaskEntries((prev) => [
@@ -98,20 +121,25 @@ export function useStrataTasks(containerId: string, notify: NotifyFn): StrataTas
   });
 
   const replaceTasks = useCallback((next: TaskSummary[]) => {
-    setTasks([...next].reverse());
+    setAllTasks([...next].reverse());
   }, []);
 
   const selectTask = useCallback(
     async (taskId: string) => {
+      const cid = containerIdRef.current;
       setActiveTaskId(taskId);
+      activeTaskIdRef.current = taskId;
       try {
         const logs = await invokeStrataRpc(bridge, STRATA_METHODS.TASK_LOGS, {
           taskId,
           limit: MAX_LOG_ENTRIES,
         });
+        if (activeTaskIdRef.current !== taskId || containerIdRef.current !== cid) return;
         setTaskEntries(logs.entries.map(toTaskLogEntry));
       } catch {
-        setTaskEntries([]);
+        if (activeTaskIdRef.current === taskId && containerIdRef.current === cid) {
+          setTaskEntries([]);
+        }
       }
     },
     [bridge],
@@ -120,11 +148,12 @@ export function useStrataTasks(containerId: string, notify: NotifyFn): StrataTas
   const runTask = useCallback(
     async (command: string[]) => {
       if (command.length === 0) return;
+      const cid = containerIdRef.current;
       setRunningTaskAction(true);
       void triggerHaptic('click');
       try {
         const started = await invokeStrataRpc(bridge, STRATA_METHODS.TASK_RUN, {
-          container: containerIdRef.current,
+          container: cid,
           command,
           timeoutSecs: 120,
         });
@@ -136,16 +165,19 @@ export function useStrataTasks(containerId: string, notify: NotifyFn): StrataTas
           running: true,
           startedAtMs: Date.now(),
         };
-        setActiveTaskId(started.taskId);
-        setTasks((prev) => [newSummary, ...prev.filter((t) => t.taskId !== started.taskId)]);
-        setTaskEntries([
-          {
-            id: `${started.taskId}-start`,
-            timestamp: formatClockTime(Date.now()),
-            level: 'info',
-            message: `已启动 ${started.taskId} (pid=${started.pid})`,
-          },
-        ]);
+        setAllTasks((prev) => [newSummary, ...prev.filter((t) => t.taskId !== started.taskId)]);
+        if (containerIdRef.current === started.container) {
+          activeTaskIdRef.current = started.taskId;
+          setActiveTaskId(started.taskId);
+          setTaskEntries([
+            {
+              id: `${started.taskId}-start`,
+              timestamp: formatClockTime(Date.now()),
+              level: 'info',
+              message: `已启动 ${started.taskId} (pid=${started.pid})`,
+            },
+          ]);
+        }
       } catch (err) {
         notify('任务执行失败', 'danger', err instanceof Error ? err.message : String(err));
       } finally {
@@ -169,6 +201,11 @@ export function useStrataTasks(containerId: string, notify: NotifyFn): StrataTas
   );
 
   const clearTaskConsole = useCallback(() => setTaskEntries([]), []);
+
+  const tasks = useMemo(
+    () => allTasks.filter((task) => task.container === containerId),
+    [allTasks, containerId],
+  );
 
   return {
     tasks,

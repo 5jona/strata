@@ -1,11 +1,13 @@
 import { type BindMount, L5_DIAG_MOUNTS } from '../types.ts';
 
+/** Metadata describing a quick-toggle character device passthrough option. */
 export interface CommonCharDevOption {
   name: string;
   label: string;
   description: string;
 }
 
+/** Frequently used Android debugging character devices exposed as quick toggles. */
 export const COMMON_DEBUG_CHAR_DEVS: readonly CommonCharDevOption[] = [
   { name: 'uinput', label: 'uinput', description: '虚拟输入设备' },
   { name: 'net/tun', label: 'net/tun', description: '虚拟网络设备' },
@@ -17,10 +19,12 @@ function isSameMountPath(a: BindMount, b: BindMount): boolean {
   return a.hostPath === b.hostPath && a.containerPath === b.containerPath;
 }
 
+/** Returns true if a bind mount targets any canonical L5 kernel diagnostic path. */
 export function isL5DiagMount(mount: BindMount): boolean {
   return L5_DIAG_MOUNTS.some((l5) => l5.containerPath === mount.containerPath);
 }
 
+/** Returns true when every canonical read-only L5 diagnostic mount is configured. */
 export function hasL5DiagMounts(mounts: readonly BindMount[]): boolean {
   return L5_DIAG_MOUNTS.every((l5) =>
     mounts.some((m) => isSameMountPath(l5, m) && m.readOnly === l5.readOnly),
@@ -39,6 +43,7 @@ export function toggleL5DiagMounts(mounts: readonly BindMount[], enabled: boolea
   return [...custom, ...L5_DIAG_MOUNTS.map((m) => ({ ...m }))];
 }
 
+/** Filters out canonical L5 diagnostic mounts, returning only user-defined bind mounts. */
 export function getCustomMounts(mounts: readonly BindMount[]): BindMount[] {
   return mounts.filter((m) => !isL5DiagMount(m));
 }
@@ -61,6 +66,7 @@ export function toggleCharDev(
   return normalized.filter((item) => item !== devName);
 }
 
+/** Returns character device entries not covered by the built-in quick-toggle presets. */
 export function getCustomCharDevs(devs: readonly string[]): string[] {
   return devs.filter((item) => !COMMON_CHAR_DEV_SET.has(item));
 }

@@ -10,6 +10,7 @@ import {
   useTheme,
 } from '@pochita/ui';
 
+/** Synchronized theme state and host clipboard helper returned by `useStrataPluginTheme`. */
 export interface UseStrataPluginThemeResult {
   hydrated: boolean;
   isNativeHost: boolean;

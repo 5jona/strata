@@ -7,13 +7,15 @@ import {
   STRATA_PROTOCOL,
   type TaskOutputPayload,
   type TaskSummary,
-} from '../types.ts';
+} from '../../types.ts';
 
+/** In-memory task summary and captured log chunks for the mock preview transport. */
 export interface MockTaskRecord {
   summary: TaskSummary;
   entries: TaskOutputPayload[];
 }
 
+/** Mutable state container backing the standalone browser preview and test mock transport. */
 export interface MockStrataState {
   defaultId: string;
   container: ContainerStatusSnapshot;
@@ -25,6 +27,17 @@ export interface MockStrataState {
   nextTaskSeq: number;
 }
 
+/** Type guard verifying that an unknown value is a plain key-value object. */
+export function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/** Safely coerces raw RPC params into a plain record without unchecked type assertions. */
+export function toParamsRecord(raw: unknown): Record<string, unknown> {
+  return isPlainRecord(raw) ? raw : {};
+}
+
+/** Builds the initial synthetic container, config, SSH key, and HUD state for preview mode. */
 export function createInitialMockState(): MockStrataState {
   const defaultId = STRATA_PROTOCOL.DEFAULT_CONTAINER_ID;
   const imagePath = `${STRATA_PATHS.DEFAULT_CONTAINERS_ROOT}/${defaultId}/rootfs.img`;
@@ -98,10 +111,12 @@ export function createInitialMockState(): MockStrataState {
   };
 }
 
+/** Deep-clones a container status snapshot so mock callers cannot mutate internal state. */
 export function cloneSnapshot(c: ContainerStatusSnapshot): ContainerStatusSnapshot {
   return { ...c, loopDevices: [...c.loopDevices], disk: { ...c.disk } };
 }
 
+/** Deep-clones a container configuration object for mock RPC responses. */
 export function cloneConfig(cfg: ContainerConfig): ContainerConfig {
   return {
     ...cfg,
@@ -113,6 +128,17 @@ export function cloneConfig(cfg: ContainerConfig): ContainerConfig {
   };
 }
 
+function parseBindMount(entry: unknown): BindMount | null {
+  if (!isPlainRecord(entry)) return null;
+  if (typeof entry.hostPath !== 'string' || typeof entry.containerPath !== 'string') return null;
+  return {
+    hostPath: entry.hostPath,
+    containerPath: entry.containerPath,
+    readOnly: Boolean(entry.readOnly),
+  };
+}
+
+/** Applies a partial configuration patch onto both the mock config and live container snapshot. */
 export function applyMockConfigPatch(
   config: ContainerConfig,
   container: ContainerStatusSnapshot,
@@ -132,10 +158,11 @@ export function applyMockConfigPatch(
     config.hostRuntime = container.hostRuntime = params.hostRuntime;
   if (Array.isArray(params.extraCharDevs)) config.extraCharDevs = params.extraCharDevs.map(String);
   if (Array.isArray(params.extraMounts)) {
-    config.extraMounts = (params.extraMounts as BindMount[]).map((m) => ({
-      hostPath: String(m.hostPath),
-      containerPath: String(m.containerPath),
-      readOnly: Boolean(m.readOnly),
-    }));
+    const parsedMounts: BindMount[] = [];
+    for (const item of params.extraMounts) {
+      const mount = parseBindMount(item);
+      if (mount) parsedMounts.push(mount);
+    }
+    config.extraMounts = parsedMounts;
   }
 }

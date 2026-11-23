@@ -13,7 +13,7 @@ import {
   Terminal,
   Wifi,
 } from 'lucide-react';
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   buildSshCommand,
   formatBytes,
@@ -23,6 +23,7 @@ import {
 } from '../lib/strataFormat.ts';
 import type { ContainerStatusSnapshot, HudStateResult } from '../types.ts';
 
+/** Props accepted by `OverviewTab`. */
 export interface OverviewTabProps {
   container: ContainerStatusSnapshot;
   hudState: HudStateResult;
@@ -33,6 +34,7 @@ export interface OverviewTabProps {
   onCopySsh: (sshCommand: string) => Promise<void>;
 }
 
+/** Primary overview tab displaying container status, lifecycle controls, SSH copy, HUD, and maintenance actions. */
 export function OverviewTab({
   container,
   hudState,
@@ -43,6 +45,17 @@ export function OverviewTab({
   onCopySsh,
 }: OverviewTabProps) {
   const [copied, setCopied] = useState(false);
+  const copyTimerRef = useRef<number | null>(null);
+
+  useEffect(
+    () => () => {
+      if (copyTimerRef.current !== null) {
+        window.clearTimeout(copyTimerRef.current);
+      }
+    },
+    [],
+  );
+
   const phaseInfo = PHASE_META[container.phase];
   const isRunning = container.phase === 'running';
   const busy = busyAction !== null;
@@ -59,7 +72,13 @@ export function OverviewTab({
   const handleCopy = async () => {
     await onCopySsh(sshCommand);
     setCopied(true);
-    window.setTimeout(() => setCopied(false), 1500);
+    if (copyTimerRef.current !== null) {
+      window.clearTimeout(copyTimerRef.current);
+    }
+    copyTimerRef.current = window.setTimeout(() => {
+      copyTimerRef.current = null;
+      setCopied(false);
+    }, 1500);
   };
 
   return (
@@ -71,7 +90,7 @@ export function OverviewTab({
               <span className="truncate text-sm font-semibold text-[var(--text-primary)]">
                 {container.hostname}
               </span>
-              <Badge variant={phaseInfo.variant} dot pulse={isRunning}>
+              <Badge className="shrink-0" variant={phaseInfo.variant} dot pulse={isRunning}>
                 {phaseInfo.label}
               </Badge>
             </div>
@@ -153,8 +172,11 @@ export function OverviewTab({
 
       <Card className="flex flex-col gap-2 p-3">
         <div className="flex items-center justify-between gap-2">
-          <span className="text-xs font-medium text-[var(--text-primary)]">SSH 快捷连接</span>
+          <span className="truncate text-xs font-medium text-[var(--text-primary)]">
+            SSH 快捷连接
+          </span>
           <Button
+            className="shrink-0"
             size="sm"
             variant="pill"
             aria-label="复制 SSH 连接命令"
@@ -199,9 +221,9 @@ export function OverviewTab({
       </Card>
 
       <Card className="flex flex-col gap-2 p-3">
-        <div className="flex items-center justify-between">
-          <span className="text-xs font-medium text-[var(--text-primary)]">维护操作</span>
-          <span className="text-[11px] text-[var(--text-secondary)]">零残留安全编排</span>
+        <div className="flex items-center justify-between gap-2">
+          <span className="truncate text-xs font-medium text-[var(--text-primary)]">维护操作</span>
+          <span className="shrink-0 text-[11px] text-[var(--text-secondary)]">零残留安全编排</span>
         </div>
         <div className="grid grid-cols-2 gap-1.5">
           <Button

@@ -1,8 +1,10 @@
 import { definePluginManifest } from '@pochita/sideveil-sdk';
 import { STRATA_PROTOCOL } from './types.ts';
 
+/** Canonical SideVeil plugin identifier for the Strata container manager UI. */
 export const STRATA_PLUGIN_ID = STRATA_PROTOCOL.SIDEVEIL_PLUGIN_ID;
 
+/** Static SideVeil plugin manifest synchronized with `plugins/strata.manager/manifest.json`. */
 export const STRATA_MANIFEST = definePluginManifest({
   id: STRATA_PLUGIN_ID,
   name: 'Strata 容器',

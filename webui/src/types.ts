@@ -1,3 +1,6 @@
+/**
+ * Barrel re-exporting generated Strata contract types and canonical L5 diagnostic mounts.
+ */
 import type { BindMount } from './generated/configTypes.ts';
 import { L5_DIAG_PATHS } from './generated/constants.ts';
 

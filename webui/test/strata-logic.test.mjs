@@ -12,7 +12,9 @@ import {
   buildSshCommand,
   buildTaskCommand,
   formatBytes,
+  formatMaintenanceToast,
   formatUptime,
+  parseSshPort,
   summarizeSshKey,
 } from '../src/lib/strataFormat.ts';
 import { L5_DIAG_MOUNTS, STRATA_METHODS } from '../src/types.ts';
@@ -132,4 +134,43 @@ test('mock Strata transport persists hostRuntime, extraCharDevs, and extraMounts
   assert.equal(fetched.config.hostRuntime, true);
   assert.deepEqual(fetched.config.extraCharDevs, ['uinput', 'net/tun']);
   assert.deepEqual(fetched.config.extraMounts, [...L5_DIAG_MOUNTS]);
+});
+
+test('parseSshPort and formatMaintenanceToast validate ports and format op labels', () => {
+  assert.equal(parseSshPort('2222'), 2222);
+  assert.equal(parseSshPort(' 1 '), 1);
+  assert.equal(parseSshPort('65535'), 65535);
+  assert.equal(parseSshPort('0'), null);
+  assert.equal(parseSshPort('65536'), null);
+  assert.equal(parseSshPort('22abc'), null);
+  assert.equal(parseSshPort(''), null);
+
+  assert.deepEqual(
+    formatMaintenanceToast({
+      container: 'main',
+      op: 'backup',
+      ok: true,
+      summary: '/data/local/tmp/a.img.gz',
+    }),
+    { title: '后台备份完成', tone: 'success', description: '/data/local/tmp/a.img.gz' },
+  );
+  assert.deepEqual(
+    formatMaintenanceToast({
+      container: 'main',
+      op: 'fsck',
+      ok: false,
+      summary: 'e2fsck failed',
+      error: 'exit=4',
+    }),
+    { title: '磁盘检查失败', tone: 'danger', description: 'exit=4' },
+  );
+  assert.deepEqual(
+    formatMaintenanceToast({
+      container: 'main',
+      op: 'custom-op',
+      ok: true,
+      summary: 'done',
+    }),
+    { title: '维护任务 (custom-op)完成', tone: 'success', description: 'done' },
+  );
 });

@@ -8,7 +8,6 @@ import {
 } from '@pochita/sideveil-sdk';
 import {
   AppShell,
-  Badge,
   Button,
   Card,
   cn,
@@ -20,28 +19,24 @@ import {
   ToastProvider,
   useToast,
 } from '@pochita/ui';
-import {
-  Layers,
-  Lock,
-  Maximize2,
-  PanelRight,
-  Pin,
-  RefreshCw,
-  Settings2,
-  Terminal,
-  Unlock,
-  X,
-} from 'lucide-react';
+import { Layers, Settings2, Terminal } from 'lucide-react';
 import { useCallback, useMemo, useState } from 'react';
 import { ConfigTab } from './components/ConfigTab.tsx';
 import { OverviewTab } from './components/OverviewTab.tsx';
+import { StrataHeaderActions } from './components/StrataHeaderActions.tsx';
 import { TasksTab } from './components/TasksTab.tsx';
 import { useStrataPluginTheme } from './hooks/useStrataPluginTheme.ts';
 import { useStrataRuntime } from './hooks/useStrataRuntime.ts';
 import { createMockStrataTransport } from './lib/mockStrataBridge.ts';
 import { STRATA_MANIFEST, STRATA_PLUGIN_ID } from './manifest.ts';
 
+type StrataTab = 'overview' | 'tasks' | 'config';
+
 const PINNED_DEFAULT_BOUNDS = { widthDp: 344, heightDp: 520 };
+
+function isStrataTab(value: string): value is StrataTab {
+  return value === 'overview' || value === 'tasks' || value === 'config';
+}
 
 function StrataWorkbench() {
   const { isNativeHost, isDark, copyText } = useStrataPluginTheme();
@@ -51,7 +46,7 @@ function StrataWorkbench() {
   const { trigger: triggerHaptic } = useHaptics();
   const { pushToast } = useToast();
 
-  const [tab, setTab] = useState<'overview' | 'tasks' | 'config'>('overview');
+  const [tab, setTab] = useState<StrataTab>('overview');
   const backendOnline = !isNativeHost || backendState === 'online';
   const runtime = useStrataRuntime(backendOnline, isDark);
 
@@ -64,13 +59,13 @@ function StrataWorkbench() {
 
   const handleCycleMode = useCallback(() => {
     void triggerHaptic('click');
-    if (mode === 'drawer') {
-      void setMode('wide').catch(() => {});
-    } else if (mode === 'wide') {
-      void setMode('pinned', PINNED_DEFAULT_BOUNDS).catch(() => {});
-    } else {
-      void setMode('drawer').catch(() => {});
-    }
+    const next =
+      mode === 'drawer'
+        ? setMode('wide')
+        : mode === 'wide'
+          ? setMode('pinned', PINNED_DEFAULT_BOUNDS)
+          : setMode('drawer');
+    void next.catch(() => {});
   }, [mode, setMode, triggerHaptic]);
 
   const handleToggleClickThrough = useCallback(() => {
@@ -86,8 +81,13 @@ function StrataWorkbench() {
     [copyText, pushToast],
   );
 
-  const modeLabel = mode === 'wide' ? '切换到悬浮窗' : isPinned ? '返回侧边抽屉' : '切换到宽屏模式';
-  const ModeIcon = mode === 'wide' ? Pin : isPinned ? PanelRight : Maximize2;
+  const handleSelectContainer = useCallback(
+    (containerId: string) => {
+      runtime.setSelectedId(containerId);
+      void runtime.refreshConfigAndLogs(containerId);
+    },
+    [runtime],
+  );
 
   return (
     <div
@@ -114,41 +114,19 @@ function StrataWorkbench() {
           </div>
         }
         headerTrailing={
-          <div className="strata-header-actions flex items-center gap-1">
-            <Badge variant={backendOnline ? 'success' : 'warning'} dot pulse={backendOnline}>
-              {!isNativeHost ? '预览' : backendState === 'online' ? '在线' : '离线'}
-            </Badge>
-            {isPinned ? (
-              <Button
-                size="icon-sm"
-                variant={clickThrough ? 'pill' : 'ghost'}
-                aria-label={clickThrough ? '退出点击穿透' : '开启浮窗点击穿透'}
-                onClick={handleToggleClickThrough}
-              >
-                {clickThrough ? <Lock className="size-3.5" /> : <Unlock className="size-3.5" />}
-              </Button>
-            ) : null}
-            <Button size="icon-sm" variant="ghost" aria-label={modeLabel} onClick={handleCycleMode}>
-              <ModeIcon className="size-3.5" />
-            </Button>
-            <Button
-              size="icon-sm"
-              variant="ghost"
-              aria-label="刷新容器状态"
-              disabled={runtime.loading}
-              onClick={() => void runtime.refreshAll()}
-            >
-              <RefreshCw className={cn('size-3.5', runtime.loading && 'animate-spin')} />
-            </Button>
-            <Button
-              size="icon-sm"
-              variant="ghost"
-              aria-label="关闭 Strata 面板"
-              onClick={() => void dismiss()}
-            >
-              <X className="size-4" />
-            </Button>
-          </div>
+          <StrataHeaderActions
+            isNativeHost={isNativeHost}
+            backendOnline={backendOnline}
+            backendState={backendState}
+            mode={mode}
+            isPinned={isPinned}
+            clickThrough={clickThrough}
+            loading={runtime.loading}
+            onToggleClickThrough={handleToggleClickThrough}
+            onCycleMode={handleCycleMode}
+            onRefresh={() => void runtime.refreshAll()}
+            onDismiss={() => void dismiss()}
+          />
         }
       >
         <div className="flex flex-col gap-2.5">
@@ -157,13 +135,11 @@ function StrataWorkbench() {
               {runtime.containers.map((item) => (
                 <Button
                   key={item.id}
+                  className="shrink-0"
                   size="sm"
                   variant={item.id === runtime.selectedId ? 'pill' : 'secondary'}
                   aria-label={`选择容器 ${item.id}`}
-                  onClick={() => {
-                    runtime.setSelectedId(item.id);
-                    void runtime.refreshConfigAndLogs(item.id);
-                  }}
+                  onClick={() => handleSelectContainer(item.id)}
                 >
                   {item.id}
                   {item.isDefault ? ' (主力)' : ''}
@@ -197,7 +173,7 @@ function StrataWorkbench() {
               </Button>
             </Card>
           ) : runtime.activeContainer ? (
-            <Tabs value={tab} onValueChange={(v) => setTab(v as 'overview' | 'tasks' | 'config')}>
+            <Tabs value={tab} onValueChange={(v) => isStrataTab(v) && setTab(v)}>
               <TabsList aria-label="Strata 管理视图切换">
                 <TabsTrigger value="overview">
                   <Layers className="size-3.5" />
@@ -266,16 +242,17 @@ function StrataWorkbench() {
   );
 }
 
+/** Root SideVeil plugin component wiring bridge, theme, and toast providers for Strata Manager. */
 export function StrataManagerApp() {
-  const bridgeOptions = useMemo<BridgeOptions>(() => {
-    const mockTransport = createMockStrataTransport();
-    return {
+  const bridgeOptions = useMemo<BridgeOptions>(
+    () => ({
       allowUrlOverride: false,
       allowedOrigins: [`https://${STRATA_PLUGIN_ID}.plugins.sideveil.local`],
       mockNamespace: 'strata-manager',
-      mockTransport,
-    };
-  }, []);
+      mockTransport: createMockStrataTransport(),
+    }),
+    [],
+  );
 
   return (
     <SideVeilPluginProvider
