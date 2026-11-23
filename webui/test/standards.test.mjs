@@ -93,17 +93,32 @@ test('compiled SideVeil plugin package matches manifest.ts and Vite + Pochita bu
   assert.equal(inlineScripts.length, 1, `${htmlPath} must only contain theme bootstrap script`);
 });
 
-test('all managed Rust and WebUI source files stay within the 400-line hard limit', () => {
-  const roots = [path.join(WEBUI_ROOT, 'src'), path.join(REPO_ROOT, 'crates')];
-  const extensions = ['.ts', '.tsx', '.css', '.rs'];
-  const violations = [];
+test('all managed production source files stay within the 400-line hard limit', () => {
+  const scanSpecs = [
+    { dir: path.join(WEBUI_ROOT, 'src'), extensions: ['.ts', '.tsx', '.css'] },
+    { dir: path.join(REPO_ROOT, 'crates'), extensions: ['.rs'] },
+    { dir: path.join(REPO_ROOT, 'container/strata-debug'), extensions: ['.py'] },
+    { dir: path.join(REPO_ROOT, 'scripts'), extensions: ['.py', '.sh'] },
+  ];
+  const explicitFiles = [
+    path.join(REPO_ROOT, 'container/host-exec'),
+    path.join(REPO_ROOT, 'container/setup-container.sh'),
+    ...fs
+      .readdirSync(REPO_ROOT)
+      .filter((name) => name.endsWith('.sh'))
+      .map((name) => path.join(REPO_ROOT, name)),
+  ].filter((file) => fs.existsSync(file));
 
-  for (const root of roots) {
-    for (const file of walkFiles(root, extensions)) {
-      const lines = fs.readFileSync(file, 'utf8').split('\n').length;
-      if (lines > 400) {
-        violations.push(`${path.relative(REPO_ROOT, file)} (${lines} lines)`);
-      }
+  const files = [...explicitFiles];
+  for (const { dir, extensions } of scanSpecs) {
+    files.push(...walkFiles(dir, extensions));
+  }
+
+  const violations = [];
+  for (const file of files) {
+    const lines = fs.readFileSync(file, 'utf8').split('\n').length;
+    if (lines > 400) {
+      violations.push(`${path.relative(REPO_ROOT, file)} (${lines} lines)`);
     }
   }
 

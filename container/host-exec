@@ -43,13 +43,14 @@ if [ -r "$HOST_ENV_FILE" ]; then
 fi
 
 run_nsenter \
-    PATH="/product/bin:/apex/com.android.runtime/bin:/apex/com.android.art/bin:/system_ext/bin:/system/bin:/system/xbin:/odm/bin:/vendor/bin:/data/adb/ksu/bin" \
+    PATH="/product/bin:/apex/com.android.runtime/bin:/apex/com.android.art/bin:/apex/com.android.virt/bin:/system_ext/bin:/system/bin:/system/xbin:/odm/bin:/vendor/bin:/vendor/xbin:/data/adb/ksu/bin" \
     ANDROID_ROOT="/system" \
     ANDROID_DATA="/data" \
     ANDROID_STORAGE="/storage" \
     ANDROID_ART_ROOT="/apex/com.android.art" \
     ANDROID_I18N_ROOT="/apex/com.android.i18n" \
     ANDROID_TZDATA_ROOT="/apex/com.android.tzdata" \
+    ANDROID_ASSETS="/system/app" \
     EXTERNAL_STORAGE="/sdcard" \
     TMPDIR="/data/local/tmp" \
     HOME="/" \

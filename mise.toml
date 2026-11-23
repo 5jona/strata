@@ -8,6 +8,14 @@ CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER = "{{config_root}}/scripts/aarch64-and
 [task_config]
 dir = "{{config_root}}"
 
+[tasks."contracts:gen"]
+description = "Regenerate Rust, TypeScript, and JSON Schema contracts from contracts/*.contract.json"
+run = "node ../../../pochita-webui-kit/packages/contracts-gen/src/cli.mjs generate contracts/*.contract.json"
+
+[tasks."contracts:check"]
+description = "Verify generated contracts have zero drift and validate golden wire fixtures"
+run = "node ../../../pochita-webui-kit/packages/contracts-gen/src/cli.mjs check contracts/*.contract.json && node ../../../pochita-webui-kit/packages/contracts-gen/src/cli.mjs validate-fixtures contracts/schemas/strata.schema.json contracts/fixtures"
+
 [tasks."rust:check"]
 description = "Run Rust fmt check, clippy (-D warnings), and workspace unit tests"
 run = "cargo fmt --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace"
@@ -27,8 +35,8 @@ description = "Syntax-check Python tools and run host-side unit tests for strata
 run = "python3 -m py_compile container/strata-debug/*.py scripts/strata-debug-mcp.py scripts/strata_mcp/*.py scripts/verify-live.py scripts/verify_live/*.py tests/*.py && python3 -m unittest discover -s tests -v"
 
 [tasks.check]
-description = "Run full Rust, WebUI, and Python quality gates"
-depends = ["rust:check", "webui:check", "python:check"]
+description = "Run full contract, Rust, WebUI, and Python quality gates"
+depends = ["contracts:check", "rust:check", "webui:check", "python:check"]
 
 [tasks.format]
 description = "Format Rust workspace with rustfmt"
