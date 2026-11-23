@@ -30,7 +30,8 @@ import { useStrataRuntime } from './hooks/useStrataRuntime.ts';
 import { createMockStrataTransport } from './lib/mockStrataBridge.ts';
 import { STRATA_MANIFEST, STRATA_PLUGIN_ID } from './manifest.ts';
 
-type StrataTab = 'overview' | 'tasks' | 'config';
+const STRATA_TAB_ORDER = ['overview', 'tasks', 'config'] as const;
+type StrataTab = (typeof STRATA_TAB_ORDER)[number];
 
 const PINNED_DEFAULT_BOUNDS = { widthDp: 344, heightDp: 520 };
 
@@ -173,7 +174,11 @@ function StrataWorkbench() {
               </Button>
             </Card>
           ) : runtime.activeContainer ? (
-            <Tabs value={tab} onValueChange={(v) => isStrataTab(v) && setTab(v)}>
+            <Tabs
+              value={tab}
+              onValueChange={(v) => isStrataTab(v) && setTab(v)}
+              tabOrder={STRATA_TAB_ORDER}
+            >
               <TabsList aria-label="Strata 管理视图切换">
                 <TabsTrigger value="overview">
                   <Layers className="size-3.5" />
