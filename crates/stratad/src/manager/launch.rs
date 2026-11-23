@@ -65,17 +65,26 @@ pub(super) fn spawn_stage2_init(
     match spec_pipe::read_exec_error(err_read) {
         Ok(None) => {}
         Ok(Some(err_msg)) => {
+            let _ = child.kill();
             let _ = child.wait();
             return Err(err_msg);
         }
         Err(err) => {
+            let _ = child.kill();
             let _ = child.wait();
             return Err(err.to_string());
         }
     }
 
     let pid = child.id();
-    let pidfd = PidFd::open(pid).map_err(|e| format!("pidfd_open({pid}): {e}"))?;
+    let pidfd = match PidFd::open(pid) {
+        Ok(pfd) => pfd,
+        Err(e) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(format!("pidfd_open({pid}): {e}"));
+        }
+    };
     let mnt_ns = namespace::read_ns_inode(pid, "mnt").ok();
     Ok((child, pid, pidfd, mnt_ns))
 }

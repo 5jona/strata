@@ -132,15 +132,19 @@ pub(super) async fn connect_and_handshake(
     write_half.flush().await?;
 
     let mut reader = BufReader::new(read_half);
-    let ack_line = tokio::time::timeout(HANDSHAKE_TIMEOUT, read_bounded_line(&mut reader))
-        .await
-        .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "SideVeil handshake timed out"))??
-        .ok_or_else(|| {
-            io::Error::new(
-                io::ErrorKind::UnexpectedEof,
-                "SideVeil closed connection before handshake ack",
-            )
-        })?;
+    let mut ack_buf = Vec::with_capacity(256);
+    let ack_line = tokio::time::timeout(
+        HANDSHAKE_TIMEOUT,
+        read_bounded_line(&mut reader, &mut ack_buf),
+    )
+    .await
+    .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "SideVeil handshake timed out"))??
+    .ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::UnexpectedEof,
+            "SideVeil closed connection before handshake ack",
+        )
+    })?;
 
     let ack: SideVeilHandshakeAck = serde_json::from_str(ack_line.trim())
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
@@ -163,42 +167,52 @@ pub(super) fn encode_backend_event(env: &EventEnvelope, ephemeral: bool) -> Opti
 }
 
 /// Reads a single UTF-8 NDJSON line bounded to `MAX_FRAME_BYTES`.
+///
+/// Cancellation-safe when `buf` is owned outside `tokio::select!`: partial bytes already
+/// consumed from `reader` remain in `buf` if the future is dropped before a newline arrives.
 pub(super) async fn read_bounded_line<R: AsyncRead + Unpin>(
     reader: &mut BufReader<R>,
+    buf: &mut Vec<u8>,
 ) -> io::Result<Option<String>> {
-    let mut buf = Vec::with_capacity(256);
     loop {
         let available = reader.fill_buf().await?;
         if available.is_empty() {
-            if buf.is_empty() {
-                return Ok(None);
-            }
-            break;
+            return if buf.is_empty() {
+                Ok(None)
+            } else {
+                take_utf8_line(buf)
+            };
         }
         if let Some(pos) = available.iter().position(|&b| b == b'\n') {
             if buf.len() + pos > MAX_FRAME_BYTES {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    "SideVeil NDJSON frame exceeds 256 KiB",
-                ));
+                buf.clear();
+                return Err(frame_too_large());
             }
             buf.extend_from_slice(&available[..pos]);
             reader.consume(pos + 1);
-            break;
+            return take_utf8_line(buf);
         }
         if buf.len() + available.len() > MAX_FRAME_BYTES {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "SideVeil NDJSON frame exceeds 256 KiB",
-            ));
+            buf.clear();
+            return Err(frame_too_large());
         }
         let len = available.len();
         buf.extend_from_slice(available);
         reader.consume(len);
     }
-    String::from_utf8(buf)
+}
+
+fn take_utf8_line(buf: &mut Vec<u8>) -> io::Result<Option<String>> {
+    String::from_utf8(std::mem::take(buf))
         .map(Some)
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+}
+
+fn frame_too_large() -> io::Error {
+    io::Error::new(
+        io::ErrorKind::InvalidData,
+        "SideVeil NDJSON frame exceeds 256 KiB",
+    )
 }
 
 #[cfg(test)]
@@ -249,5 +263,35 @@ mod tests {
             Some(false)
         );
         assert_eq!(extract_appearance_is_dark(Some(&json!({}))), None);
+    }
+
+    #[tokio::test]
+    async fn read_bounded_line_preserves_partial_frame_across_select_cancellation() {
+        let (mut writer, reader_raw) = tokio::io::duplex(64);
+        let mut reader = BufReader::new(reader_raw);
+        let mut line_buf = Vec::with_capacity(256);
+
+        writer
+            .write_all(br#"{"id":"rpc_partial","#)
+            .await
+            .expect("write chunk 1");
+        let cancelled = tokio::select! {
+            biased;
+            res = read_bounded_line(&mut reader, &mut line_buf) => panic!("unexpected line: {res:?}"),
+            _ = tokio::time::sleep(Duration::from_millis(20)) => true,
+        };
+        assert!(cancelled);
+        assert_eq!(line_buf, br#"{"id":"rpc_partial","#);
+
+        writer
+            .write_all(b"\"method\":\"daemon.ping\"}\n")
+            .await
+            .expect("write chunk 2");
+        let line = read_bounded_line(&mut reader, &mut line_buf)
+            .await
+            .expect("read line")
+            .expect("line present");
+        assert_eq!(line, r#"{"id":"rpc_partial","method":"daemon.ping"}"#);
+        assert!(line_buf.is_empty());
     }
 }

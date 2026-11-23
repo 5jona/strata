@@ -10,7 +10,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use strata_protocol::rpc::{error_codes, methods};
 use strata_protocol::{RpcRequest, RpcResponse};
 use strata_sys::procfs;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::{mpsc, watch};
 
@@ -111,14 +111,12 @@ async fn handle_connection(
     });
 
     let mut reader = BufReader::new(read_half);
-    let mut line = String::new();
     let mut event_forwarder: Option<tokio::task::JoinHandle<()>> = None;
 
     loop {
-        line.clear();
-        match reader.read_line(&mut line).await {
-            Ok(0) | Err(_) => break,
-            Ok(n) if n > MAX_FRAME_BYTES => {
+        let line = match read_bounded_rpc_line(&mut reader, MAX_FRAME_BYTES).await {
+            FrameRead::Line(line) => line,
+            FrameRead::TooLarge => {
                 let err_resp = RpcResponse::err(
                     "0",
                     error_codes::INVALID_REQUEST,
@@ -129,8 +127,8 @@ async fn handle_connection(
                 }
                 break;
             }
-            Ok(_) => {}
-        }
+            FrameRead::Eof | FrameRead::IoErr => break,
+        };
 
         let trimmed = line.trim();
         if trimmed.is_empty() {
@@ -197,4 +195,73 @@ async fn handle_connection(
     drop(out_tx);
     let _ = writer_task.await;
     manager.release_connection_leases(conn_id).await;
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum FrameRead {
+    Line(String),
+    TooLarge,
+    Eof,
+    IoErr,
+}
+
+/// Reads a single UTF-8 NDJSON line, enforcing `max_bytes` before allocating beyond the cap.
+async fn read_bounded_rpc_line<R: AsyncRead + Unpin>(
+    reader: &mut BufReader<R>,
+    max_bytes: usize,
+) -> FrameRead {
+    let mut buf = Vec::with_capacity(256);
+    loop {
+        let Ok(available) = reader.fill_buf().await else {
+            return FrameRead::IoErr;
+        };
+        if available.is_empty() {
+            if buf.is_empty() {
+                return FrameRead::Eof;
+            }
+            return match String::from_utf8(buf) {
+                Ok(s) => FrameRead::Line(s),
+                Err(_) => FrameRead::IoErr,
+            };
+        }
+        if let Some(pos) = available.iter().position(|&b| b == b'\n') {
+            if buf.len().saturating_add(pos) > max_bytes {
+                return FrameRead::TooLarge;
+            }
+            buf.extend_from_slice(&available[..pos]);
+            reader.consume(pos + 1);
+            return match String::from_utf8(buf) {
+                Ok(s) => FrameRead::Line(s),
+                Err(_) => FrameRead::IoErr,
+            };
+        }
+        if buf.len().saturating_add(available.len()) > max_bytes {
+            return FrameRead::TooLarge;
+        }
+        let len = available.len();
+        buf.extend_from_slice(available);
+        reader.consume(len);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn read_bounded_rpc_line_rejects_oversized_frame_without_newline() {
+        let mut reader = BufReader::new(&b"{\"id\":\"1\"}\n"[..]);
+        assert_eq!(
+            read_bounded_rpc_line(&mut reader, 32).await,
+            FrameRead::Line("{\"id\":\"1\"}".to_owned())
+        );
+        assert_eq!(read_bounded_rpc_line(&mut reader, 32).await, FrameRead::Eof);
+
+        let oversized = [b'a'; 128];
+        let mut big_reader = BufReader::new(&oversized[..]);
+        assert_eq!(
+            read_bounded_rpc_line(&mut big_reader, 64).await,
+            FrameRead::TooLarge
+        );
+    }
 }

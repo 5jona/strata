@@ -85,6 +85,14 @@ pub fn setup_isolated_virtual_fs(rootfs: &Path, extra_char_devs: &[String]) -> S
             libc::MS_BIND | libc::MS_REC,
             None,
         )?;
+        let existing_flags = crate::procfs::read_mount_flags(&sys_dir).unwrap_or(0);
+        mount::mount(
+            None,
+            &sys_dir,
+            None,
+            existing_flags | libc::MS_REMOUNT | libc::MS_BIND | libc::MS_RDONLY,
+            None,
+        )?;
     }
 
     // Minimal tmpfs /dev (must NOT pass MS_NODEV so created character devices remain usable).

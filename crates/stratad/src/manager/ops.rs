@@ -58,6 +58,16 @@ impl ContainerManager {
         })
     }
 
+    async fn ensure_no_temp_lease(&self, id: &str) -> Result<(), (i32, String)> {
+        if self.leases.has_temp_mount_lease(id).await {
+            return Err((
+                error_codes::IMAGE_BUSY,
+                format!("container '{id}' has active temporary session leases"),
+            ));
+        }
+        Ok(())
+    }
+
     /// Runs online or offline `FITRIM` compaction on a container's sparse ext4 image.
     pub(crate) async fn compact_container(
         &self,
@@ -66,6 +76,7 @@ impl ContainerManager {
         let (id, entry, _) = self.resolve_container(requested).await?;
         let slot = self.get_or_create_slot(&id).await;
         let _guard = slot.lifecycle_lock.lock().await;
+        self.ensure_no_temp_lease(&id).await?;
         let mdir = self.module_dir.clone();
         let cid = id.clone();
         tokio::task::spawn_blocking(move || storage::compact_image(&cid, &entry, mdir.as_deref()))
@@ -74,15 +85,16 @@ impl ContainerManager {
             .map_err(|e| (e.rpc_code(), e.to_string()))
     }
 
-    /// Stops container if running and runs `/system/bin/e2fsck -f -y`.
+    /// Stops container if running and runs `/system/bin/e2fsck -f -y` under continuous lifecycle lock.
     pub(crate) async fn fsck_container(
         self: &Arc<Self>,
         requested: Option<&str>,
     ) -> Result<FsckResult, (i32, String)> {
         let (id, entry, _) = self.resolve_container(requested).await?;
-        let _ = self.stop_container(Some(&id)).await?;
         let slot = self.get_or_create_slot(&id).await;
         let _guard = slot.lifecycle_lock.lock().await;
+        self.ensure_no_temp_lease(&id).await?;
+        let _ = self.stop_locked(&id, &entry, &slot).await?;
         let cid = id.clone();
         tokio::task::spawn_blocking(move || storage::fsck_image(&cid, &entry))
             .await
@@ -90,7 +102,8 @@ impl ContainerManager {
             .map_err(|e| (e.rpc_code(), e.to_string()))
     }
 
-    /// Stops container cleanly if running, writes atomic gzip backup, and restores prior run state.
+    /// Stops container cleanly if running, writes atomic gzip backup, and restores prior run state
+    /// under a continuous `lifecycle_lock`.
     pub(crate) async fn backup_container(
         self: &Arc<Self>,
         params: BackupParams,
@@ -102,29 +115,22 @@ impl ContainerManager {
                 "outputPath must not be empty".to_owned(),
             ));
         }
-        let was_running = self
-            .get_or_create_slot(&id)
-            .await
-            .state
-            .read()
-            .await
-            .phase
-            .is_running();
-        let _ = self.stop_container(Some(&id)).await?;
+        let slot = self.get_or_create_slot(&id).await;
+        let _guard = slot.lifecycle_lock.lock().await;
+        self.ensure_no_temp_lease(&id).await?;
+        let was_running = slot.state.read().await.phase.is_running();
+        let _ = self.stop_locked(&id, &entry, &slot).await?;
 
         let src = PathBuf::from(&entry.image_path);
         let dst = PathBuf::from(&params.output_path);
-        let bytes_written = {
-            let slot = self.get_or_create_slot(&id).await;
-            let _guard = slot.lifecycle_lock.lock().await;
+        let bytes_written =
             tokio::task::spawn_blocking(move || storage::backup_image_gzip(&src, &dst))
                 .await
                 .map_err(|e| (error_codes::INTERNAL_ERROR, format!("backup join: {e}")))?
-                .map_err(|e| (e.rpc_code(), e.to_string()))?
-        };
+                .map_err(|e| (e.rpc_code(), e.to_string()))?;
 
         let mut restarted = false;
-        if was_running && self.start_container(Some(&id)).await.is_ok() {
+        if was_running && self.start_locked(&id, &entry, &slot, false).await.is_ok() {
             restarted = true;
         }
         Ok(BackupResult {
@@ -226,5 +232,55 @@ impl ContainerManager {
         .await
         .map_err(|e| (error_codes::INTERNAL_ERROR, format!("ssh-key join: {e}")))?
         .map_err(|e| (e.rpc_code(), e.to_string()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config_store::ConfigStore;
+    use crate::sideveil_seam::EventHub;
+    use strata_protocol::rpc::SessionMode;
+
+    #[tokio::test]
+    async fn temp_mount_leases_block_start_compact_fsck_and_backup() {
+        let base = std::env::temp_dir().join(format!("strata-lease-guard-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).expect("create temp dir");
+        let store = Arc::new(ConfigStore::load_or_seed(base.join("config.json")).expect("seed"));
+        let manager = Arc::new(ContainerManager::new(
+            store,
+            Arc::new(EventHub::new()),
+            PathBuf::from("/bin/true"),
+            base.join("logs"),
+            None,
+        ));
+
+        let attached = manager
+            .leases
+            .insert("main".into(), SessionMode::Attached, 1)
+            .await;
+        assert!(!manager.leases.has_temp_mount_lease("main").await);
+        let oneshot = manager
+            .leases
+            .insert("main".into(), SessionMode::Oneshot, 2)
+            .await;
+        assert!(manager.leases.has_temp_mount_lease("main").await);
+
+        for res in [
+            manager.start_container(Some("main")).await.map(|_| ()),
+            manager.compact_container(Some("main")).await.map(|_| ()),
+            manager.fsck_container(Some("main")).await.map(|_| ()),
+        ] {
+            assert_eq!(
+                res.expect_err("must reject active temp lease").0,
+                error_codes::IMAGE_BUSY
+            );
+        }
+
+        let _ = manager.leases.remove(&oneshot).await;
+        let _ = manager.leases.remove(&attached).await;
+        assert!(!manager.leases.has_temp_mount_lease("main").await);
+        let _ = std::fs::remove_dir_all(&base);
     }
 }

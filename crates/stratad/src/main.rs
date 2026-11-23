@@ -198,9 +198,12 @@ async fn daemon_main(opts: DaemonArgs) -> Result<(), String> {
         Arc::clone(&sideveil),
     ));
 
-    config_store.spawn_inotify_watcher(Arc::clone(&manager), Arc::clone(&sideveil));
-
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+    let inotify_handle = config_store.spawn_inotify_watcher(
+        Arc::clone(&manager),
+        Arc::clone(&sideveil),
+        shutdown_rx.clone(),
+    );
     let net_watcher_handle =
         net_watcher::spawn_net_watcher(Arc::clone(&manager), shutdown_rx.clone());
     let bridge_handle = sideveil.spawn_bridge(
@@ -231,6 +234,9 @@ async fn daemon_main(opts: DaemonArgs) -> Result<(), String> {
     let _ = tokio::time::timeout(std::time::Duration::from_secs(2), server_handle).await;
     let _ = tokio::time::timeout(std::time::Duration::from_secs(2), bridge_handle).await;
     let _ = tokio::time::timeout(std::time::Duration::from_secs(2), net_watcher_handle).await;
+    if let Some(handle) = inotify_handle {
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(2), handle).await;
+    }
     let _ = std::fs::remove_file(&opts.socket_path);
     let _ = std::fs::remove_file(&pid_file);
     Ok(())

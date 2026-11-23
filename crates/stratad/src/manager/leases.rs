@@ -14,7 +14,7 @@ use tokio::sync::Mutex;
 use crate::manager::ContainerManager;
 
 #[derive(Debug, Clone)]
-struct ActiveLease {
+pub(crate) struct ActiveLease {
     container_id: String,
     mode: SessionMode,
     owner_conn_id: u64,
@@ -45,7 +45,12 @@ impl LeaseRegistry {
             .count()
     }
 
-    async fn insert(&self, container_id: String, mode: SessionMode, owner_conn_id: u64) -> String {
+    pub(crate) async fn insert(
+        &self,
+        container_id: String,
+        mode: SessionMode,
+        owner_conn_id: u64,
+    ) -> String {
         let seq = self.next_id.fetch_add(1, Ordering::Relaxed);
         let id = format!("lease-{seq}");
         self.active.lock().await.insert(
@@ -59,7 +64,7 @@ impl LeaseRegistry {
         id
     }
 
-    async fn remove(&self, lease_id: &str) -> Option<ActiveLease> {
+    pub(crate) async fn remove(&self, lease_id: &str) -> Option<ActiveLease> {
         self.active.lock().await.remove(lease_id)
     }
 
@@ -79,7 +84,7 @@ impl LeaseRegistry {
         removed
     }
 
-    async fn has_temp_mount_lease(&self, container_id: &str) -> bool {
+    pub(crate) async fn has_temp_mount_lease(&self, container_id: &str) -> bool {
         self.active.lock().await.values().any(|l| {
             l.container_id == container_id
                 && matches!(l.mode, SessionMode::Oneshot | SessionMode::Debug)
@@ -113,18 +118,7 @@ impl ContainerManager {
                     ),
                 ));
             }
-            let mount_cfg = cfg.clone();
-            let mdir = self.module_dir.clone();
-            tokio::task::spawn_blocking(move || storage::mount_rootfs(&mount_cfg, mdir.as_deref()))
-                .await
-                .map_err(|e| {
-                    (
-                        error_codes::INTERNAL_ERROR,
-                        format!("debug mount join: {e}"),
-                    )
-                })?
-                .map_err(|e| (e.rpc_code(), e.to_string()))?;
-
+            self.mount_temp_rootfs(&cfg, "debug").await?;
             let lease_id = self
                 .leases
                 .insert(id.clone(), SessionMode::Debug, conn_id)
@@ -157,18 +151,7 @@ impl ContainerManager {
             ));
         }
 
-        let mount_cfg = cfg.clone();
-        let mdir = self.module_dir.clone();
-        tokio::task::spawn_blocking(move || storage::mount_rootfs(&mount_cfg, mdir.as_deref()))
-            .await
-            .map_err(|e| {
-                (
-                    error_codes::INTERNAL_ERROR,
-                    format!("oneshot mount join: {e}"),
-                )
-            })?
-            .map_err(|e| (e.rpc_code(), e.to_string()))?;
-
+        self.mount_temp_rootfs(&cfg, "oneshot").await?;
         let lease_id = self
             .leases
             .insert(id.clone(), SessionMode::Oneshot, conn_id)
@@ -182,6 +165,25 @@ impl ContainerManager {
             &cfg,
             cfg.host_runtime,
         ))
+    }
+
+    async fn mount_temp_rootfs(
+        &self,
+        cfg: &strata_protocol::ContainerConfig,
+        kind: &str,
+    ) -> Result<(), (i32, String)> {
+        let mount_cfg = cfg.clone();
+        let mdir = self.module_dir.clone();
+        tokio::task::spawn_blocking(move || storage::mount_rootfs(&mount_cfg, mdir.as_deref()))
+            .await
+            .map_err(|e| {
+                (
+                    error_codes::INTERNAL_ERROR,
+                    format!("{kind} mount join: {e}"),
+                )
+            })?
+            .map(|_| ())
+            .map_err(|e| (e.rpc_code(), e.to_string()))
     }
 
     /// Releases a single lease explicitly and tears down temporary oneshot/debug mounts if unused.
@@ -216,7 +218,8 @@ impl ContainerManager {
         };
         let slot = self.get_or_create_slot(&id).await;
         let _guard = slot.lifecycle_lock.lock().await;
-        if slot.state.read().await.phase.is_running() {
+        if slot.state.read().await.phase.is_running() || self.leases.has_temp_mount_lease(&id).await
+        {
             return;
         }
         let _ =

@@ -9,7 +9,7 @@ use strata_protocol::{ContainerConfig, StrataConfig};
 use strata_runtime::fs_atomic;
 use strata_sys::inotify::InotifyWatcher;
 use tokio::io::unix::AsyncFd;
-use tokio::sync::RwLock;
+use tokio::sync::{RwLock, watch};
 
 use crate::manager::ContainerManager;
 use crate::sideveil_seam::SideVeilBridgeSeam;
@@ -57,6 +57,11 @@ impl ConfigStore {
 
     /// Re-reads and validates `config.json` from disk, updating in-memory state if valid.
     pub(crate) async fn reload_from_disk(&self) -> Result<StrataConfig, (i32, String)> {
+        let (parsed, _) = self.reload_from_disk_inner().await?;
+        Ok(parsed)
+    }
+
+    async fn reload_from_disk_inner(&self) -> Result<(StrataConfig, bool), (i32, String)> {
         let raw = fs::read_to_string(&self.path).map_err(|e| {
             (
                 error_codes::INTERNAL_ERROR,
@@ -70,8 +75,11 @@ impl ConfigStore {
             .map_err(|e| (error_codes::INVALID_PARAMS, e.to_string()))?;
 
         let mut guard = self.inner.write().await;
-        *guard = parsed.clone();
-        Ok(parsed)
+        let changed = *guard != parsed;
+        if changed {
+            *guard = parsed.clone();
+        }
+        Ok((parsed, changed))
     }
 
     /// Patches fields on a single container, validates cross-container invariants, and persists atomically.
@@ -144,36 +152,49 @@ impl ConfigStore {
     }
 
     /// Spawns a zero-polling `inotify` watcher on the parent directory of `config.json`.
+    /// Ignores temporary `.tmp` files and exits promptly when `shutdown` becomes `true`.
     pub(crate) fn spawn_inotify_watcher(
         self: &Arc<Self>,
         manager: Arc<ContainerManager>,
         sideveil: Arc<SideVeilBridgeSeam>,
-    ) {
-        let Some(parent_dir) = self.path.parent().map(PathBuf::from) else {
-            return;
-        };
-        let Ok(watcher) = InotifyWatcher::watch_dir(&parent_dir) else {
-            return;
-        };
+        mut shutdown: watch::Receiver<bool>,
+    ) -> Option<tokio::task::JoinHandle<()>> {
+        let parent_dir = self.path.parent()?.to_path_buf();
+        let target_name = self.path.file_name()?.to_string_lossy().into_owned();
+        let watcher = InotifyWatcher::watch_dir(&parent_dir).ok()?;
         // SAFETY: `InotifyWatcher` exclusively owns its non-blocking `OwnedFd` for its entire lifetime.
-        let Ok(async_fd) = (unsafe { AsyncFd::register(watcher) }) else {
-            return;
-        };
+        let async_fd = unsafe { AsyncFd::register(watcher) }.ok()?;
         let store = Arc::clone(self);
 
-        tokio::spawn(async move {
+        Some(tokio::spawn(async move {
             loop {
-                let Ok(mut guard) = async_fd.readable().await else {
+                if *shutdown.borrow() {
+                    break;
+                }
+                let readable = tokio::select! {
+                    _ = async {
+                        while !*shutdown.borrow_and_update() {
+                            if shutdown.changed().await.is_err() {
+                                break;
+                            }
+                        }
+                    } => break,
+                    res = async_fd.readable() => res,
+                };
+                let Ok(mut guard) = readable else {
                     break;
                 };
-                let drained = guard.get_inner().drain_events().unwrap_or(false);
+                let matched = guard
+                    .get_inner()
+                    .drain_events_for(&target_name)
+                    .unwrap_or(false);
                 guard.clear_ready();
-                if drained && store.reload_from_disk().await.is_ok() {
+                if matched && let Ok((_, true)) = store.reload_from_disk_inner().await {
                     manager.sync_running_containers().await;
                     sideveil.notify_config_changed();
                 }
             }
-        });
+        }))
     }
 }
 

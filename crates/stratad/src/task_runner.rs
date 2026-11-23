@@ -108,14 +108,25 @@ impl TaskRunner {
         drop(spec_fd);
         drop(err_write);
 
-        let exec_check = tokio::task::spawn_blocking(move || spec_pipe::read_exec_error(err_read))
-            .await
-            .map_err(|e| (error_codes::INTERNAL_ERROR, format!("task exec check: {e}")))?
-            .map_err(|e| (e.rpc_code(), e.to_string()))?;
-
-        if let Some(err_msg) = exec_check {
-            let _ = child.wait().await;
-            return Err((error_codes::INTERNAL_ERROR, err_msg));
+        let exec_res =
+            tokio::task::spawn_blocking(move || spec_pipe::read_exec_error(err_read)).await;
+        match exec_res {
+            Ok(Ok(None)) => {}
+            Ok(Ok(Some(err_msg))) => {
+                let _ = child.kill().await;
+                let _ = child.wait().await;
+                return Err((error_codes::INTERNAL_ERROR, err_msg));
+            }
+            Ok(Err(e)) => {
+                let _ = child.kill().await;
+                let _ = child.wait().await;
+                return Err((e.rpc_code(), e.to_string()));
+            }
+            Err(e) => {
+                let _ = child.kill().await;
+                let _ = child.wait().await;
+                return Err((error_codes::INTERNAL_ERROR, format!("task exec check: {e}")));
+            }
         }
 
         let pid = child.id().unwrap_or(0);
@@ -152,7 +163,7 @@ impl TaskRunner {
         }
 
         let seq = Arc::new(AtomicU64::new(1));
-        if let Some(stdout) = child.stdout.take() {
+        let stdout_task = child.stdout.take().map(|stdout| {
             spawn_stream_reader(
                 stdout,
                 TaskStream::Stdout,
@@ -161,9 +172,9 @@ impl TaskRunner {
                 Arc::clone(&seq),
                 Arc::clone(&self.tasks),
                 Arc::clone(&self.event_hub),
-            );
-        }
-        if let Some(stderr) = child.stderr.take() {
+            )
+        });
+        let stderr_task = child.stderr.take().map(|stderr| {
             spawn_stream_reader(
                 stderr,
                 TaskStream::Stderr,
@@ -172,12 +183,14 @@ impl TaskRunner {
                 Arc::clone(&seq),
                 Arc::clone(&self.tasks),
                 Arc::clone(&self.event_hub),
-            );
-        }
+            )
+        });
 
         spawn_task_waiter(
             child,
             pidfd,
+            stdout_task,
+            stderr_task,
             task_id.clone(),
             container_id.clone(),
             params.timeout_secs,

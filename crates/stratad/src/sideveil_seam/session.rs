@@ -70,6 +70,7 @@ pub(super) async fn run_connected_session(
 
     let mut shutdown_requested = false;
     let mut writer_finished = false;
+    let mut inbound_buf = Vec::with_capacity(256);
 
     loop {
         if *deps.shutdown.borrow() {
@@ -137,7 +138,7 @@ pub(super) async fn run_connected_session(
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                 }
             }
-            line_res = read_bounded_line(&mut reader) => {
+            line_res = read_bounded_line(&mut reader, &mut inbound_buf) => {
                 match line_res {
                     Ok(Some(line)) => {
                         let trimmed = line.trim();

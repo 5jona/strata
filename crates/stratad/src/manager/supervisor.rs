@@ -32,6 +32,13 @@ impl ContainerManager {
             }
         }
 
+        if self.leases.has_temp_mount_lease(&id).await {
+            return Err((
+                error_codes::IMAGE_BUSY,
+                format!("container '{id}' has active temporary session leases"),
+            ));
+        }
+
         self.start_locked(&id, &cfg, &slot, false).await?;
         Ok(self.build_snapshot(&id, &cfg, is_default).await)
     }
@@ -41,7 +48,16 @@ impl ContainerManager {
         let (id, cfg, _) = self.resolve_container(requested).await?;
         let slot = self.get_or_create_slot(&id).await;
         let _guard = slot.lifecycle_lock.lock().await;
+        self.stop_locked(&id, &cfg, &slot).await
+    }
 
+    /// Stops a container while the caller already holds `slot.lifecycle_lock`.
+    pub(crate) async fn stop_locked(
+        self: &Arc<Self>,
+        id: &str,
+        cfg: &ContainerConfig,
+        slot: &Arc<ContainerSlot>,
+    ) -> StopOutcome {
         let (prev_phase, ns_pid, mnt_ns) = {
             let mut live = slot.state.write().await;
             let prev = live.phase;
@@ -51,12 +67,13 @@ impl ContainerManager {
             live.restart_backoff.reset();
             (prev, live.ns_pid, live.mnt_ns_inode)
         };
-        self.emit_state_changed(&id, prev_phase, ContainerPhase::Stopping)
+        self.emit_state_changed(id, prev_phase, ContainerPhase::Stopping)
             .await;
 
-        let cid = id.clone();
+        let cid = id.to_owned();
+        let cfg_owned = cfg.clone();
         let report = tokio::task::spawn_blocking(move || {
-            storage::teardown_container(&cid, &cfg, ns_pid, mnt_ns)
+            storage::teardown_container(&cid, &cfg_owned, ns_pid, mnt_ns)
         })
         .await
         .map_err(|e| (error_codes::INTERNAL_ERROR, format!("teardown join: {e}")))?
@@ -70,7 +87,7 @@ impl ContainerManager {
             live.started_at = None;
             live.last_error = None;
         }
-        self.emit_state_changed(&id, ContainerPhase::Stopping, ContainerPhase::Stopped)
+        self.emit_state_changed(id, ContainerPhase::Stopping, ContainerPhase::Stopped)
             .await;
         Ok(report)
     }
@@ -80,9 +97,18 @@ impl ContainerManager {
         self: &Arc<Self>,
         requested: Option<&str>,
     ) -> Result<ContainerStatusSnapshot, (i32, String)> {
-        let (id, _, _) = self.resolve_container(requested).await?;
-        let _ = self.stop_container(Some(&id)).await?;
-        self.start_container(Some(&id)).await
+        let (id, cfg, is_default) = self.resolve_container(requested).await?;
+        let slot = self.get_or_create_slot(&id).await;
+        let _guard = slot.lifecycle_lock.lock().await;
+        if self.leases.has_temp_mount_lease(&id).await {
+            return Err((
+                error_codes::IMAGE_BUSY,
+                format!("container '{id}' has active temporary session leases"),
+            ));
+        }
+        let _ = self.stop_locked(&id, &cfg, &slot).await?;
+        self.start_locked(&id, &cfg, &slot, false).await?;
+        Ok(self.build_snapshot(&id, &cfg, is_default).await)
     }
 
     pub(crate) async fn start_locked(
