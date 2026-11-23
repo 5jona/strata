@@ -64,7 +64,7 @@ Every crate inherits `[lints] workspace = true`, forbids `mod.rs` (uses `foo.rs`
 - `manager.rs`, `manager/{launch,leases,ops,snapshot,supervisor}.rs`: Multi-container lifecycle serialization, session/temp-mount leases, maintenance operations, status snapshots, and `pidfd` + `AsyncFd` restart supervision.
 - `task_runner.rs`, `task_runner/io.rs`: Headless streaming command/Python runner with ordered `task.output` -> `task.exit` delivery and ring-buffer log replay.
 - `config_store.rs`, `net_watcher.rs`: Atomic config persistence, shutdown-aware `inotify` reloader, and netlink DNS re-sync trigger.
-- `sideveil_seam.rs`, `sideveil_seam/{bridge,reconnect,session,wire}.rs`, `sideveil_hud.rs`: Dual-channel `EventHub`, auto-reconnecting `hub.sock` NDJSON bridge, and Native HUD publisher.
+- `sideveil_seam.rs`, `sideveil_seam/{bridge,session}.rs`, `sideveil_hud.rs`: Dual-channel `EventHub`, `sideveil-plugin-sdk`-backed auto-reconnecting `hub.sock` NDJSON bridge (`PluginBackendRunner` / `PluginBackendHandle`), and Native HUD publisher.
 
 #### `crates/strata-ctl/src/` — Synchronous CLI (`strata`)
 - `main.rs`, `client.rs`: Synchronous Unix socket NDJSON client talking to `/data/adb/strata/run/strata.sock` with streaming event output.
@@ -76,7 +76,7 @@ Every crate inherits `[lints] workspace = true`, forbids `mod.rs` (uses `foo.rs`
 
 | Subsystem | Paths | Responsibility |
 | --- | --- | --- |
-| SideVeil Plugin UI | `webui/`, `plugins/strata.manager/` | React 19 + TS + Tailwind v4 frontend (`StrataManagerApp.tsx`, `components/`, `hooks/`, `lib/`), built into `plugins/strata.manager/web/` with `manifest.json` (`uds-native`, `toast`/`clipboard`/`haptics`/`native-hud`). |
+| SideVeil Plugin UI | `webui/`, `plugins/strata.manager/` | React 19 + TS + Tailwind v4 frontend (`StrataManagerApp.tsx`, `components/`, `hooks/`, `lib/strataRpc.ts` delegating to `@pochita/sideveil-sdk`'s `createTypedPluginClient`), built into `plugins/strata.manager/web/` with `manifest.json` (`uds-native`, `toast`/`clipboard`/`haptics`/`native-hud`). |
 | In-Container Bridge | `container/host-exec`, `container/setup-container.sh` | POSIX `nsenter -t 1 -m -u -C -T -r -w` host bridge and Ubuntu rootfs provisioning helper. |
 | Device Debug CLI | `container/strata-debug/` | Python 3 toolkit (`cli.py`, `cli_android.py`, `cdp_*`, `logcat_cursor.py`, `gesture_replay.py`, `visual_check.py`, `observe_step.py`, `app_ops.py`, `ui_tree.py`, `lsposed_ops.py`, `host_inspect.py`, `perfetto_*`, `kernel_probe.py`, `sys_probe.py`, `forward_bridge.py`). |
 | PC-Side MCP Server | `scripts/strata-debug-mcp.py`, `scripts/strata_mcp/` | Stdio JSON-RPC 2.0 MCP server exposing 27 tools over SSH ControlMaster (`transport.py`, `transport_routing.py`, `devices.py`, `device_discovery.py`, `tools_core.py`, `tools_android.py`, `tools_devices.py`). |
@@ -138,10 +138,10 @@ Stopped / Failed ---> Starting ---> Running ---> Stopping ---> Stopped
   - Strata runtime: `-32000` (`INTERNAL_ERROR`), `-32003` (`PERMISSION_DENIED`), `-32020` (`IMAGE_BUSY`), `-32021` (`CONTAINER_NOT_FOUND`), `-32022` (`CONTAINER_ALREADY_RUNNING`), `-32023` (`CONTAINER_NOT_RUNNING`), `-32024` (`INVALID_STATE`), `-32025` (`TASK_NOT_FOUND`).
 
 ### 4.2 SideVeil `hub.sock` & Native HUD
-- **Endpoint**: `/data/system/sideveil/run/hub.sock` via `sideveil_seam/{bridge,reconnect,session,wire}.rs`.
-- **Protocol**: NDJSON `plugin.register`, `plugin.invoke` (routed into `Dispatcher` as `RpcCaller::SideVeilBridge`), `plugin.event`, and Native HUD `hud.update` / `hud.clear` (`sideveil_hud.rs`).
-- **Backpressure Isolation**: Dual-channel `EventHub` separates reliable lifecycle events (`container.stateChanged`, `container.maintenanceDone`, `task.exit`) from ephemeral high-volume `task.output`.
-- **Session Lifecycle**: Reconnect loop backs off automatically when SideVeil is absent or restarting, wakes immediately on config reload (`notify_config_changed`), and tears down HUD state cleanly on disconnect.
+- **Endpoint**: `/data/system/sideveil/run/hub.sock` via `sideveil_seam/{bridge,session}.rs`, backed by `sideveil-plugin-sdk` (`PluginBackendRunner`, `PluginBackendHandle`, and bounded `LinesCodec` NDJSON framing).
+- **Protocol**: NDJSON `pluginBackend` handshake, multiplexed JSON-RPC 2.0 (routed into `Dispatcher` as `RpcCaller::SideVeilBridge`, with `session.*` rejected), Hub system notifications (`appearance.changed`, `panel.visibilityChanged`, `network.contextChanged`), `plugin.event`, and Native HUD `hud.updateScene` / `hud.dismiss` (`sideveil_hud.rs`).
+- **Backpressure Isolation**: Dual-channel `EventHub` and `sideveil-plugin-sdk` outbound queues separate reliable lifecycle events (`container.stateChanged`, `container.maintenanceDone`, `task.exit`) from ephemeral high-volume `task.output` and periodic HUD refreshes.
+- **Session Lifecycle**: `PluginBackendRunner` backs off automatically when SideVeil is absent or restarting, `bridge.rs` wakes immediately on config reload (`notify_config_changed`), and shutdown/disable emits `hud.dismiss` before cancelling the session token.
 
 ### 4.3 `strata-debug` <-> 27-Tool MCP Server
 - **Transport**: PC stdio JSON-RPC 2.0 (`scripts/strata-debug-mcp.py`) <-> SSH ControlMaster (`strata_mcp/transport.py`) with multi-device auto-failover (`devices.py`, `transport_routing.py`) <-> in-container `strata-debug` (`container/strata-debug/cli.py`).
@@ -161,7 +161,7 @@ Stopped / Failed ---> Starting ---> Running ---> Stopping ---> Stopped
 - **Continuous Maintenance Serialization**: Hold `slot.lifecycle_lock` continuously across stop + maintenance (`stop_locked` + `e2fsck` / `backup_image_gzip`) so concurrent `container.start` cannot mount the ext4 image mid-operation.
 - **Lease TOCTOU & Active-Lease Guards**: Inside `cleanup_temp_lease_if_idle`, re-check `has_temp_mount_lease()` *after* acquiring `slot.lifecycle_lock`. Reject `start_container` and `compact_container` while temporary `Oneshot`/`Debug` mount leases are active.
 - **`spawn_blocking` Offloading**: Execute blocking syscalls (loop ioctls, ext4 mount/teardown, `e2fsck`, `FITRIM`, gzip backup, `inotify` reads, exec-error pipe reads) on `tokio::task::spawn_blocking`.
-- **Cancellation Safety**: Async readers polled inside `tokio::select!` (e.g., `sideveil_seam/wire.rs::read_bounded_line`) must accumulate into a caller-owned `&mut Vec<u8>` kept *outside* `select!` so winning ticker/event arms never drop partial NDJSON frames.
+- **Cancellation Safety**: Async NDJSON framing over SideVeil `hub.sock` uses `sideveil-plugin-sdk`'s cancellation-safe `Framed<UnixStream, LinesCodec>`, and `strata.sock` readers polled inside `tokio::select!` retain caller-owned line buffers outside `select!` so winning arms never drop partial frames.
 - **Zero-Panic, Atomic I/O & Cleanup**: Zero `.unwrap()`/`.expect()`/`panic!` outside `#[cfg(test)]`. Persist config/runtime files atomically (`fs_atomic.rs`), filter self-written `.tmp` inotify events, wire shutdown signals into background watchers, and kill + reap spawned helper `Child` handles on early error paths.
 
 ## 7. Quality Gates & Deploy Workflows

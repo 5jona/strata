@@ -17,7 +17,8 @@ import {
   parseSshPort,
   summarizeSshKey,
 } from '../src/lib/strataFormat.ts';
-import { L5_DIAG_MOUNTS, STRATA_METHODS } from '../src/types.ts';
+import { createStrataClient, invokeStrataRpc } from '../src/lib/strataRpc.ts';
+import { L5_DIAG_MOUNTS, STRATA_EVENTS, STRATA_METHODS } from '../src/types.ts';
 
 test('formatters produce stable human-readable output', () => {
   assert.equal(formatBytes(512), '512 B');
@@ -173,4 +174,55 @@ test('parseSshPort and formatMaintenanceToast validate ports and format op label
     }),
     { title: '维护任务 (custom-op)完成', tone: 'success', description: 'done' },
   );
+});
+
+test('createStrataClient and invokeStrataRpc delegate to typed plugin client cleanly', async () => {
+  const calls = [];
+  let subscribedEvent = null;
+  let subscribedHandler = null;
+  let unsubscribed = false;
+
+  const stubBridge = {
+    async invokePlugin(method, params, options) {
+      calls.push({ method, params, options });
+      if (method === STRATA_METHODS.DAEMON_PING) {
+        return { pong: true, pid: 1, uptimeMs: 10 };
+      }
+      return { enabled: true, clickThrough: false, isDark: true, sideveilConnected: true };
+    },
+    onPluginEvent(event, handler) {
+      subscribedEvent = event;
+      subscribedHandler = handler;
+      return () => {
+        unsubscribed = true;
+      };
+    },
+  };
+
+  const client = createStrataClient(stubBridge, { defaultTimeoutMs: 5_000 });
+  const ping = await client.invoke(STRATA_METHODS.DAEMON_PING);
+  assert.equal(ping.pong, true);
+
+  const hud = await invokeStrataRpc(
+    stubBridge,
+    STRATA_METHODS.HUD_SET,
+    { enabled: true },
+    { timeoutMs: 12_000 },
+  );
+  assert.equal(hud.enabled, true);
+
+  const received = [];
+  const unsub = client.onEvent(STRATA_EVENTS.TASK_EXIT, (payload) => {
+    received.push(payload);
+  });
+  assert.equal(subscribedEvent, STRATA_EVENTS.TASK_EXIT);
+  subscribedHandler({ taskId: 'task-1', exitCode: 0, timedOut: false, cancelled: false });
+  unsub();
+
+  assert.equal(unsubscribed, true);
+  assert.equal(received.length, 1);
+  assert.deepEqual(calls, [
+    { method: STRATA_METHODS.DAEMON_PING, params: undefined, options: { timeoutMs: 5_000 } },
+    { method: STRATA_METHODS.HUD_SET, params: { enabled: true }, options: { timeoutMs: 12_000 } },
+  ]);
 });
