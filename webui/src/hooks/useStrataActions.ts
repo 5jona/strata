@@ -1,4 +1,4 @@
-import { useHaptics, useSideVeilPlugin } from '@pochita/sideveil-sdk';
+import { useHaptics, useSideVeilPlugin } from '@gojona/sideveil-sdk';
 import { type RefObject, useCallback } from 'react';
 import { formatBytes } from '../lib/strataFormat.ts';
 import { invokeStrataRpc } from '../lib/strataRpc.ts';

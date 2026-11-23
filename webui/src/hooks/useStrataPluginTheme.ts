@@ -1,14 +1,14 @@
 import {
   useClipboard,
   useSyncedPluginTheme as useSdkSyncedPluginTheme,
-} from '@pochita/sideveil-sdk';
+} from '@gojona/sideveil-sdk';
 import {
   type ColorMode,
   isValidThemeId,
   type ResolvedColorScheme,
   type ThemeId,
   useTheme,
-} from '@pochita/ui';
+} from '@gojona/ui';
 
 /** Synchronized theme state and host clipboard helper returned by `useStrataPluginTheme`. */
 export interface UseStrataPluginThemeResult {
@@ -22,7 +22,7 @@ export interface UseStrataPluginThemeResult {
 }
 
 /**
- * Thin wrapper binding `@pochita/ui`'s `useTheme()` into `@pochita/sideveil-sdk`'s
+ * Thin wrapper binding `@gojona/ui`'s `useTheme()` into `@gojona/sideveil-sdk`'s
  * `useSyncedPluginTheme()` and host-backed `useClipboard()`.
  */
 export function useStrataPluginTheme(): UseStrataPluginThemeResult {

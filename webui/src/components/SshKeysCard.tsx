@@ -1,4 +1,4 @@
-import { Badge, Button, Card, Input } from '@pochita/ui';
+import { Badge, Button, Card, Input } from '@gojona/ui';
 import { KeyRound, Plus } from 'lucide-react';
 import { useState } from 'react';
 import { summarizeSshKey } from '../lib/strataFormat.ts';

@@ -76,7 +76,7 @@ Every crate inherits `[lints] workspace = true`, forbids `mod.rs` (uses `foo.rs`
 
 | Subsystem | Paths | Responsibility |
 | --- | --- | --- |
-| SideVeil Plugin UI | `webui/`, `plugins/strata.manager/` | React 19 + TS + Tailwind v4 frontend (`StrataManagerApp.tsx`, `components/`, `hooks/`, `lib/strataRpc.ts` delegating to `@pochita/sideveil-sdk`'s `createTypedPluginClient`), built into `plugins/strata.manager/web/` with `manifest.json` (`uds-native`, `toast`/`clipboard`/`haptics`/`native-hud`). |
+| SideVeil Plugin UI | `webui/`, `plugins/strata.manager/` | React 19 + TS + Tailwind v4 frontend (`StrataManagerApp.tsx`, `components/`, `hooks/`, `lib/strataRpc.ts` delegating to `@gojona/sideveil-sdk`'s `createTypedPluginClient`), built into `plugins/strata.manager/web/` with `manifest.json` (`uds-native`, `toast`/`clipboard`/`haptics`/`native-hud`). |
 | In-Container Bridge | `container/host-exec`, `container/setup-container.sh` | POSIX `nsenter -t 1 -m -u -C -T -r -w` host bridge and Ubuntu rootfs provisioning helper. |
 | Device Debug CLI | `container/strata-debug/` | Python 3 toolkit (`cli.py`, `cli_android.py`, `cdp_*`, `logcat_cursor.py`, `gesture_replay.py`, `visual_check.py`, `observe_step.py`, `app_ops.py`, `ui_tree.py`, `lsposed_ops.py`, `host_inspect.py`, `perfetto_*`, `kernel_probe.py`, `sys_probe.py`, `forward_bridge.py`). |
 | PC-Side MCP Server | `scripts/strata-debug-mcp.py`, `scripts/strata_mcp/` | Stdio JSON-RPC 2.0 MCP server exposing 27 tools over SSH ControlMaster (`transport.py`, `transport_routing.py`, `devices.py`, `device_discovery.py`, `tools_core.py`, `tools_android.py`, `tools_devices.py`). |

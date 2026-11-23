@@ -10,11 +10,11 @@ dir = "{{config_root}}"
 
 [tasks."contracts:gen"]
 description = "Regenerate Rust, TypeScript, and JSON Schema contracts from contracts/*.contract.json"
-run = "node ../../../pochita-webui-kit/packages/contracts-gen/src/cli.mjs generate contracts/*.contract.json"
+run = "webui/node_modules/.bin/pochita-contracts-gen generate contracts/*.contract.json"
 
 [tasks."contracts:check"]
 description = "Verify generated contracts have zero drift and validate golden wire fixtures"
-run = "node ../../../pochita-webui-kit/packages/contracts-gen/src/cli.mjs check contracts/*.contract.json && node ../../../pochita-webui-kit/packages/contracts-gen/src/cli.mjs validate-fixtures contracts/schemas/strata.schema.json contracts/fixtures"
+run = "webui/node_modules/.bin/pochita-contracts-gen check contracts/*.contract.json && webui/node_modules/.bin/pochita-contracts-gen validate-fixtures contracts/schemas/strata.schema.json contracts/fixtures"
 
 [tasks."rust:check"]
 description = "Run Rust fmt check, clippy (-D warnings), and workspace unit tests"

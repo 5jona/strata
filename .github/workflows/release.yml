@@ -1,0 +1,124 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to package and publish (defaults to version in module.prop)"
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build & Publish KernelSU Module
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+          components: rustfmt, clippy
+
+      - name: Cache Cargo artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 12.22.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: webui/pnpm-lock.yaml
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android NDK 30.0.16248370 and configure linker
+        run: |
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager --install "ndk;30.0.16248370"
+          SDK_ROOT="${ANDROID_HOME:-${ANDROID_SDK_ROOT}}"
+          echo "ANDROID_NDK_HOME=${SDK_ROOT}/ndk/30.0.16248370" >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=${GITHUB_WORKSPACE}/scripts/aarch64-android-linker.sh" >> "$GITHUB_ENV"
+
+      - name: Install WebUI dependencies
+        run: pnpm --dir webui install --frozen-lockfile
+
+      - name: Check contracts and validate golden fixtures
+        run: |
+          webui/node_modules/.bin/pochita-contracts-gen check contracts/*.contract.json
+          webui/node_modules/.bin/pochita-contracts-gen validate-fixtures contracts/schemas/strata.schema.json contracts/fixtures
+
+      - name: Build KernelSU module archive
+        run: bash build.sh
+
+      - name: Package release assets and SHA256SUMS
+        id: package
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
+            if [ -n "${INPUT_TAG}" ]; then
+              TAG="${INPUT_TAG}"
+            else
+              TAG="$(awk -F= '$1 == "version" { print $2; exit }' module.prop)"
+            fi
+          else
+            TAG="${GITHUB_REF_NAME}"
+          fi
+          if [ -z "${TAG}" ]; then
+            echo "Failed to determine release tag" >&2
+            exit 1
+          fi
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          rm -rf release-assets
+          mkdir -p release-assets
+          cp out/strata.zip "release-assets/strata-${TAG}.zip"
+          (
+            cd release-assets
+            sha256sum "strata-${TAG}.zip" > SHA256SUMS.txt
+          )
+          cat release-assets/SHA256SUMS.txt
+
+      - name: Upload workflow artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: strata-${{ steps.package.outputs.tag }}
+          path: release-assets/*
+
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v') || inputs.tag != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.package.outputs.tag }}
+        run: |
+          if gh release view "${TAG}" >/dev/null 2>&1; then
+            gh release upload "${TAG}" release-assets/* --clobber
+          else
+            EXTRA_ARGS=()
+            if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
+              EXTRA_ARGS+=(--target "${GITHUB_SHA}")
+            fi
+            gh release create "${TAG}" release-assets/* \
+              --title "Strata ${TAG}" \
+              --generate-notes \
+              "${EXTRA_ARGS[@]}"
+          fi

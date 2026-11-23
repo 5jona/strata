@@ -1,5 +1,5 @@
-import { useSideVeilPlugin } from '@pochita/sideveil-sdk';
-import { type LogEntry, useToast } from '@pochita/ui';
+import { useSideVeilPlugin } from '@gojona/sideveil-sdk';
+import { type LogEntry, useToast } from '@gojona/ui';
 import { useCallback, useRef, useState } from 'react';
 import {
   type ContainerConfig,

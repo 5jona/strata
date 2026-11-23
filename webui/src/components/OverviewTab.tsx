@@ -1,4 +1,4 @@
-import { Badge, Button, Card, MetricTile, SettingRow, Switch } from '@pochita/ui';
+import { Badge, Button, Card, MetricTile, SettingRow, Switch } from '@gojona/ui';
 import {
   Archive,
   Check,

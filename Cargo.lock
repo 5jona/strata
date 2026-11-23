@@ -202,6 +202,7 @@ dependencies = [
 [[package]]
 name = "sideveil-plugin-sdk"
 version = "0.1.0"
+source = "git+https://github.com/5jona/sideveil.git?tag=v0.1.0#87c156a499c62413e59bdd3eabad12ce9d1ad6c7"
 dependencies = [
  "futures-util",
  "serde",
@@ -215,6 +216,7 @@ dependencies = [
 [[package]]
 name = "sideveil-protocol"
 version = "0.1.0"
+source = "git+https://github.com/5jona/sideveil.git?tag=v0.1.0#87c156a499c62413e59bdd3eabad12ce9d1ad6c7"
 dependencies = [
  "serde",
  "serde_json",

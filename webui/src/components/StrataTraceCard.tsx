@@ -1,5 +1,5 @@
-import { type BridgeTraceEvent, useBridge } from '@pochita/bridge';
-import { BridgeTraceInspector } from '@pochita/ui';
+import { type BridgeTraceEvent, useBridge } from '@gojona/bridge';
+import { BridgeTraceInspector } from '@gojona/ui';
 import { useCallback, useEffect, useState } from 'react';
 
 /** Props accepted by `StrataTraceCard`. */

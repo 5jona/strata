@@ -1,4 +1,4 @@
-import { Badge, Button, Card, Input, LogConsole, type LogEntry } from '@pochita/ui';
+import { Badge, Button, Card, Input, LogConsole, type LogEntry } from '@gojona/ui';
 import { Play, Square, Terminal } from 'lucide-react';
 import { useState } from 'react';
 import { buildTaskCommand, QUICK_TASK_PRESETS, type TaskRunnerMode } from '../lib/strataFormat.ts';

@@ -1,4 +1,4 @@
-import { MockTransport } from '@pochita/bridge';
+import { MockTransport } from '@gojona/bridge';
 import { STRATA_PLUGIN_ID } from '../manifest.ts';
 import { handleMockPluginInvoke } from './mock/handlers.ts';
 import { createInitialMockState } from './mock/state.ts';

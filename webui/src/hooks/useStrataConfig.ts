@@ -1,5 +1,5 @@
-import { useHaptics, useSideVeilPlugin } from '@pochita/sideveil-sdk';
-import type { LogEntry } from '@pochita/ui';
+import { useHaptics, useSideVeilPlugin } from '@gojona/sideveil-sdk';
+import type { LogEntry } from '@gojona/ui';
 import { type RefObject, useCallback, useState } from 'react';
 import { formatClockTime } from '../lib/strataFormat.ts';
 import { invokeStrataRpc } from '../lib/strataRpc.ts';

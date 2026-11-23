@@ -175,18 +175,18 @@ importers:
 
   .:
     dependencies:
-      '@pochita/bridge':
-        specifier: file:../../../../pochita-webui-kit/packages/bridge
-        version: file:../../../../pochita-webui-kit/packages/bridge(@tailwindcss/vite@4.3.5(vite@8.3.8(jiti@2.7.0)))(@vitejs/plugin-react@6.3.0(vite@8.3.8(jiti@2.7.0)))(react@19.3.1)(tailwindcss@4.3.5)(vite@8.3.8(jiti@2.7.0))
-      '@pochita/config':
-        specifier: file:../../../../pochita-webui-kit/packages/config
-        version: file:../../../../pochita-webui-kit/packages/config(@tailwindcss/vite@4.3.5(vite@8.3.8(jiti@2.7.0)))(@vitejs/plugin-react@6.3.0(vite@8.3.8(jiti@2.7.0)))(tailwindcss@4.3.5)(vite@8.3.8(jiti@2.7.0))
-      '@pochita/sideveil-sdk':
-        specifier: file:../../../../pochita-webui-kit/packages/sdk
-        version: file:../../../../pochita-webui-kit/packages/sdk(@tailwindcss/vite@4.3.5(vite@8.3.8(jiti@2.7.0)))(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(@vitejs/plugin-react@6.3.0(vite@8.3.8(jiti@2.7.0)))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(tailwindcss@4.3.5)(vite@8.3.8(jiti@2.7.0))
-      '@pochita/ui':
-        specifier: file:../../../../pochita-webui-kit/packages/ui
-        version: file:../../../../pochita-webui-kit/packages/ui(@tailwindcss/vite@4.3.5(vite@8.3.8(jiti@2.7.0)))(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(@vitejs/plugin-react@6.3.0(vite@8.3.8(jiti@2.7.0)))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(tailwindcss@4.3.5)(vite@8.3.8(jiti@2.7.0))
+      '@gojona/bridge':
+        specifier: ^0.1.0
+        version: 0.1.0(@tailwindcss/vite@4.3.5(vite@8.3.8(jiti@2.7.0)))(@vitejs/plugin-react@6.3.0(vite@8.3.8(jiti@2.7.0)))(react@19.3.1)(tailwindcss@4.3.5)(vite@8.3.8(jiti@2.7.0))
+      '@gojona/config':
+        specifier: ^0.1.0
+        version: 0.1.0(@tailwindcss/vite@4.3.5(vite@8.3.8(jiti@2.7.0)))(@vitejs/plugin-react@6.3.0(vite@8.3.8(jiti@2.7.0)))(tailwindcss@4.3.5)(vite@8.3.8(jiti@2.7.0))
+      '@gojona/sideveil-sdk':
+        specifier: ^0.1.0
+        version: 0.1.0(@tailwindcss/vite@4.3.5(vite@8.3.8(jiti@2.7.0)))(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(@vitejs/plugin-react@6.3.0(vite@8.3.8(jiti@2.7.0)))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(tailwindcss@4.3.5)(vite@8.3.8(jiti@2.7.0))
+      '@gojona/ui':
+        specifier: ^0.1.0
+        version: 0.1.0(@tailwindcss/vite@4.3.5(vite@8.3.8(jiti@2.7.0)))(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(@vitejs/plugin-react@6.3.0(vite@8.3.8(jiti@2.7.0)))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(tailwindcss@4.3.5)(vite@8.3.8(jiti@2.7.0))
       lucide-react:
         specifier: ^1.75.0
         version: 1.77.0(@types/react@19.3.0)(react@19.3.1)
@@ -200,6 +200,9 @@ importers:
       '@biomejs/biome':
         specifier: 2.6.8
         version: 2.6.8
+      '@gojona/contracts-gen':
+        specifier: ^0.1.0
+        version: 0.1.0
       '@tailwindcss/vite':
         specifier: ^4.3.5
         version: 4.3.5(vite@8.3.8(jiti@2.7.0))
@@ -299,6 +302,43 @@ packages:
   '@emnapi/wasi-threads@2.2.0':
     resolution: {integrity: sha512-JP7OYH38Q7+pyTAe14raZHLQIK7BDKbdwji+Xi3pcd/6QkJYQH3SX4wu6EplGrGJWRepoNzedfm0G3B9Z4e9Rw==}
 
+  '@gojona/bridge@0.1.0':
+    resolution: {integrity: sha512-mcwTotevvXrdMV25Fu4KZuwiiAFPlw4hZh9Ac/vJKnf9xBNdCxdkZ6eGeWQZay1gkkDve5KyGyfXR8d0s4ZZTA==}
+    peerDependencies:
+      react: ^19.0.0
+
+  '@gojona/config@0.1.0':
+    resolution: {integrity: sha512-p4eZ6uKS8uzk3i9sR5SEf4BJFoQdFZD4CRl435q6xZ4FadABeZEaoVIGs0RwGTziY9gTFLfxLLvVenCqBObjuw==}
+    peerDependencies:
+      '@tailwindcss/vite': ^4.0.0
+      '@vitejs/plugin-react': ^6.0.0
+      tailwindcss: ^4.0.0
+      vite: ^8.0.0
+    peerDependenciesMeta:
+      '@tailwindcss/vite':
+        optional: true
+      '@vitejs/plugin-react':
+        optional: true
+      tailwindcss:
+        optional: true
+      vite:
+        optional: true
+
+  '@gojona/contracts-gen@0.1.0':
+    resolution: {integrity: sha512-fW7NJqO3N+E5bpqS99k2IjC05w181Mu2syp+Wps+sW5FcuBdI3kbEfvxUyWu1e+JGDSZRzI9Q9SdtnXd/4t2/A==}
+    hasBin: true
+
+  '@gojona/sideveil-sdk@0.1.0':
+    resolution: {integrity: sha512-n/qQvV1tPrKOxlOErXkNMWGE6jRPzu0nqDEjYZDjC7SZsGkkJpeDurXEx0plviJ6b/j4yv70duIF0g6kORHzCA==}
+    peerDependencies:
+      react: ^19.0.0
+
+  '@gojona/ui@0.1.0':
+    resolution: {integrity: sha512-9zzkUdU3zAeXkKPXuP2wWx8dBkthe8AgQtDmtbS40sRYa4lSlCI72M1JxmA+YHaXBMMJkETOLPyySatoa2Prhw==}
+    peerDependencies:
+      react: ^19.0.0
+      react-dom: ^19.0.0
+
   '@jridgewell/gen-mapping@0.3.13':
     resolution: {integrity: sha512-2kkt/7niJ6MgEPxF0bYdQ6etZaA+fQvDcLKckhy1yIQOzaoKjBBjSj63/aLVjYE3qhRt5dvM+uUyfCg6UKCBbA==}
 
@@ -324,39 +364,6 @@ packages:
 
   '@oxc-project/types@0.156.0':
     resolution: {integrity: sha512-1Duyg48TdJNdyhEB8Xn1L36bT9Pv6GUtlKjHxOys8xkaF/rQq3XJE+bAurSK/AgIz5mGFsb77cn9Pb20+WCScw==}
-
-  '@pochita/bridge@file:../../../../pochita-webui-kit/packages/bridge':
-    resolution: {directory: ../../../../pochita-webui-kit/packages/bridge, type: directory}
-    peerDependencies:
-      react: ^19.0.0
-
-  '@pochita/config@file:../../../../pochita-webui-kit/packages/config':
-    resolution: {directory: ../../../../pochita-webui-kit/packages/config, type: directory}
-    peerDependencies:
-      '@tailwindcss/vite': ^4.0.0
-      '@vitejs/plugin-react': ^6.0.0
-      tailwindcss: ^4.0.0
-      vite: ^8.0.0
-    peerDependenciesMeta:
-      '@tailwindcss/vite':
-        optional: true
-      '@vitejs/plugin-react':
-        optional: true
-      tailwindcss:
-        optional: true
-      vite:
-        optional: true
-
-  '@pochita/sideveil-sdk@file:../../../../pochita-webui-kit/packages/sdk':
-    resolution: {directory: ../../../../pochita-webui-kit/packages/sdk, type: directory}
-    peerDependencies:
-      react: ^19.0.0
-
-  '@pochita/ui@file:../../../../pochita-webui-kit/packages/ui':
-    resolution: {directory: ../../../../pochita-webui-kit/packages/ui, type: directory}
-    peerDependencies:
-      react: ^19.0.0
-      react-dom: ^19.0.0
 
   '@radix-ui/number@1.1.3':
     resolution: {integrity: sha512-Road2bidD0uu/1BGDOWNdPI06g0lIRy6IF9GZcIrDK2KGItfor8IQwQa+yM2ERgHM1MmHxaxpTzk0/Jp42lNfA==}
@@ -1186,6 +1193,59 @@ snapshots:
       tslib: 2.9.1
     optional: true
 
+  '@gojona/bridge@0.1.0(@tailwindcss/vite@4.3.5(vite@8.3.8(jiti@2.7.0)))(@vitejs/plugin-react@6.3.0(vite@8.3.8(jiti@2.7.0)))(react@19.3.1)(tailwindcss@4.3.5)(vite@8.3.8(jiti@2.7.0))':
+    dependencies:
+      '@gojona/config': 0.1.0(@tailwindcss/vite@4.3.5(vite@8.3.8(jiti@2.7.0)))(@vitejs/plugin-react@6.3.0(vite@8.3.8(jiti@2.7.0)))(tailwindcss@4.3.5)(vite@8.3.8(jiti@2.7.0))
+      react: 19.3.1
+    transitivePeerDependencies:
+      - '@tailwindcss/vite'
+      - '@vitejs/plugin-react'
+      - tailwindcss
+      - vite
+
+  '@gojona/config@0.1.0(@tailwindcss/vite@4.3.5(vite@8.3.8(jiti@2.7.0)))(@vitejs/plugin-react@6.3.0(vite@8.3.8(jiti@2.7.0)))(tailwindcss@4.3.5)(vite@8.3.8(jiti@2.7.0))':
+    optionalDependencies:
+      '@tailwindcss/vite': 4.3.5(vite@8.3.8(jiti@2.7.0))
+      '@vitejs/plugin-react': 6.3.0(vite@8.3.8(jiti@2.7.0))
+      tailwindcss: 4.3.5
+      vite: 8.3.8(jiti@2.7.0)
+
+  '@gojona/contracts-gen@0.1.0': {}
+
+  '@gojona/sideveil-sdk@0.1.0(@tailwindcss/vite@4.3.5(vite@8.3.8(jiti@2.7.0)))(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(@vitejs/plugin-react@6.3.0(vite@8.3.8(jiti@2.7.0)))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(tailwindcss@4.3.5)(vite@8.3.8(jiti@2.7.0))':
+    dependencies:
+      '@gojona/bridge': 0.1.0(@tailwindcss/vite@4.3.5(vite@8.3.8(jiti@2.7.0)))(@vitejs/plugin-react@6.3.0(vite@8.3.8(jiti@2.7.0)))(react@19.3.1)(tailwindcss@4.3.5)(vite@8.3.8(jiti@2.7.0))
+      '@gojona/ui': 0.1.0(@tailwindcss/vite@4.3.5(vite@8.3.8(jiti@2.7.0)))(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(@vitejs/plugin-react@6.3.0(vite@8.3.8(jiti@2.7.0)))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(tailwindcss@4.3.5)(vite@8.3.8(jiti@2.7.0))
+      react: 19.3.1
+    transitivePeerDependencies:
+      - '@tailwindcss/vite'
+      - '@types/react'
+      - '@types/react-dom'
+      - '@vitejs/plugin-react'
+      - react-dom
+      - tailwindcss
+      - vite
+
+  '@gojona/ui@0.1.0(@tailwindcss/vite@4.3.5(vite@8.3.8(jiti@2.7.0)))(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(@vitejs/plugin-react@6.3.0(vite@8.3.8(jiti@2.7.0)))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(tailwindcss@4.3.5)(vite@8.3.8(jiti@2.7.0))':
+    dependencies:
+      '@gojona/config': 0.1.0(@tailwindcss/vite@4.3.5(vite@8.3.8(jiti@2.7.0)))(@vitejs/plugin-react@6.3.0(vite@8.3.8(jiti@2.7.0)))(tailwindcss@4.3.5)(vite@8.3.8(jiti@2.7.0))
+      '@radix-ui/react-slider': 1.6.1(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
+      '@radix-ui/react-switch': 1.4.1(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
+      '@radix-ui/react-tabs': 1.2.1(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
+      class-variance-authority: 0.7.1
+      clsx: 2.1.1
+      lucide-react: 1.77.0(@types/react@19.3.0)(react@19.3.1)
+      react: 19.3.1
+      react-dom: 19.3.1(react@19.3.1)
+      tailwind-merge: 3.7.1
+    transitivePeerDependencies:
+      - '@tailwindcss/vite'
+      - '@types/react'
+      - '@types/react-dom'
+      - '@vitejs/plugin-react'
+      - tailwindcss
+      - vite
+
   '@jridgewell/gen-mapping@0.3.13':
     dependencies:
       '@jridgewell/sourcemap-codec': 1.6.0
@@ -1213,57 +1273,6 @@ snapshots:
     optional: true
 
   '@oxc-project/types@0.156.0': {}
-
-  '@pochita/bridge@file:../../../../pochita-webui-kit/packages/bridge(@tailwindcss/vite@4.3.5(vite@8.3.8(jiti@2.7.0)))(@vitejs/plugin-react@6.3.0(vite@8.3.8(jiti@2.7.0)))(react@19.3.1)(tailwindcss@4.3.5)(vite@8.3.8(jiti@2.7.0))':
-    dependencies:
-      '@pochita/config': file:../../../../pochita-webui-kit/packages/config(@tailwindcss/vite@4.3.5(vite@8.3.8(jiti@2.7.0)))(@vitejs/plugin-react@6.3.0(vite@8.3.8(jiti@2.7.0)))(tailwindcss@4.3.5)(vite@8.3.8(jiti@2.7.0))
-      react: 19.3.1
-    transitivePeerDependencies:
-      - '@tailwindcss/vite'
-      - '@vitejs/plugin-react'
-      - tailwindcss
-      - vite
-
-  '@pochita/config@file:../../../../pochita-webui-kit/packages/config(@tailwindcss/vite@4.3.5(vite@8.3.8(jiti@2.7.0)))(@vitejs/plugin-react@6.3.0(vite@8.3.8(jiti@2.7.0)))(tailwindcss@4.3.5)(vite@8.3.8(jiti@2.7.0))':
-    optionalDependencies:
-      '@tailwindcss/vite': 4.3.5(vite@8.3.8(jiti@2.7.0))
-      '@vitejs/plugin-react': 6.3.0(vite@8.3.8(jiti@2.7.0))
-      tailwindcss: 4.3.5
-      vite: 8.3.8(jiti@2.7.0)
-
-  '@pochita/sideveil-sdk@file:../../../../pochita-webui-kit/packages/sdk(@tailwindcss/vite@4.3.5(vite@8.3.8(jiti@2.7.0)))(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(@vitejs/plugin-react@6.3.0(vite@8.3.8(jiti@2.7.0)))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(tailwindcss@4.3.5)(vite@8.3.8(jiti@2.7.0))':
-    dependencies:
-      '@pochita/bridge': file:../../../../pochita-webui-kit/packages/bridge(@tailwindcss/vite@4.3.5(vite@8.3.8(jiti@2.7.0)))(@vitejs/plugin-react@6.3.0(vite@8.3.8(jiti@2.7.0)))(react@19.3.1)(tailwindcss@4.3.5)(vite@8.3.8(jiti@2.7.0))
-      '@pochita/ui': file:../../../../pochita-webui-kit/packages/ui(@tailwindcss/vite@4.3.5(vite@8.3.8(jiti@2.7.0)))(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(@vitejs/plugin-react@6.3.0(vite@8.3.8(jiti@2.7.0)))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(tailwindcss@4.3.5)(vite@8.3.8(jiti@2.7.0))
-      react: 19.3.1
-    transitivePeerDependencies:
-      - '@tailwindcss/vite'
-      - '@types/react'
-      - '@types/react-dom'
-      - '@vitejs/plugin-react'
-      - react-dom
-      - tailwindcss
-      - vite
-
-  '@pochita/ui@file:../../../../pochita-webui-kit/packages/ui(@tailwindcss/vite@4.3.5(vite@8.3.8(jiti@2.7.0)))(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(@vitejs/plugin-react@6.3.0(vite@8.3.8(jiti@2.7.0)))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(tailwindcss@4.3.5)(vite@8.3.8(jiti@2.7.0))':
-    dependencies:
-      '@pochita/config': file:../../../../pochita-webui-kit/packages/config(@tailwindcss/vite@4.3.5(vite@8.3.8(jiti@2.7.0)))(@vitejs/plugin-react@6.3.0(vite@8.3.8(jiti@2.7.0)))(tailwindcss@4.3.5)(vite@8.3.8(jiti@2.7.0))
-      '@radix-ui/react-slider': 1.6.1(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
-      '@radix-ui/react-switch': 1.4.1(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
-      '@radix-ui/react-tabs': 1.2.1(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
-      class-variance-authority: 0.7.1
-      clsx: 2.1.1
-      lucide-react: 1.77.0(@types/react@19.3.0)(react@19.3.1)
-      react: 19.3.1
-      react-dom: 19.3.1(react@19.3.1)
-      tailwind-merge: 3.7.1
-    transitivePeerDependencies:
-      - '@tailwindcss/vite'
-      - '@types/react'
-      - '@types/react-dom'
-      - '@vitejs/plugin-react'
-      - tailwindcss
-      - vite
 
   '@radix-ui/number@1.1.3': {}
 

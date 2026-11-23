@@ -1,4 +1,4 @@
-import { definePluginManifest } from '@pochita/sideveil-sdk';
+import { definePluginManifest } from '@gojona/sideveil-sdk';
 import { STRATA_PROTOCOL } from './types.ts';
 
 /** Canonical SideVeil plugin identifier for the Strata container manager UI. */

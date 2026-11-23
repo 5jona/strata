@@ -6,7 +6,7 @@ import {
   type TypedPluginClientOptions,
   usePluginEvent,
   useTypedPluginClient,
-} from '@pochita/sideveil-sdk';
+} from '@gojona/sideveil-sdk';
 import type { StrataEventPayloadMap, StrataRpcMethodMap } from '../types.ts';
 
 /** Union of all Strata JSON-RPC method names supported by the SideVeil plugin bridge. */
@@ -15,7 +15,7 @@ export type StrataRpcMethod = keyof StrataRpcMethodMap;
 /** Union of all Strata domain event names pushed over the SideVeil plugin bridge. */
 export type StrataEventName = keyof StrataEventPayloadMap;
 
-/** Compile-time-typed Strata plugin RPC and event client backed by `@pochita/sideveil-sdk`. */
+/** Compile-time-typed Strata plugin RPC and event client backed by `@gojona/sideveil-sdk`. */
 export type StrataRpcClient = TypedPluginClient<StrataRpcMethodMap, StrataEventPayloadMap>;
 
 /** Minimal plugin RPC invoker interface compatible with SideVeil bridge instances. */

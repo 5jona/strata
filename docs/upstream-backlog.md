@@ -23,16 +23,16 @@ This backlog records real, general-purpose gaps encountered while building `stra
 5. **[Resolved in Phase 3] On-Device & Container SSH Verification & Reload Harness**
    - Promoted SideVeil live verification to `sideveil/scripts/verify-live.py` supporting `--mode auto|ssh|host-exec|local` (auto-detecting `STRATA_SSH_HOST`/`SSH_TARGET` or Strata's on-device `host-exec` / Python 3 environment) and `--ssh <host|user@host>` container deployment in `sideveil/reload.sh`.
 
-## 2. `pochita-webui-kit` (`@pochita/sideveil-sdk`, `@pochita/ui`, `@pochita/bridge`)
+## 2. `pochita-webui-kit` (`@gojona/sideveil-sdk`, `@gojona/ui`, `@gojona/bridge`)
 
-6. **[Resolved in Phase 3] Promoted `useSyncedPluginTheme()` into `@pochita/sideveil-sdk`**
-   - Exported `useSyncedPluginTheme` and `extractPluginAppearance` from `@pochita/sideveil-sdk`.
+6. **[Resolved in Phase 3] Promoted `useSyncedPluginTheme()` into `@gojona/sideveil-sdk`**
+   - Exported `useSyncedPluginTheme` and `extractPluginAppearance` from `@gojona/sideveil-sdk`.
    - Adopted by both `sideveil/webui/src/shared/useSyncedPluginTheme.ts` and `strata/webui/src/hooks/useStrataPluginTheme.ts`.
 
-7. **[Resolved in Phase 3] Added `useClipboard()` to `@pochita/sideveil-sdk` & `LogConsole.onCopy` to `@pochita/ui`**
-   - Exported `useClipboard()` (`readText` / `writeText` via host `clipboard.get` / `clipboard.set` with Web Clipboard fallback) from `@pochita/sideveil-sdk` and added optional `onCopy` prop to `<LogConsole>` in `@pochita/ui`.
+7. **[Resolved in Phase 3] Added `useClipboard()` to `@gojona/sideveil-sdk` & `LogConsole.onCopy` to `@gojona/ui`**
+   - Exported `useClipboard()` (`readText` / `writeText` via host `clipboard.get` / `clipboard.set` with Web Clipboard fallback) from `@gojona/sideveil-sdk` and added optional `onCopy` prop to `<LogConsole>` in `@gojona/ui`.
    - Adopted in `sideveil/webui/src/panel/PanelApp.tsx` and `strata/webui/src/components/{TasksTab,ConfigTab}.tsx`.
 
 8. **[Resolved in Phase 3] Per-Call `InvokeOptions { timeoutMs }` on `bridge.invokePlugin` & `usePluginRpc`**
-   - Added `InvokeOptions` support end-to-end across `@pochita/bridge` (`invoke`, `invokePlugin`) and `@pochita/sideveil-sdk` (`usePluginRpc`).
+   - Added `InvokeOptions` support end-to-end across `@gojona/bridge` (`invoke`, `invokePlugin`) and `@gojona/sideveil-sdk` (`usePluginRpc`).
    - Adopted by `strata/webui/src/hooks/useStrataRuntime.ts`.

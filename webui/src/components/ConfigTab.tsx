@@ -1,4 +1,4 @@
-import { Button, Card, Input, LogConsole, type LogEntry, SettingRow, Switch } from '@pochita/ui';
+import { Button, Card, Input, LogConsole, type LogEntry, SettingRow, Switch } from '@gojona/ui';
 import { RefreshCw, Save } from 'lucide-react';
 import { useEffect, useId, useState } from 'react';
 import { parseSshPort } from '../lib/strataFormat.ts';

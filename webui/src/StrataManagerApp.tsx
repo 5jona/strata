@@ -1,11 +1,11 @@
-import type { BridgeOptions } from '@pochita/bridge';
+import type { BridgeOptions } from '@gojona/bridge';
 import {
   SideVeilPluginProvider,
   useContainerAction,
   useHaptics,
   usePluginBackendState,
   usePresentationMode,
-} from '@pochita/sideveil-sdk';
+} from '@gojona/sideveil-sdk';
 import {
   AppShell,
   Button,
@@ -18,7 +18,7 @@ import {
   ThemeProvider,
   ToastProvider,
   useToast,
-} from '@pochita/ui';
+} from '@gojona/ui';
 import { Layers, Settings2, Terminal } from 'lucide-react';
 import { useCallback, useMemo, useState } from 'react';
 import { ConfigTab } from './components/ConfigTab.tsx';

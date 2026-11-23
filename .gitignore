@@ -1,5 +1,6 @@
 /target/
 /out/
+/.cargo/config.toml
 /bin/stratad
 /bin/strata
 /plugins/strata.manager/web/

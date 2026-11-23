@@ -1,4 +1,4 @@
-import { Badge, Button, Card, SettingRow, Switch } from '@pochita/ui';
+import { Badge, Button, Card, SettingRow, Switch } from '@gojona/ui';
 import { Cpu } from 'lucide-react';
 import {
   COMMON_DEBUG_CHAR_DEVS,

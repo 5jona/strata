@@ -3,11 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
-import {
-  collectFixtureFiles,
-  validateFixtureFile,
-  validateValue,
-} from '../../../../../pochita-webui-kit/packages/contracts-gen/src/validator.mjs';
+import { collectFixtureFiles, validateFixtureFile, validateValue } from '@gojona/contracts-gen';
 import { createMockStrataTransport } from '../src/lib/mockStrataBridge.ts';
 import { hasL5DiagMounts, isL5DiagMount, toggleL5DiagMounts } from '../src/lib/passthrough.ts';
 import { STRATA_MANIFEST } from '../src/manifest.ts';

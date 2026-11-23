@@ -1,5 +1,5 @@
-import type { ContainerPresentationMode } from '@pochita/sideveil-sdk';
-import { Badge, Button, cn } from '@pochita/ui';
+import type { ContainerPresentationMode } from '@gojona/sideveil-sdk';
+import { Badge, Button, cn } from '@gojona/ui';
 import { Lock, Maximize2, PanelRight, Pin, RefreshCw, Unlock, X } from 'lucide-react';
 
 /** Props accepted by `StrataHeaderActions`. */
