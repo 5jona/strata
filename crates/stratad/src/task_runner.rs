@@ -1,4 +1,4 @@
-//! Headless streaming command and Python task runner reusable by RPC clients and Phase 2 WebUI.
+//! Headless streaming command and Python task runner reusable by RPC clients and the SideVeil WebUI.
 
 mod io;
 

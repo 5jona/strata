@@ -6,7 +6,7 @@ pub const MODULE_ID: &str = "strata";
 /// Default primary container name when omitted by CLI or RPC callers.
 pub const DEFAULT_CONTAINER_ID: &str = "main";
 
-/// SideVeil plugin identifier reserved for Phase 2 `uds-native` integration.
+/// SideVeil plugin identifier for `uds-native` integration.
 pub const SIDEVEIL_PLUGIN_ID: &str = "strata.manager";
 
 /// Default SideVeil hub Unix domain socket path.

@@ -1,4 +1,4 @@
-//! Transport-agnostic JSON-RPC 2.0 dispatcher shared by `strata.sock` and Phase 2 SideVeil bridge.
+//! Transport-agnostic JSON-RPC 2.0 dispatcher shared by `strata.sock` and the SideVeil bridge.
 
 use std::sync::Arc;
 use std::time::Instant;

@@ -89,7 +89,7 @@ pub struct ContainerStatusSnapshot {
     pub disk: ContainerDiskStats,
 }
 
-/// Compact daemon summary suitable for `daemon.status` and Phase 2 SideVeil Native HUD snapshots.
+/// Compact daemon summary suitable for `daemon.status` and SideVeil Native HUD snapshots.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DaemonSummarySnapshot {

@@ -1,6 +1,6 @@
 # Strata — Agent Guidelines
 
-For empirical Android 16+ (API 36+, `aarch64-linux-android`) stock GKI constraints and container runtime design decisions, see `docs/architecture-decisions.md`. Rust crate-level rules live in `crates/AGENTS.md`.
+For the codebase navigation map, runtime flows, lock hierarchy, and protocol boundaries, see `ARCHITECTURE.md`. For empirical Android 16+ (API 36+, `aarch64-linux-android`) stock GKI constraints and container runtime design decisions, see `docs/architecture-decisions.md`. Rust crate-level rules live in `crates/AGENTS.md`.
 
 ## Architecture & Crate Boundaries
 - **`crates/strata-protocol`**: Platform-agnostic multi-container config schema, JSON-RPC 2.0 wire types, lifecycle state machine, capability bitmask profiles, and single-source-of-truth constants (module IDs, default container names, paths, RPC methods/events). Zero Linux syscalls or Tokio dependencies.

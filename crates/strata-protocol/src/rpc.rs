@@ -89,6 +89,7 @@ pub struct RpcRequest {
 }
 
 impl RpcRequest {
+    /// Creates a new JSON-RPC 2.0 request envelope.
     #[must_use]
     pub fn new(id: impl Into<String>, method: impl Into<String>, params: Option<Value>) -> Self {
         Self {
@@ -113,6 +114,7 @@ pub struct RpcResponse {
 }
 
 impl RpcResponse {
+    /// Creates a successful JSON-RPC 2.0 response carrying `result`.
     #[must_use]
     pub fn ok(id: impl Into<String>, result: Value) -> Self {
         Self {
@@ -123,6 +125,7 @@ impl RpcResponse {
         }
     }
 
+    /// Creates a JSON-RPC 2.0 error response with numeric `code` and diagnostic `message`.
     #[must_use]
     pub fn err(id: impl Into<String>, code: i32, message: impl Into<String>) -> Self {
         Self {
@@ -146,6 +149,7 @@ pub struct EventEnvelope {
 }
 
 impl EventEnvelope {
+    /// Creates a new server-pushed event envelope.
     #[must_use]
     pub fn new(event: impl Into<String>, payload: Option<Value>) -> Self {
         Self {
