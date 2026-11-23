@@ -5,6 +5,7 @@ use std::collections::BTreeSet;
 use thiserror::Error;
 
 use crate::config::{ContainerConfig, StrataConfig};
+use crate::constants::CONFIG_SCHEMA_VERSION;
 
 /// Errors returned when validating a `StrataConfig`.
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -64,7 +65,7 @@ pub fn validate_container_id(id: &str) -> Result<(), ConfigValidationError> {
 
 /// Validates a complete `StrataConfig`, checking every container and cross-container uniqueness.
 pub fn validate_strata_config(cfg: &StrataConfig) -> Result<(), ConfigValidationError> {
-    if cfg.version == 0 {
+    if cfg.version != CONFIG_SCHEMA_VERSION {
         return Err(ConfigValidationError::InvalidSchemaVersion(cfg.version));
     }
     validate_container_id(&cfg.default_container)?;
@@ -219,6 +220,15 @@ mod tests {
         assert!(validate_container_id("Main").is_err());
         assert!(validate_container_id("a--b").is_err());
 
+        let bad_ver = StrataConfig {
+            version: CONFIG_SCHEMA_VERSION + 1,
+            ..StrataConfig::default()
+        };
+        assert!(matches!(
+            bad_ver.validate(),
+            Err(ConfigValidationError::InvalidSchemaVersion(v)) if v == CONFIG_SCHEMA_VERSION + 1
+        ));
+
         let mut cfg = StrataConfig::default();
         let mut second = ContainerConfig::default_for_id("lab");
         second.ssh.port = 2222;
@@ -236,30 +246,6 @@ mod tests {
             cfg.validate(),
             Err(ConfigValidationError::InvalidCharDev { .. })
         ));
-    }
-
-    #[test]
-    fn effective_init_command_respects_ssh_disabled_and_custom_init() {
-        let mut cfg = StrataConfig::default();
-        let main = cfg.containers.get_mut("main").expect("main container");
-        main.ssh.enabled = false;
-        main.ssh.port = 0;
-        assert!(cfg.validate().is_ok());
-
-        let headless_init = cfg.containers["main"].effective_init_command();
-        assert_eq!(headless_init[0], "/bin/sh");
-        assert!(!headless_init.iter().any(|arg| arg.contains("dropbear")));
-
-        let main = cfg.containers.get_mut("main").expect("main container");
-        main.init_command = vec![
-            "/usr/bin/env".to_owned(),
-            "sleep".to_owned(),
-            "infinity".to_owned(),
-        ];
-        assert_eq!(
-            main.effective_init_command(),
-            vec!["/usr/bin/env", "sleep", "infinity"]
-        );
     }
 
     #[test]

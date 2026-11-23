@@ -6,6 +6,7 @@ pub mod config;
 pub mod constants;
 pub mod generated;
 pub mod rpc;
+pub mod sideveil;
 pub mod state;
 
 pub use capabilities::{CapMask, CapProfile};

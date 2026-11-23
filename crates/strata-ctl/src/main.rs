@@ -231,7 +231,8 @@ Commands:
                                 set-host-bridge <true|false> | set-host-runtime <true|false>
                                 set-char-devs <csv|none> | set-mounts <src:dst[:ro|rw],...|none>
                                 set-l5-diag <on|off>
-  task <run|list|cancel>      Run or inspect daemon-hosted streaming tasks
-  daemon <status|ping|health> Inspect stratad daemon health and summary"
+  task <run|list|cancel|logs> Run, inspect, cancel, or replay logs of daemon tasks
+  daemon <status|ping|health> Inspect stratad daemon health and summary
+  rpc <method> [json-params]  Send a raw JSON-RPC 2.0 request to stratad"
     );
 }

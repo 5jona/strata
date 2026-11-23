@@ -8,7 +8,7 @@ pub(crate) mod state;
 pub(crate) mod supervisor;
 
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use strata_protocol::rpc::StorageCleanupReport;
@@ -85,7 +85,10 @@ impl ContainerManager {
             if !entry.enabled || !entry.auto_start {
                 continue;
             }
-            if !Path::new(&entry.image_path).is_file() {
+            let image_exists = tokio::fs::metadata(&entry.image_path)
+                .await
+                .is_ok_and(|meta| meta.is_file());
+            if !image_exists {
                 eprintln!(
                     "stratad: skipping auto-start for '{id}': image '{}' not found",
                     entry.image_path
@@ -116,18 +119,16 @@ impl ContainerManager {
     /// Synchronizes DNS, `host.env`, and bridge scripts for all currently mounted containers.
     pub(crate) async fn sync_running_containers(&self) {
         let cfg = self.config_store.snapshot().await;
-        for (id, entry) in &cfg.containers {
+        for entry in cfg.containers.values() {
             let mount_dir = PathBuf::from(&entry.mount_dir);
-            if mount::is_ext4_mounted(&mount_dir).unwrap_or(false) {
-                let c = entry.clone();
-                let mdir = self.module_dir.clone();
-                let _ = tokio::task::spawn_blocking(move || {
-                    sync::sync_container_runtime_files(&mount_dir, &c, mdir.as_deref())
-                })
-                .await;
-            } else {
-                let _ = id;
-            }
+            let c = entry.clone();
+            let mdir = self.module_dir.clone();
+            let _ = tokio::task::spawn_blocking(move || {
+                if mount::is_ext4_mounted(&mount_dir).unwrap_or(false) {
+                    let _ = sync::sync_container_runtime_files(&mount_dir, &c, mdir.as_deref());
+                }
+            })
+            .await;
         }
     }
 

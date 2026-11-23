@@ -21,18 +21,21 @@ impl ContainerManager {
     pub(crate) async fn sync_dns(&self, requested: Option<&str>) -> DaemonResult<String> {
         let (id, entry, _) = self.resolve_container(requested).await?;
         let mount_dir = PathBuf::from(&entry.mount_dir);
-        let mounted = mount::is_ext4_mounted(&mount_dir).unwrap_or(false);
-        if !mounted {
+        let mdir = self.module_dir.clone();
+        let synced = tokio::task::spawn_blocking(move || {
+            if !mount::is_ext4_mounted(&mount_dir).unwrap_or(false) {
+                return Ok(false);
+            }
+            sync::sync_container_runtime_files(&mount_dir, &entry, mdir.as_deref())?;
+            Ok::<bool, strata_runtime::RuntimeError>(true)
+        })
+        .await
+        .map_err(|e| DaemonError::join("sync task failed", e))??;
+        if !synced {
             return Err(DaemonError::ContainerNotRunning(format!(
                 "container '{id}' rootfs is not mounted"
             )));
         }
-        let mdir = self.module_dir.clone();
-        tokio::task::spawn_blocking(move || {
-            sync::sync_container_runtime_files(&mount_dir, &entry, mdir.as_deref())
-        })
-        .await
-        .map_err(|e| DaemonError::join("sync task failed", e))??;
         Ok(id)
     }
 
@@ -44,7 +47,11 @@ impl ContainerManager {
         let (id, _, _) = self.resolve_container(params.container.as_deref()).await?;
         let log_path = self.log_file_path(&id);
         let max_lines = params.lines.unwrap_or(50).clamp(1, 500);
-        let lines = sync::read_log_tail(&log_path, max_lines);
+        let path_for_read = log_path.clone();
+        let lines =
+            tokio::task::spawn_blocking(move || sync::read_log_tail(&path_for_read, max_lines))
+                .await
+                .map_err(|e| DaemonError::join("read logs join", e))?;
         Ok(ContainerLogsResult {
             container: id,
             log_path: log_path.to_string_lossy().into_owned(),

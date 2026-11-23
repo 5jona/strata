@@ -206,4 +206,26 @@ mod tests {
         assert!(init.contains(&"-g".to_owned()));
         assert!(init.contains(&"0.0.0.0:2222".to_owned()));
     }
+
+    #[test]
+    fn effective_init_command_respects_ssh_disabled_and_custom_init() {
+        let mut cfg = StrataConfig::default();
+        let main = cfg.containers.get_mut("main").expect("main container");
+        main.ssh.enabled = false;
+        main.ssh.port = 0;
+        assert!(cfg.validate().is_ok());
+
+        let headless_init = cfg.containers["main"].effective_init_command();
+        assert_eq!(headless_init[0], "/bin/sh");
+        assert!(!headless_init.iter().any(|arg| arg.contains("dropbear")));
+
+        let main = cfg.containers.get_mut("main").expect("main container");
+        main.init_command = ["/usr/bin/env", "sleep", "infinity"]
+            .map(str::to_owned)
+            .to_vec();
+        assert_eq!(
+            main.effective_init_command(),
+            vec!["/usr/bin/env", "sleep", "infinity"]
+        );
+    }
 }

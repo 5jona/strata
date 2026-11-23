@@ -2,9 +2,9 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use serde_json::{Value, json};
 use strata_protocol::ContainerStatusSnapshot;
 use strata_protocol::rpc::{HudSetParams, HudStateResult};
+use strata_protocol::sideveil::{HudPrimitive, HudText, HudTextAlign, NativeHudScene};
 use tokio::sync::Notify;
 
 /// Atomic preferences controlling Strata's optional SideVeil Native HUD summary strip.
@@ -83,7 +83,7 @@ impl HudPreferences {
     }
 }
 
-/// Builds a SideVeil-compatible `NativeHudScene` JSON payload summarizing Strata container health.
+/// Builds a typed SideVeil `NativeHudScene` summarizing Strata container health.
 #[must_use]
 pub(crate) fn build_strata_hud_scene(
     plugin_id: &str,
@@ -91,7 +91,7 @@ pub(crate) fn build_strata_hud_scene(
     active_tasks: usize,
     click_through: bool,
     is_dark: bool,
-) -> Value {
+) -> NativeHudScene {
     let total = containers.len();
     let running = containers.iter().filter(|c| c.phase.is_running()).count();
     let primary = containers
@@ -158,63 +158,49 @@ pub(crate) fn build_strata_hud_scene(
     };
     let subtitle = format!("SSH :{ssh_port}  任务 {active_tasks}  占用 {disk_label}");
 
-    json!({
-        "pluginId": plugin_id,
-        "widthDp": 212.0,
-        "heightDp": 72.0,
-        "cornerRadiusDp": 16.0,
-        "backdrop": "native-glass",
-        "clickThrough": click_through,
-        "anchorXPercent": 4.0,
-        "anchorYPercent": 12.0,
-        "primitives": [
-            {
-                "kind": "roundedPill",
-                "x": 12.0,
-                "y": 14.0,
-                "w": 8.0,
-                "h": 8.0,
-                "radius": 4.0,
-                "fillArgb": dot_argb
-            },
-            {
-                "kind": "progressBar",
-                "x": 12.0,
-                "y": 54.0,
-                "w": 188.0,
-                "h": 6.0,
-                "radius": 3.0,
-                "value": disk_ratio,
-                "trackArgb": track_argb,
-                "fillStartArgb": bar_start,
-                "fillEndArgb": bar_end
-            }
-        ],
-        "texts": [
-            {
-                "x": 26.0,
-                "y": 22.0,
-                "text": title,
-                "sizeSp": 12.0,
-                "colorArgb": primary_text,
-                "align": "start",
-                "bold": true,
-                "tabularNums": true,
-                "maxWidthDp": 176.0
-            },
-            {
-                "x": 12.0,
-                "y": 42.0,
-                "text": subtitle,
-                "sizeSp": 10.5,
-                "colorArgb": secondary_text,
-                "align": "start",
-                "bold": false,
-                "tabularNums": true,
-                "maxWidthDp": 188.0
-            }
-        ]
-    })
+    NativeHudScene::new(plugin_id, 212.0, 72.0, 16.0, click_through)
+        .with_anchor(4.0, 12.0)
+        .with_primitive(HudPrimitive::RoundedPill {
+            x: 12.0,
+            y: 14.0,
+            w: 8.0,
+            h: 8.0,
+            radius: 4.0,
+            fill_argb: dot_argb,
+        })
+        .with_primitive(HudPrimitive::ProgressBar {
+            x: 12.0,
+            y: 54.0,
+            w: 188.0,
+            h: 6.0,
+            radius: 3.0,
+            value: disk_ratio,
+            track_argb,
+            fill_start_argb: bar_start,
+            fill_end_argb: bar_end,
+        })
+        .with_text(HudText {
+            x: 26.0,
+            y: 22.0,
+            text: title,
+            size_sp: 12.0,
+            color_argb: primary_text,
+            align: HudTextAlign::Start,
+            bold: true,
+            tabular_nums: true,
+            max_width_dp: 176.0,
+        })
+        .with_text(HudText {
+            x: 12.0,
+            y: 42.0,
+            text: subtitle,
+            size_sp: 10.5,
+            color_argb: secondary_text,
+            align: HudTextAlign::Start,
+            bold: false,
+            tabular_nums: true,
+            max_width_dp: 188.0,
+        })
 }
 
 #[cfg(test)]
@@ -261,13 +247,14 @@ mod tests {
 
     #[test]
     fn builds_valid_sideveil_hud_scene_for_running_and_stopped_states() {
-        let running_scene = build_strata_hud_scene(
+        let running_scene = serde_json::to_value(build_strata_hud_scene(
             "strata.manager",
             &[sample_snapshot(ContainerPhase::Running)],
             2,
             true,
             true,
-        );
+        ))
+        .expect("serialize running scene");
         assert_eq!(running_scene["pluginId"], "strata.manager");
         assert_eq!(running_scene["backdrop"], "native-glass");
         assert_eq!(running_scene["clickThrough"], true);
@@ -281,13 +268,14 @@ mod tests {
             "SSH :2222  任务 2  占用 640M"
         );
 
-        let stopped_scene = build_strata_hud_scene(
+        let stopped_scene = serde_json::to_value(build_strata_hud_scene(
             "strata.manager",
             &[sample_snapshot(ContainerPhase::Stopped)],
             0,
             false,
             false,
-        );
+        ))
+        .expect("serialize stopped scene");
         assert_eq!(stopped_scene["texts"][0]["text"], "Strata  0/1 待机");
     }
 }

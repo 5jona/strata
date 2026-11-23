@@ -5,6 +5,10 @@ use std::time::Duration;
 
 use serde_json::Value;
 use strata_protocol::EventEnvelope;
+use strata_protocol::sideveil::{
+    HUB_EVENT_APPEARANCE_CHANGED, HUB_EVENT_NETWORK_CONTEXT_CHANGED,
+    HUB_EVENT_PANEL_VISIBILITY_CHANGED, SIDEVEIL_HUD_DISMISS, SIDEVEIL_HUD_UPDATE_SCENE,
+};
 use tokio::io::{AsyncWriteExt, BufReader};
 use tokio::sync::mpsc;
 
@@ -13,10 +17,8 @@ use crate::sideveil_hud::build_strata_hud_scene;
 use crate::sideveil_seam::bridge::BridgeDeps;
 use crate::sideveil_seam::reconnect::wait_shutdown;
 use crate::sideveil_seam::wire::{
-    HUB_EVENT_APPEARANCE_CHANGED, HUB_EVENT_NETWORK_CONTEXT_CHANGED,
-    HUB_EVENT_PANEL_VISIBILITY_CHANGED, InboundHubFrame, SIDEVEIL_HUD_DISMISS,
-    SIDEVEIL_HUD_UPDATE_SCENE, encode_backend_event, extract_appearance_is_dark,
-    parse_inbound_frame, read_bounded_line,
+    InboundHubFrame, encode_backend_event, extract_appearance_is_dark, parse_inbound_frame,
+    read_bounded_line,
 };
 
 const SIDEVEIL_BRIDGE_CONN_ID: u64 = 0;
@@ -205,7 +207,12 @@ async fn push_hud_snapshot(plugin_id: &str, deps: &BridgeDeps, reliable_tx: &mps
         hud.is_click_through(),
         hud.is_dark(),
     );
-    send_event(reliable_tx, SIDEVEIL_HUD_UPDATE_SCENE, Some(scene)).await;
+    send_event(
+        reliable_tx,
+        SIDEVEIL_HUD_UPDATE_SCENE,
+        serde_json::to_value(scene).ok(),
+    )
+    .await;
 }
 
 async fn send_event(reliable_tx: &mpsc::Sender<String>, event: &str, payload: Option<Value>) {

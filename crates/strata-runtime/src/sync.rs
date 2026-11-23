@@ -3,6 +3,7 @@
 mod debug_tools;
 
 use std::fs;
+use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
 
 use strata_protocol::ContainerConfig;
@@ -11,6 +12,8 @@ use strata_sys::{net, procfs};
 use crate::error::{RuntimeError, RuntimeResult};
 use crate::fs_atomic::{ensure_dir_mode, sync_bytes_if_changed, write_atomic};
 use debug_tools::sync_strata_debug_package;
+
+const MAX_LOG_TAIL_READ_BYTES: u64 = 256 * 1024;
 
 /// Synchronizes `/etc/resolv.conf`, `/run/strata/host.env`, and POSIX/Python host bridge scripts
 /// inside a mounted container rootfs.
@@ -182,10 +185,35 @@ pub fn read_log_tail(log_path: &Path, max_lines: usize) -> Vec<String> {
     if max_lines == 0 {
         return Vec::new();
     }
-    let Ok(content) = fs::read_to_string(log_path) else {
+    let Ok(mut file) = fs::File::open(log_path) else {
         return Vec::new();
     };
-    let all: Vec<&str> = content.lines().collect();
+    let Ok(meta) = file.metadata() else {
+        return Vec::new();
+    };
+    let len = meta.len();
+    let truncated_start = len > MAX_LOG_TAIL_READ_BYTES;
+    if truncated_start
+        && file
+            .seek(SeekFrom::Start(len - MAX_LOG_TAIL_READ_BYTES))
+            .is_err()
+    {
+        return Vec::new();
+    }
+    let mut raw = Vec::with_capacity(len.min(MAX_LOG_TAIL_READ_BYTES) as usize);
+    if file
+        .take(MAX_LOG_TAIL_READ_BYTES)
+        .read_to_end(&mut raw)
+        .is_err()
+    {
+        return Vec::new();
+    }
+    let text = String::from_utf8_lossy(&raw);
+    let slice = match (truncated_start, text.find('\n')) {
+        (true, Some(pos)) => &text[pos + 1..],
+        _ => &text,
+    };
+    let all: Vec<&str> = slice.lines().collect();
     let start = all.len().saturating_sub(max_lines);
     all[start..].iter().map(|s| (*s).to_owned()).collect()
 }
@@ -245,5 +273,23 @@ mod tests {
         assert!(!mnt.join("usr/local/bin/adb").exists());
 
         let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn read_log_tail_handles_large_files_with_bounded_window() {
+        let path = std::env::temp_dir().join(format!("strata-log-tail-{}.log", std::process::id()));
+        let content: String = (0..8_000)
+            .map(|idx| format!("line-{idx:05}-padding-for-bounded-tail-test\n"))
+            .collect();
+        assert!(content.len() as u64 > MAX_LOG_TAIL_READ_BYTES);
+        fs::write(&path, &content).expect("write large log");
+        assert_eq!(
+            read_log_tail(&path, 2),
+            vec![
+                "line-07998-padding-for-bounded-tail-test",
+                "line-07999-padding-for-bounded-tail-test",
+            ]
+        );
+        let _ = fs::remove_file(&path);
     }
 }

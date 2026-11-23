@@ -9,7 +9,7 @@ use strata_protocol::{ContainerConfig, StrataConfig};
 use strata_runtime::fs_atomic;
 use strata_sys::inotify::InotifyWatcher;
 use tokio::io::unix::AsyncFd;
-use tokio::sync::{RwLock, watch};
+use tokio::sync::{Mutex, RwLock, watch};
 
 use crate::error::{DaemonError, DaemonResult};
 use crate::manager::ContainerManager;
@@ -19,6 +19,7 @@ use crate::sideveil_seam::SideVeilBridgeSeam;
 #[derive(Debug)]
 pub(crate) struct ConfigStore {
     path: PathBuf,
+    write_lock: Mutex<()>,
     inner: RwLock<StrataConfig>,
 }
 
@@ -47,6 +48,7 @@ impl ConfigStore {
 
         Ok(Self {
             path,
+            write_lock: Mutex::new(()),
             inner: RwLock::new(cfg),
         })
     }
@@ -63,7 +65,11 @@ impl ConfigStore {
     }
 
     async fn reload_from_disk_inner(&self) -> DaemonResult<(StrataConfig, bool)> {
-        let raw = fs::read_to_string(&self.path)
+        let _write_guard = self.write_lock.lock().await;
+        let path = self.path.clone();
+        let raw = tokio::task::spawn_blocking(move || fs::read_to_string(&path))
+            .await
+            .map_err(|e| DaemonError::join("read config join", e))?
             .map_err(|e| DaemonError::Internal(format!("read '{}': {e}", self.path.display())))?;
         let parsed: StrataConfig = serde_json::from_str(&raw)
             .map_err(|e| DaemonError::InvalidParams(format!("parse config: {e}")))?;
@@ -82,8 +88,8 @@ impl ConfigStore {
         &self,
         params: ContainerConfigPatchParams,
     ) -> DaemonResult<(String, ContainerConfig)> {
-        let mut guard = self.inner.write().await;
-        let mut candidate = guard.clone();
+        let _write_guard = self.write_lock.lock().await;
+        let mut candidate = self.inner.read().await.clone();
         let target_id = candidate
             .resolve_container_id(params.container.as_deref())
             .to_owned();
@@ -125,14 +131,19 @@ impl ConfigStore {
 
         candidate.validate()?;
 
-        persist_config(&self.path, &candidate).map_err(DaemonError::Internal)?;
+        let path = self.path.clone();
+        let to_persist = candidate.clone();
+        tokio::task::spawn_blocking(move || persist_config(&path, &to_persist))
+            .await
+            .map_err(|e| DaemonError::join("persist config join", e))?
+            .map_err(DaemonError::Internal)?;
 
         let updated = candidate
             .containers
             .get(&target_id)
             .cloned()
             .ok_or_else(|| DaemonError::ContainerMissingAfterPatch(target_id.clone()))?;
-        *guard = candidate;
+        *self.inner.write().await = candidate;
         Ok((target_id, updated))
     }
 

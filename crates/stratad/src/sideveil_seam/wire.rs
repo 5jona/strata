@@ -3,21 +3,14 @@
 use std::io;
 use std::time::Duration;
 
-use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use strata_protocol::sideveil::{SideVeilBackendEvent, SideVeilHandshakeAck, SideVeilPluginHello};
 use strata_protocol::{EventEnvelope, RpcRequest};
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
 
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_FRAME_BYTES: usize = 256 * 1024;
-
-pub(super) const SIDEVEIL_HUD_UPDATE_SCENE: &str = "hud.updateScene";
-pub(super) const SIDEVEIL_HUD_DISMISS: &str = "hud.dismiss";
-
-pub(super) const HUB_EVENT_APPEARANCE_CHANGED: &str = "appearance.changed";
-pub(super) const HUB_EVENT_PANEL_VISIBILITY_CHANGED: &str = "panel.visibilityChanged";
-pub(super) const HUB_EVENT_NETWORK_CONTEXT_CHANGED: &str = "network.contextChanged";
 
 /// Inbound NDJSON frame sent from SideVeil Hub to this plugin backend.
 #[derive(Debug)]
@@ -84,32 +77,6 @@ pub(super) fn extract_appearance_is_dark(payload: Option<&Value>) -> Option<bool
     None
 }
 
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct SideVeilPluginHello<'a> {
-    role: &'static str,
-    plugin_id: &'a str,
-    package_name: Option<&'a str>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct SideVeilHandshakeAck {
-    ok: bool,
-    #[serde(default)]
-    error: Option<String>,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct SideVeilBackendEvent<'a> {
-    event: &'a str,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    payload: Option<&'a Value>,
-    #[serde(skip_serializing_if = "std::ops::Not::not")]
-    ephemeral: bool,
-}
-
 /// Connects to SideVeil's `hub.sock` and completes the `pluginBackend` hello handshake.
 pub(super) async fn connect_and_handshake(
     hub_sock: &str,
@@ -120,11 +87,7 @@ pub(super) async fn connect_and_handshake(
 )> {
     let stream = UnixStream::connect(hub_sock).await?;
     let (read_half, mut write_half) = stream.into_split();
-    let hello = SideVeilPluginHello {
-        role: "pluginBackend",
-        plugin_id,
-        package_name: None,
-    };
+    let hello = SideVeilPluginHello::plugin_backend(plugin_id);
     let mut bytes =
         serde_json::to_vec(&hello).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
     bytes.push(b'\n');
@@ -218,6 +181,10 @@ fn frame_too_large() -> io::Error {
 #[cfg(test)]
 mod tests {
     use serde_json::json;
+    use strata_protocol::sideveil::{
+        HUB_EVENT_APPEARANCE_CHANGED, HUB_EVENT_NETWORK_CONTEXT_CHANGED,
+        HUB_EVENT_PANEL_VISIBILITY_CHANGED,
+    };
 
     use super::*;
 
