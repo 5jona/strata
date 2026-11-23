@@ -1,6 +1,6 @@
 # Upstream Optimization Backlog (Phase 2 -> Phase 3 — Resolved)
 
-This backlog records real, general-purpose gaps encountered while building `strata.manager` as SideVeil's first complex production `uds-native` plugin. Every item was implemented generically upstream in `sideveil` or `pochita-webui-kit` in Phase 3 with zero Strata-specific business logic, and subsequently adopted by `strata`.
+This backlog records real, general-purpose gaps encountered while building `strata.manager` as SideVeil's first complex production `uds-native` plugin. Every item was implemented generically upstream in `sideveil` or `gojona-kit` in Phase 3 with zero Strata-specific business logic, and subsequently adopted by `strata`.
 
 ## 1. `sideveil` (`hub/` & `android/host-app/`)
 
@@ -23,7 +23,7 @@ This backlog records real, general-purpose gaps encountered while building `stra
 5. **[Resolved in Phase 3] On-Device & Container SSH Verification & Reload Harness**
    - Promoted SideVeil live verification to `sideveil/scripts/verify-live.py` supporting `--mode auto|ssh|host-exec|local` (auto-detecting `STRATA_SSH_HOST`/`SSH_TARGET` or Strata's on-device `host-exec` / Python 3 environment) and `--ssh <host|user@host>` container deployment in `sideveil/reload.sh`.
 
-## 2. `pochita-webui-kit` (`@gojona/sideveil-sdk`, `@gojona/ui`, `@gojona/bridge`)
+## 2. `gojona-kit` (`@gojona/sideveil-sdk`, `@gojona/ui`, `@gojona/bridge`)
 
 6. **[Resolved in Phase 3] Promoted `useSyncedPluginTheme()` into `@gojona/sideveil-sdk`**
    - Exported `useSyncedPluginTheme` and `extractPluginAppearance` from `@gojona/sideveil-sdk`.

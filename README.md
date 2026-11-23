@@ -22,7 +22,7 @@ Strata is a standalone, zero-GKI-modification, pure-Rust multi-container Linux r
 - `webui/` & `plugins/strata.manager/`: First-party SideVeil plugin frontend (React 19 + TypeScript + Tailwind v4 + `@gojona/ui` + `@gojona/bridge` + `@gojona/sideveil-sdk` + `@gojona/config`).
 - `ARCHITECTURE.md`: Subsystem ownership map, runtime flows, protocol boundaries, and concurrency invariants.
 - `docs/architecture-decisions.md`: Empirical Android 16+ GKI constraints and architectural decision records.
-- `docs/upstream-backlog.md`: Generic upstream improvements identified for `sideveil` and `pochita-webui-kit`.
+- `docs/upstream-backlog.md`: Generic upstream improvements identified for `sideveil` and `gojona-kit`.
 
 ## Standalone Build & Verification
 
@@ -63,7 +63,7 @@ sideveil-protocol = { path = "../sideveil/hub/crates/sideveil-protocol" }
 sideveil-plugin-sdk = { path = "../sideveil/hub/crates/sideveil-plugin-sdk" }
 ```
 
-Similarly, when co-developing WebUI packages with a local `pochita-webui-kit` checkout, set `POCHITA_KIT_ROOT=/path/to/pochita-webui-kit` when running Vite so the dev server allows reading files from that directory.
+Similarly, when co-developing WebUI packages with a local `gojona-kit` checkout, set `POCHITA_KIT_ROOT=/path/to/gojona-kit` when running Vite so the dev server allows reading files from that directory.
 
 ## License
 
