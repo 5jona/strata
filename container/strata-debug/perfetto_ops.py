@@ -9,8 +9,8 @@ import time
 from typing import Any
 
 import perfetto_analyze
+from host_runner import HOST_EXEC, run_host_text
 
-HOST_EXEC = "/usr/local/bin/host-exec"
 PERFETTO_BIN = "/system/bin/perfetto"
 
 MIN_DURATION_SEC = 1
@@ -186,13 +186,7 @@ def build_perfetto_config(
 
 def stat_remote_size(remote_path: str) -> int:
     try:
-        res = subprocess.run(
-            [HOST_EXEC, "/system/bin/stat", "-c", "%s", remote_path],
-            capture_output=True,
-            text=True,
-            timeout=5.0,
-            check=False,
-        )
+        res = run_host_text(["/system/bin/stat", "-c", "%s", remote_path], timeout=5.0)
         if res.returncode == 0 and res.stdout.strip().isdigit():
             return int(res.stdout.strip())
     except (OSError, subprocess.TimeoutExpired):
@@ -219,13 +213,10 @@ def capture_perfetto(
         return {"ok": False, "error": str(exc)}
 
     try:
-        res = subprocess.run(
-            [HOST_EXEC, PERFETTO_BIN, "--txt", "-c", "-", "-o", remote_path],
-            input=config_txt,
-            capture_output=True,
-            text=True,
+        res = run_host_text(
+            [PERFETTO_BIN, "--txt", "-c", "-", "-o", remote_path],
+            input_text=config_txt,
             timeout=dur + 15,
-            check=False,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         return {

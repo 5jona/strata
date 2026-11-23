@@ -4,27 +4,14 @@ from __future__ import annotations
 
 import os
 import re
-import subprocess
 import time
 import xml.etree.ElementTree as ET
 from typing import Any
 
 import gesture_replay
+from host_runner import HOST_EXEC, run_host_text as _run_host
 
-HOST_EXEC = "/usr/local/bin/host-exec"
 BOUNDS_RE = re.compile(r"\[(-?\d+),(-?\d+)\]\[(-?\d+),(-?\d+)\]")
-
-
-def _run_host(args: list[str], timeout: float = 12.0) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        [HOST_EXEC, *args],
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        timeout=timeout,
-        check=False,
-    )
 
 
 def _parse_bounds(raw: str) -> tuple[list[int], list[int]] | tuple[None, None]:

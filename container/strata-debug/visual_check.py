@@ -12,7 +12,7 @@ import time
 import zlib
 from typing import Any
 
-HOST_EXEC = "/usr/local/bin/host-exec"
+from host_runner import HOST_EXEC, run_host_bytes
 
 
 def parse_screencap_header(data: bytes) -> tuple[int, int, int, bytes]:
@@ -252,7 +252,7 @@ def stitch_burst_sheet(frames: list[tuple[bytes, int, int]]) -> tuple[bytes, int
 
 
 def capture_raw_frame(timeout: float = 10.0) -> tuple[bytes, int, int]:
-    res = subprocess.run([HOST_EXEC, "/system/bin/screencap"], capture_output=True, timeout=timeout, check=False)
+    res = run_host_bytes(["/system/bin/screencap"], timeout=timeout)
     if res.returncode != 0 or not res.stdout:
         raise RuntimeError(f"raw screencap failed (rc={res.returncode})")
     w, h, _fmt, rgba = parse_screencap_header(res.stdout)

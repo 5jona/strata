@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import json
 import re
-import subprocess
 from typing import Any
 
-HOST_EXEC = "/usr/local/bin/host-exec"
+from host_runner import HOST_EXEC, run_host_text as _run_host
+
 SIDEVEIL_CTL = "/data/adb/modules/sideveil/bin/sideveil-ctl"
 
 WINDOW_HEADER_RE = re.compile(r"^\s*Window #\d+ Window\{[0-9a-fA-F]+\s+u\d+\s+([^}]+)\}:")
@@ -138,12 +138,6 @@ def parse_gfxinfo(text: str) -> dict[str, Any]:
             raw = m.group(1)
             out[key] = float(raw) if "." in raw else int(raw)
     return out
-
-
-def _run_host(args: list[str], timeout: float = 6.0) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        [HOST_EXEC, *args], capture_output=True, text=True, timeout=timeout, check=False
-    )
 
 
 def inspect_sideveil_ui() -> dict[str, Any] | None:

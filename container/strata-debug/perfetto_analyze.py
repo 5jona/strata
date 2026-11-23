@@ -10,7 +10,7 @@ import shutil
 import subprocess
 from typing import Any, BinaryIO
 
-HOST_EXEC = "/usr/local/bin/host-exec"
+from host_runner import HOST_EXEC, run_host_bytes
 
 PACKET_FIELD_NAMES: dict[int, str] = {
     1: "ftrace_events", 2: "process_tree", 3: "sys_stats", 6: "clock_snapshot",
@@ -260,7 +260,7 @@ def analyze_trace_file(trace_path: str, max_packets: int = 50000) -> dict[str, A
 
     if norm.startswith("/data/local/tmp/") and os.path.exists(HOST_EXEC):
         try:
-            proc = subprocess.run([HOST_EXEC, "/system/bin/cat", norm], capture_output=True, timeout=20.0, check=False)
+            proc = run_host_bytes(["/system/bin/cat", norm], timeout=20.0)
             if proc.returncode == 0 and proc.stdout:
                 stats = analyze_trace_stream(io.BytesIO(proc.stdout), max_packets=max_pkts)
                 return {

@@ -3,24 +3,10 @@
 from __future__ import annotations
 
 import re
-import subprocess
 from typing import Any
 
 import sys_probe
-
-HOST_EXEC = "/usr/local/bin/host-exec"
-
-
-def _run_host(args: list[str], timeout: float = 15.0) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        [HOST_EXEC, *args],
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        timeout=timeout,
-        check=False,
-    )
+from host_runner import HOST_EXEC, run_host_text as _run_host
 
 
 def parse_dumpsys_package(text: str) -> dict[str, Any]:

@@ -15,6 +15,8 @@ MODULE_CONFIG="${MODDIR}/config.json"
 DAEMON_BIN="${MODDIR}/bin/stratad"
 CLI_BIN="${MODDIR}/bin/strata"
 KSU_BIN_DIR="/data/adb/ksu/bin"
+DAEMON_LOG="${RUN_DIR}/logs/stratad.log"
+MAX_LOG_BYTES=5242880
 DAEMON_PID=""
 
 GETPROP_BIN="/system/bin/getprop"
@@ -22,18 +24,35 @@ MKDIR_BIN="/system/bin/mkdir"
 CHOWN_BIN="/system/bin/chown"
 CHMOD_BIN="/system/bin/chmod"
 CP_BIN="/system/bin/cp"
+MV_BIN="/system/bin/mv"
 RM_BIN="/system/bin/rm"
 LN_BIN="/system/bin/ln"
 LOG_BIN="/system/bin/log"
 SLEEP_BIN="/system/bin/sleep"
 CAT_BIN="/system/bin/cat"
+WC_BIN="/system/bin/wc"
 PKILL_BIN="/system/bin/pkill"
+PGREP_BIN="/system/bin/pgrep"
 
 SKIP_BOOT_WAIT=0
 [ "${1:-}" = "--now" ] && SKIP_BOOT_WAIT=1
 
 log_info() {
     "$LOG_BIN" -t "$LOG_TAG" -p i "$1" 2>/dev/null || true
+}
+
+rotate_daemon_log() {
+    [ -f "$DAEMON_LOG" ] || return 0
+    raw_size=$("$WC_BIN" -c < "$DAEMON_LOG" 2>/dev/null || echo 0)
+    # Strip any leading whitespace produced by wc -c.
+    set -- $raw_size
+    log_size="${1:-0}"
+    case "$log_size" in
+        ''|*[!0-9]*) log_size=0 ;;
+    esac
+    if [ "$log_size" -ge "$MAX_LOG_BYTES" ]; then
+        "$MV_BIN" -f "$DAEMON_LOG" "${DAEMON_LOG}.1" 2>/dev/null || : > "$DAEMON_LOG"
+    fi
 }
 
 terminate_pid_gracefully() {
@@ -58,9 +77,19 @@ stop_existing_daemon() {
         terminate_pid_gracefully "$old_pid"
         "$RM_BIN" -f "${RUN_DIR}/stratad.pid"
     fi
-    "$PKILL_BIN" -TERM -x "stratad" 2>/dev/null || true
-    "$SLEEP_BIN" 0.3
-    "$PKILL_BIN" -KILL -x "stratad" 2>/dev/null || true
+    if "$PKILL_BIN" -TERM -x "stratad" 2>/dev/null; then
+        steps=0
+        while [ "$steps" -lt 25 ]; do
+            if [ -x "$PGREP_BIN" ]; then
+                "$PGREP_BIN" -x "stratad" >/dev/null 2>&1 || break
+            else
+                "$PKILL_BIN" -0 -x "stratad" 2>/dev/null || break
+            fi
+            "$SLEEP_BIN" 0.2
+            steps=$((steps + 1))
+        done
+        "$PKILL_BIN" -KILL -x "stratad" 2>/dev/null || true
+    fi
 }
 
 cleanup_and_exit() {
@@ -128,11 +157,12 @@ while true; do
         continue
     fi
 
+    rotate_daemon_log
     log_info "Launching stratad..."
     "$DAEMON_BIN" \
         --config "$LIVE_CONFIG" \
         --run-dir "$RUN_DIR" \
-        --module-dir "$MODDIR" >>"${RUN_DIR}/logs/stratad.log" 2>&1 &
+        --module-dir "$MODDIR" >>"$DAEMON_LOG" 2>&1 &
     DAEMON_PID=$!
 
     wait "$DAEMON_PID" || true

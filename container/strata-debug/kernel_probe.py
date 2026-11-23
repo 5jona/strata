@@ -13,7 +13,8 @@ import shutil
 import subprocess
 from typing import Any
 
-HOST_EXEC = "/usr/local/bin/host-exec"
+from host_runner import HOST_EXEC, run_host_text
+
 WATCHDOG_RE = re.compile(
     r"(oplus_secure_guard|malicious_app|Kernel panic|BUG:|Unable to handle kernel|Call trace:|reboot,)",
     re.IGNORECASE,
@@ -59,24 +60,15 @@ def collect_pstore(pstore_dir: str = "/sys/fs/pstore") -> dict[str, Any]:
 
     if not files and os.path.exists(HOST_EXEC):
         quoted = shlex.quote(pstore_dir)
-        res = subprocess.run(
-            [HOST_EXEC, "/system/bin/sh", "-c", f"ls {quoted}/console-ramoops* {quoted}/dmesg-ramoops* 2>/dev/null"],
-            capture_output=True,
-            text=True,
+        res = run_host_text(
+            ["/system/bin/sh", "-c", f"ls {quoted}/console-ramoops* {quoted}/dmesg-ramoops* 2>/dev/null"],
             timeout=6.0,
-            check=False,
         )
         remote_files = [ln.strip() for ln in res.stdout.splitlines() if ln.strip()]
         if remote_files:
             parsed: dict[str, Any] = {}
             for rf in remote_files[:4]:
-                cat = subprocess.run(
-                    [HOST_EXEC, "/system/bin/cat", rf],
-                    capture_output=True,
-                    text=True,
-                    timeout=6.0,
-                    check=False,
-                )
+                cat = run_host_text(["/system/bin/cat", rf], timeout=6.0)
                 parsed[os.path.basename(rf)] = parse_pstore_text(cat.stdout)
             return {"ok": True, "available": True, "source": "host-exec", "files": parsed}
         return {

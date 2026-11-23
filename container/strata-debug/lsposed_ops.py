@@ -5,29 +5,14 @@ from __future__ import annotations
 import os
 import re
 import sqlite3
-import subprocess
 import tempfile
 from typing import Any, Callable
 
-HOST_EXEC = "/usr/local/bin/host-exec"
-
-
-def _run_host_text(args: list[str], timeout: float = 10.0) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        [HOST_EXEC, *args],
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        timeout=timeout,
-        check=False,
-    )
-
-
-def _run_host_bytes(args: list[str], timeout: float = 10.0) -> subprocess.CompletedProcess[bytes]:
-    return subprocess.run(
-        [HOST_EXEC, *args], capture_output=True, timeout=timeout, check=False
-    )
+from host_runner import (
+    HOST_EXEC,
+    run_host_bytes as _run_host_bytes,
+    run_host_text as _run_host_text,
+)
 
 
 def _default_copy_db(db_path: str, tmpdir: str) -> str | None:

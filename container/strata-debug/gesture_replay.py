@@ -6,9 +6,10 @@ import fcntl
 import os
 import re
 import struct
-import subprocess
 import time
 from typing import Any
+
+from host_runner import HOST_EXEC, run_host_stdout as _run_host_stdout
 
 # Linux input / uinput constants (linux/input.h, linux/uinput.h, 64-bit aarch64/x86_64)
 EV_SYN, EV_KEY, EV_ABS = 0x00, 0x01, 0x03
@@ -21,8 +22,6 @@ UI_DEV_CREATE, UI_DEV_DESTROY = 0x5501, 0x5502
 UI_DEV_SETUP, UI_ABS_SETUP = 0x405C5503, 0x401C5504
 UI_SET_EVBIT, UI_SET_KEYBIT = 0x40045564, 0x40045565
 UI_SET_ABSBIT, UI_SET_PROPBIT = 0x40045567, 0x4004556E
-
-HOST_EXEC = "/usr/local/bin/host-exec"
 
 
 def pack_input_event(ev_type: int, code: int, value: int, sec: int = 0, usec: int = 0) -> bytes:
@@ -131,14 +130,6 @@ def logical_to_physical(
     else:
         px, py = _scale(cy, lh, pw), (ph - 1) - _scale(cx, lw, ph)
     return max(0, min(pw - 1, px)), max(0, min(ph - 1, py))
-
-
-def _run_host_stdout(argv: list[str]) -> str:
-    try:
-        res = subprocess.run([HOST_EXEC, *argv], capture_output=True, text=True, timeout=5.0, check=False)
-        return res.stdout
-    except (OSError, subprocess.TimeoutExpired):
-        return ""
 
 
 def get_display_geometry() -> dict[str, int]:

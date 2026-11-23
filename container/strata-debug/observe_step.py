@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import os
-import subprocess
 import time
 from typing import Any
 
@@ -13,8 +12,8 @@ import gesture_replay
 import logcat_cursor
 import sys_probe
 import visual_check
+from host_runner import HOST_EXEC, run_host_text
 
-HOST_EXEC = "/usr/local/bin/host-exec"
 STRATA_BIN = "/data/adb/ksu/bin/strata"
 
 
@@ -29,13 +28,7 @@ def _run_action(
 ) -> dict[str, Any] | None:
     if action_rpc:
         method, params_json = action_rpc
-        res = subprocess.run(
-            [HOST_EXEC, STRATA_BIN, "--json", "rpc", method, params_json],
-            capture_output=True,
-            text=True,
-            timeout=15.0,
-            check=False,
-        )
+        res = run_host_text([STRATA_BIN, "--json", "rpc", method, params_json], timeout=15.0)
         try:
             body: Any = json.loads(res.stdout) if res.stdout.strip() else None
         except json.JSONDecodeError:
@@ -43,13 +36,7 @@ def _run_action(
         return {"type": "rpc", "method": method, "rc": res.returncode, "result": body, "stderr": res.stderr.strip()[:240]}
 
     if action_shell:
-        res = subprocess.run(
-            [HOST_EXEC, "/system/bin/sh", "-c", action_shell],
-            capture_output=True,
-            text=True,
-            timeout=15.0,
-            check=False,
-        )
+        res = run_host_text(["/system/bin/sh", "-c", action_shell], timeout=15.0)
         return {
             "type": "shell",
             "rc": res.returncode,

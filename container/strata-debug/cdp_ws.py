@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import contextlib
 import hashlib
 import json
 import os
@@ -143,10 +144,8 @@ class CdpWsClient:
         while True:
             fin, opcode, data = read_ws_frame(lambda n: self._read_exact(n, deadline))
             if opcode == OPCODE_CLOSE:
-                try:
+                with contextlib.suppress(OSError):
                     self._send_frame(OPCODE_CLOSE, data[:2])
-                except OSError:
-                    pass
                 return None
             if opcode == OPCODE_PING:
                 self._send_frame(OPCODE_PONG, data)
@@ -205,22 +204,16 @@ class CdpWsClient:
                 continue
 
     def close(self) -> None:
-        try:
+        with contextlib.suppress(OSError):
             self.sock.settimeout(0.5)
             self._send_frame(OPCODE_CLOSE, b"")
-        except OSError:
-            pass
-        try:
+        with contextlib.suppress(OSError):
             self.sock.close()
-        except OSError:
-            pass
 
 
 def _safe_shut_wr(sock: socket.socket) -> None:
-    try:
+    with contextlib.suppress(OSError):
         sock.shutdown(socket.SHUT_WR)
-    except OSError:
-        pass
 
 
 def tunnel_bidirectional(
@@ -292,7 +285,5 @@ def tunnel_bidirectional(
     finally:
         sel.close()
         for s in (sock_a, sock_b):
-            try:
+            with contextlib.suppress(OSError):
                 s.close()
-            except OSError:
-                pass

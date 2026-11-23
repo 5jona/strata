@@ -10,7 +10,8 @@ import subprocess
 import tempfile
 from typing import Any
 
-HOST_EXEC = "/usr/local/bin/host-exec"
+from host_runner import HOST_EXEC, run_host_text
+
 DEFAULT_CURSOR_PATH = "/tmp/strata-debug-logcat.cursor"
 
 PRIORITY_ORDER = {"V": 0, "D": 1, "I": 2, "W": 3, "E": 4, "F": 5, "A": 5}
@@ -72,29 +73,13 @@ def _line_digest(line: str) -> str:
 
 def _probe_latest_watermark(timeout: float = 8.0) -> dict[str, str]:
     """Queries the latest logcat line for an exact watermark, falling back to host date."""
-    tail = subprocess.run(
-        [HOST_EXEC, "/system/bin/logcat", "-d", "-v", "threadtime", "-t", "1"],
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        timeout=timeout,
-        check=False,
-    )
+    tail = run_host_text(["/system/bin/logcat", "-d", "-v", "threadtime", "-t", "1"], timeout=timeout)
     for line in reversed(tail.stdout.splitlines()):
         parsed = parse_threadtime_line(line)
         if parsed:
             return {"ts": parsed["ts"], "lastDigest": _line_digest(line)}
 
-    res = subprocess.run(
-        [HOST_EXEC, "/system/bin/date", "+%m-%d %H:%M:%S.000"],
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        timeout=timeout,
-        check=False,
-    )
+    res = run_host_text(["/system/bin/date", "+%m-%d %H:%M:%S.000"], timeout=timeout)
     ts = res.stdout.strip() or "01-01 00:00:00.000"
     return {"ts": ts, "lastDigest": ""}
 
@@ -169,21 +154,13 @@ def read_incremental(
 ) -> dict[str, Any]:
     state, warning = _load_cursor(cursor_path)
     since_ts = state.get("ts")
-    cmd = [HOST_EXEC, "/system/bin/logcat", "-d", "-v", "threadtime"]
+    cmd = ["/system/bin/logcat", "-d", "-v", "threadtime"]
     if since_ts:
         cmd.extend(["-T", since_ts])
     else:
         cmd.extend(["-t", str(max(limit * 4, 200))])
 
-    res = subprocess.run(
-        cmd,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        timeout=timeout,
-        check=False,
-    )
+    res = run_host_text(cmd, timeout=timeout)
     lines = res.stdout.splitlines()
     entries, latest_ts, latest_digest = filter_logcat_lines(
         lines,

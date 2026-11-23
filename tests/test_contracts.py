@@ -170,8 +170,10 @@ class CrossStackContractTests(unittest.TestCase):
             self.assertTrue(getattr(ns, "cmd", None), f"Empty parsed cmd for {tool_name}: {argv!r}")
 
     def test_host_exec_fallback_env_matches_strata_runtime_sync_rs(self) -> None:
-        host_exec_text = open(os.path.join(REPO_ROOT, "container", "host-exec"), encoding="utf-8").read()
-        sync_rs_text = open(os.path.join(REPO_ROOT, "crates", "strata-runtime", "src", "sync.rs"), encoding="utf-8").read()
+        with open(os.path.join(REPO_ROOT, "container", "host-exec"), encoding="utf-8") as f:
+            host_exec_text = f.read()
+        with open(os.path.join(REPO_ROOT, "crates", "strata-runtime", "src", "sync.rs"), encoding="utf-8") as f:
+            sync_rs_text = f.read()
 
         # Extract fallback `KEY="VALUE"` lines from `run_nsenter \` block at end of container/host-exec.
         fallback_block = host_exec_text.split("run_nsenter \\", 1)[1]
@@ -196,10 +198,14 @@ class CrossStackContractTests(unittest.TestCase):
         )
 
     def test_config_json_defaults_match_contract_schema_and_golden_fixture(self) -> None:
-        config = json.load(open(os.path.join(REPO_ROOT, "config.json"), encoding="utf-8"))
-        spec = json.load(open(os.path.join(REPO_ROOT, "contracts", "strata.contract.json"), encoding="utf-8"))
-        schema = json.load(open(os.path.join(REPO_ROOT, "contracts", "schemas", "strata.schema.json"), encoding="utf-8"))
-        golden = json.load(open(os.path.join(REPO_ROOT, "contracts", "fixtures", "StrataConfig.default.json"), encoding="utf-8"))
+        with open(os.path.join(REPO_ROOT, "config.json"), encoding="utf-8") as f:
+            config = json.load(f)
+        with open(os.path.join(REPO_ROOT, "contracts", "strata.contract.json"), encoding="utf-8") as f:
+            spec = json.load(f)
+        with open(os.path.join(REPO_ROOT, "contracts", "schemas", "strata.schema.json"), encoding="utf-8") as f:
+            schema = json.load(f)
+        with open(os.path.join(REPO_ROOT, "contracts", "fixtures", "StrataConfig.default.json"), encoding="utf-8") as f:
+            golden = json.load(f)
 
         self.assertEqual(config, golden, "Shipped config.json drifted from StrataConfig.default.json")
 

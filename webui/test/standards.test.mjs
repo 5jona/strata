@@ -93,12 +93,13 @@ test('compiled SideVeil plugin package matches manifest.ts and Vite + Pochita bu
   assert.equal(inlineScripts.length, 1, `${htmlPath} must only contain theme bootstrap script`);
 });
 
-test('all managed production source files stay within the 400-line hard limit', () => {
+test('all managed source and test files stay within the 400-line hard limit', () => {
   const scanSpecs = [
     { dir: path.join(WEBUI_ROOT, 'src'), extensions: ['.ts', '.tsx', '.css'] },
     { dir: path.join(REPO_ROOT, 'crates'), extensions: ['.rs'] },
     { dir: path.join(REPO_ROOT, 'container/strata-debug'), extensions: ['.py'] },
     { dir: path.join(REPO_ROOT, 'scripts'), extensions: ['.py', '.sh'] },
+    { dir: path.join(REPO_ROOT, 'tests'), extensions: ['.py'] },
   ];
   const explicitFiles = [
     path.join(REPO_ROOT, 'container/host-exec'),

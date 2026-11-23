@@ -56,13 +56,14 @@ chmod 0755 "${BIN_DIR}/stratad" "${BIN_DIR}/strata"
 echo "[*] Packaging KernelSU archive -> ${OUTPUT_DIR}/${PACKAGE_NAME}..."
 rm -f "${OUTPUT_DIR}/${PACKAGE_NAME}"
 
-python3 - <<EOF
+python3 - "${SCRIPT_DIR}" "${OUTPUT_DIR}/${PACKAGE_NAME}" <<'EOF'
 import os
 import stat
+import sys
 import zipfile
 
-script_dir = "${SCRIPT_DIR}"
-output_zip = os.path.join("${OUTPUT_DIR}", "${PACKAGE_NAME}")
+script_dir = sys.argv[1]
+output_zip = sys.argv[2]
 
 explicit_files = [
     ("module.prop", 0o644),

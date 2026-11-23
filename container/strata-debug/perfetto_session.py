@@ -11,8 +11,8 @@ from typing import Any
 
 import perfetto_analyze
 import perfetto_ops
+from host_runner import HOST_EXEC, run_host_text as _run_host
 
-HOST_EXEC = perfetto_ops.HOST_EXEC
 PERFETTO_BIN = perfetto_ops.PERFETTO_BIN
 
 DEFAULT_SESSION_KEY = "strata_ring"
@@ -59,14 +59,6 @@ def build_ring_config(
         f"}}\n"
         f"{sources}\n"
         f"duration_ms: {dur * 1000}\n"
-    )
-
-
-def _run_host(
-    argv: list[str], *, input_text: str | None = None, timeout: float = 15.0
-) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        [HOST_EXEC, *argv], input=input_text, capture_output=True, text=True, timeout=timeout, check=False
     )
 
 

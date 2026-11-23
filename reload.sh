@@ -51,9 +51,18 @@ while [ "$#" -gt 0 ]; do
         --skip-build) SKIP_BUILD=1; shift ;;
         --reset-config) RESET_CONFIG=1; shift ;;
         --local) LOCAL_MODE=1; SSH_TARGET=""; ADB_SERIAL=""; shift ;;
-        --ssh) SSH_TARGET="$2"; ADB_SERIAL=""; shift 2 ;;
-        --ssh-port) SSH_PORT="$2"; shift 2 ;;
-        --adb) ADB_SERIAL="$2"; SSH_TARGET=""; LOCAL_MODE=0; shift 2 ;;
+        --ssh)
+            [ "$#" -ge 2 ] || { echo "[!] Option $1 requires a value." >&2; usage >&2; exit 2; }
+            SSH_TARGET="$2"; ADB_SERIAL=""; shift 2
+            ;;
+        --ssh-port)
+            [ "$#" -ge 2 ] || { echo "[!] Option $1 requires a value." >&2; usage >&2; exit 2; }
+            SSH_PORT="$2"; shift 2
+            ;;
+        --adb)
+            [ "$#" -ge 2 ] || { echo "[!] Option $1 requires a value." >&2; usage >&2; exit 2; }
+            ADB_SERIAL="$2"; SSH_TARGET=""; LOCAL_MODE=0; shift 2
+            ;;
         -h|--help) usage; exit 0 ;;
         *) SSH_TARGET="$1"; ADB_SERIAL=""; shift ;;
     esac
@@ -102,20 +111,35 @@ for f in module.prop config.json service.sh post-fs-data.sh customize.sh uninsta
 done
 /system/bin/rm -f ${REMOTE_MOD_DIR}/container/adb-shim.py
 
+swap_dir_atomic() {
+    src_dir="\$1"
+    dst_dir="\$2"
+    mode_tag="\${3:-}"
+    tmp_dir="\${dst_dir}.new.\$\$"
+    old_dir="\${dst_dir}.old.\$\$"
+    /system/bin/rm -rf "\$tmp_dir" "\$old_dir"
+    /system/bin/cp -r "\$src_dir" "\$tmp_dir"
+    /system/bin/rm -rf "\${tmp_dir}/__pycache__"
+    /system/bin/find "\$tmp_dir" -type d -exec /system/bin/chmod 0755 {} +
+    /system/bin/find "\$tmp_dir" -type f -exec /system/bin/chmod 0644 {} +
+    if [ "\$mode_tag" = "strata-debug" ]; then
+        /system/bin/chmod 0755 "\${tmp_dir}/cli.py" "\${tmp_dir}/forward_bridge.py" 2>/dev/null || true
+    fi
+    [ -d "\$dst_dir" ] && /system/bin/mv "\$dst_dir" "\$old_dir"
+    if ! /system/bin/mv "\$tmp_dir" "\$dst_dir"; then
+        [ -d "\$old_dir" ] && [ ! -d "\$dst_dir" ] && /system/bin/mv "\$old_dir" "\$dst_dir" 2>/dev/null || true
+        /system/bin/rm -rf "\$tmp_dir"
+        return 1
+    fi
+    /system/bin/rm -rf "\$old_dir"
+}
+
 if [ -d "${STAGE_DIR}/container/strata-debug" ]; then
-    /system/bin/rm -rf ${REMOTE_MOD_DIR}/container/strata-debug
-    /system/bin/cp -r "${STAGE_DIR}/container/strata-debug" ${REMOTE_MOD_DIR}/container/strata-debug
-    /system/bin/rm -rf ${REMOTE_MOD_DIR}/container/strata-debug/__pycache__
-    /system/bin/find ${REMOTE_MOD_DIR}/container/strata-debug -type d -exec /system/bin/chmod 0755 {} +
-    /system/bin/find ${REMOTE_MOD_DIR}/container/strata-debug -type f -exec /system/bin/chmod 0644 {} +
-    /system/bin/chmod 0755 ${REMOTE_MOD_DIR}/container/strata-debug/cli.py ${REMOTE_MOD_DIR}/container/strata-debug/forward_bridge.py 2>/dev/null || true
+    swap_dir_atomic "${STAGE_DIR}/container/strata-debug" "${REMOTE_MOD_DIR}/container/strata-debug" strata-debug
 fi
 
 if [ -d "${STAGE_DIR}/plugins/strata.manager" ]; then
-    /system/bin/rm -rf ${REMOTE_MOD_DIR}/plugins/strata.manager
-    /system/bin/cp -r "${STAGE_DIR}/plugins/strata.manager" ${REMOTE_MOD_DIR}/plugins/strata.manager
-    /system/bin/find ${REMOTE_MOD_DIR}/plugins/strata.manager -type d -exec /system/bin/chmod 0755 {} +
-    /system/bin/find ${REMOTE_MOD_DIR}/plugins/strata.manager -type f -exec /system/bin/chmod 0644 {} +
+    swap_dir_atomic "${STAGE_DIR}/plugins/strata.manager" "${REMOTE_MOD_DIR}/plugins/strata.manager"
 fi
 
 if [ "${RESET_CONFIG}" -eq 1 ] || [ ! -f /data/adb/${MODULE_ID}/config.json ]; then

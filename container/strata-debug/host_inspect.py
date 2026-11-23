@@ -7,34 +7,20 @@ import posixpath
 import re
 import shutil
 import sqlite3
-import subprocess
 import tempfile
 from typing import Any
 
-HOST_EXEC = "/usr/local/bin/host-exec"
+from host_runner import (
+    HOST_EXEC,
+    run_host_bytes as _run_host_bytes,
+    run_host_text as _run_host_text,
+)
+
 ALLOWED_SQL_KEYWORDS = {"SELECT", "PRAGMA", "EXPLAIN", "WITH"}
 DEV_HEADER_RE = re.compile(r"^add device \d+:\s+(\S+)")
 DEV_ID_RE = re.compile(
     r"bus:\s*(\S+)\s+vendor\s+(\S+)\s+product\s+(\S+)\s+version\s+(\S+)"
 )
-
-
-def _run_host_text(args: list[str], timeout: float = 10.0) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        [HOST_EXEC, *args],
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        timeout=timeout,
-        check=False,
-    )
-
-
-def _run_host_bytes(args: list[str], timeout: float = 10.0) -> subprocess.CompletedProcess[bytes]:
-    return subprocess.run(
-        [HOST_EXEC, *args], capture_output=True, timeout=timeout, check=False
-    )
 
 
 def validate_readonly_sql(sql: str) -> str:
