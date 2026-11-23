@@ -1,5 +1,7 @@
 //! Golden wire fixture serde round-trip and default config parity tests.
 
+#![allow(clippy::expect_used)]
+
 use std::fs;
 use std::path::PathBuf;
 

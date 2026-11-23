@@ -1,15 +1,13 @@
 //! Event broadcast hub and optional auto-reconnecting SideVeil `uds-native` plugin bridge.
 
 mod bridge;
-mod reconnect;
 mod session;
 #[cfg(test)]
 mod tests;
-mod wire;
 
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, RwLock};
 
+use sideveil_plugin_sdk::PluginBackendHandle;
 use strata_protocol::EventEnvelope;
 use strata_protocol::rpc::{HudSetParams, HudStateResult, events};
 use tokio::sync::{Notify, broadcast, watch};
@@ -81,7 +79,7 @@ impl PluginEventSink for EventHub {
 /// Keeps `stratad` 100% standalone when SideVeil is absent, stopped, or disabled.
 #[derive(Debug)]
 pub(crate) struct SideVeilBridgeSeam {
-    connected: AtomicBool,
+    active_handle: RwLock<Option<PluginBackendHandle>>,
     hud: HudPreferences,
     config_wake: Notify,
 }
@@ -90,7 +88,7 @@ impl SideVeilBridgeSeam {
     #[must_use]
     pub(crate) fn new() -> Self {
         Self {
-            connected: AtomicBool::new(false),
+            active_handle: RwLock::new(None),
             hud: HudPreferences::new(),
             config_wake: Notify::new(),
         }
@@ -98,11 +96,17 @@ impl SideVeilBridgeSeam {
 
     #[must_use]
     pub(crate) fn is_connected(&self) -> bool {
-        self.connected.load(Ordering::Relaxed)
+        self.active_handle
+            .read()
+            .ok()
+            .and_then(|guard| guard.as_ref().map(PluginBackendHandle::is_connected))
+            .unwrap_or(false)
     }
 
-    pub(crate) fn set_connected(&self, connected: bool) {
-        self.connected.store(connected, Ordering::Relaxed);
+    pub(crate) fn set_active_handle(&self, handle: Option<PluginBackendHandle>) {
+        if let Ok(mut guard) = self.active_handle.write() {
+            *guard = handle;
+        }
     }
 
     #[must_use]

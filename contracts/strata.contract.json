@@ -1,4 +1,5 @@
 {
+  "$schema": "../../../pochita-webui-kit/packages/contracts-gen/contract.schema.json",
   "schemaVersion": 1,
   "name": "strata-protocol",
   "description": "Single source of truth for Strata JSON-RPC 2.0 constants, methods, events, error codes, and wire DTOs.",
