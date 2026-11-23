@@ -14,11 +14,13 @@ fi
 HOST_ENV_FILE="${STRATA_HOST_ENV_FILE:-/run/strata/host.env}"
 CALLER_TERM="${TERM:-xterm-256color}"
 
+HOST_CGROUP_EXEC='PATH="/system/bin:${PATH:-/usr/bin:/bin}"; if [ -w /sys/fs/cgroup/cgroup.procs ]; then printf "%s\n" "$$" > /sys/fs/cgroup/cgroup.procs 2>/dev/null || true; fi; exec /system/bin/env -i "$@"'
+
 run_nsenter() {
     if [ -e /proc/1/ns/time ] && [ -e /proc/self/ns/time ]; then
-        exec nsenter -t 1 -m -u -C -T -r -w -- /system/bin/env -i "$@"
+        exec nsenter -t 1 -m -u -C -T -r -w -- /system/bin/sh -c "$HOST_CGROUP_EXEC" host-exec "$@"
     fi
-    exec nsenter -t 1 -m -u -C -r -w -- /system/bin/env -i "$@"
+    exec nsenter -t 1 -m -u -C -r -w -- /system/bin/sh -c "$HOST_CGROUP_EXEC" host-exec "$@"
 }
 
 if [ -r "$HOST_ENV_FILE" ]; then
