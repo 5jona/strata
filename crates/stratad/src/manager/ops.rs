@@ -7,38 +7,32 @@ use strata_protocol::EventEnvelope;
 use strata_protocol::rpc::{
     BackupParams, BackupResult, BackupStartResult, CompactResult, ContainerLogsParams,
     ContainerLogsResult, FsckResult, MaintenanceDonePayload, SshKeyAddParams, SshKeysResult,
-    error_codes, events,
+    events,
 };
 use strata_runtime::{storage, sync};
 use strata_sys::mount;
 
+use crate::error::{DaemonError, DaemonResult};
 use crate::manager::ContainerManager;
 use crate::sideveil_seam::PluginEventSink;
 
 impl ContainerManager {
     /// Synchronizes `/etc/resolv.conf`, `/run/strata/host.env`, and bridge scripts for one container.
-    pub(crate) async fn sync_dns(&self, requested: Option<&str>) -> Result<String, (i32, String)> {
+    pub(crate) async fn sync_dns(&self, requested: Option<&str>) -> DaemonResult<String> {
         let (id, entry, _) = self.resolve_container(requested).await?;
         let mount_dir = PathBuf::from(&entry.mount_dir);
         let mounted = mount::is_ext4_mounted(&mount_dir).unwrap_or(false);
         if !mounted {
-            return Err((
-                error_codes::CONTAINER_NOT_RUNNING,
-                format!("container '{id}' rootfs is not mounted"),
-            ));
+            return Err(DaemonError::ContainerNotRunning(format!(
+                "container '{id}' rootfs is not mounted"
+            )));
         }
         let mdir = self.module_dir.clone();
         tokio::task::spawn_blocking(move || {
             sync::sync_container_runtime_files(&mount_dir, &entry, mdir.as_deref())
         })
         .await
-        .map_err(|e| {
-            (
-                error_codes::INTERNAL_ERROR,
-                format!("sync task failed: {e}"),
-            )
-        })?
-        .map_err(|e| (e.rpc_code(), e.to_string()))?;
+        .map_err(|e| DaemonError::join("sync task failed", e))??;
         Ok(id)
     }
 
@@ -46,7 +40,7 @@ impl ContainerManager {
     pub(crate) async fn read_logs(
         &self,
         params: ContainerLogsParams,
-    ) -> Result<ContainerLogsResult, (i32, String)> {
+    ) -> DaemonResult<ContainerLogsResult> {
         let (id, _, _) = self.resolve_container(params.container.as_deref()).await?;
         let log_path = self.log_file_path(&id);
         let max_lines = params.lines.unwrap_or(50).clamp(1, 500);
@@ -58,12 +52,9 @@ impl ContainerManager {
         })
     }
 
-    async fn ensure_no_temp_lease(&self, id: &str) -> Result<(), (i32, String)> {
+    async fn ensure_no_temp_lease(&self, id: &str) -> DaemonResult<()> {
         if self.leases.has_temp_mount_lease(id).await {
-            return Err((
-                error_codes::IMAGE_BUSY,
-                format!("container '{id}' has active temporary session leases"),
-            ));
+            return Err(DaemonError::TempLeaseActive(id.to_owned()));
         }
         Ok(())
     }
@@ -72,34 +63,36 @@ impl ContainerManager {
     pub(crate) async fn compact_container(
         &self,
         requested: Option<&str>,
-    ) -> Result<CompactResult, (i32, String)> {
+    ) -> DaemonResult<CompactResult> {
         let (id, entry, _) = self.resolve_container(requested).await?;
         let slot = self.get_or_create_slot(&id).await;
         let _guard = slot.lifecycle_lock.lock().await;
         self.ensure_no_temp_lease(&id).await?;
         let mdir = self.module_dir.clone();
         let cid = id.clone();
-        tokio::task::spawn_blocking(move || storage::compact_image(&cid, &entry, mdir.as_deref()))
-            .await
-            .map_err(|e| (error_codes::INTERNAL_ERROR, format!("compact join: {e}")))?
-            .map_err(|e| (e.rpc_code(), e.to_string()))
+        let res = tokio::task::spawn_blocking(move || {
+            storage::compact_image(&cid, &entry, mdir.as_deref())
+        })
+        .await
+        .map_err(|e| DaemonError::join("compact join", e))??;
+        Ok(res)
     }
 
     /// Stops container if running and runs `/system/bin/e2fsck -f -y` under continuous lifecycle lock.
     pub(crate) async fn fsck_container(
         self: &Arc<Self>,
         requested: Option<&str>,
-    ) -> Result<FsckResult, (i32, String)> {
+    ) -> DaemonResult<FsckResult> {
         let (id, entry, _) = self.resolve_container(requested).await?;
         let slot = self.get_or_create_slot(&id).await;
         let _guard = slot.lifecycle_lock.lock().await;
         self.ensure_no_temp_lease(&id).await?;
         let _ = self.stop_locked(&id, &entry, &slot).await?;
         let cid = id.clone();
-        tokio::task::spawn_blocking(move || storage::fsck_image(&cid, &entry))
+        let res = tokio::task::spawn_blocking(move || storage::fsck_image(&cid, &entry))
             .await
-            .map_err(|e| (error_codes::INTERNAL_ERROR, format!("fsck join: {e}")))?
-            .map_err(|e| (e.rpc_code(), e.to_string()))
+            .map_err(|e| DaemonError::join("fsck join", e))??;
+        Ok(res)
     }
 
     /// Stops container cleanly if running, writes atomic gzip backup, and restores prior run state
@@ -107,11 +100,10 @@ impl ContainerManager {
     pub(crate) async fn backup_container(
         self: &Arc<Self>,
         params: BackupParams,
-    ) -> Result<BackupResult, (i32, String)> {
+    ) -> DaemonResult<BackupResult> {
         let (id, entry, _) = self.resolve_container(params.container.as_deref()).await?;
         if params.output_path.trim().is_empty() {
-            return Err((
-                error_codes::INVALID_PARAMS,
+            return Err(DaemonError::InvalidParams(
                 "outputPath must not be empty".to_owned(),
             ));
         }
@@ -126,8 +118,7 @@ impl ContainerManager {
         let bytes_written =
             tokio::task::spawn_blocking(move || storage::backup_image_gzip(&src, &dst))
                 .await
-                .map_err(|e| (error_codes::INTERNAL_ERROR, format!("backup join: {e}")))?
-                .map_err(|e| (e.rpc_code(), e.to_string()))?;
+                .map_err(|e| DaemonError::join("backup join", e))??;
 
         let mut restarted = false;
         if was_running && self.start_locked(&id, &entry, &slot, false).await.is_ok() {
@@ -146,12 +137,11 @@ impl ContainerManager {
     pub(crate) async fn backup_container_async(
         self: &Arc<Self>,
         params: BackupParams,
-    ) -> Result<BackupStartResult, (i32, String)> {
+    ) -> DaemonResult<BackupStartResult> {
         let (id, _, _) = self.resolve_container(params.container.as_deref()).await?;
         let trimmed = params.output_path.trim().to_owned();
         if trimmed.is_empty() {
-            return Err((
-                error_codes::INVALID_PARAMS,
+            return Err(DaemonError::InvalidParams(
                 "outputPath must not be empty".to_owned(),
             ));
         }
@@ -177,12 +167,12 @@ impl ContainerManager {
                     ),
                     error: None,
                 },
-                Err((_, err_msg)) => MaintenanceDonePayload {
+                Err(err) => MaintenanceDonePayload {
                     container: cid,
                     op: "backup".to_owned(),
                     ok: false,
                     summary: out_path,
-                    error: Some(err_msg),
+                    error: Some(err.to_string()),
                 },
             };
             mgr.event_hub.emit(EventEnvelope::new(
@@ -203,14 +193,14 @@ impl ContainerManager {
         &self,
         requested: Option<&str>,
         add_params: Option<SshKeyAddParams>,
-    ) -> Result<SshKeysResult, (i32, String)> {
+    ) -> DaemonResult<SshKeysResult> {
         let (id, entry, _) = self.resolve_container(requested).await?;
         let slot = self.get_or_create_slot(&id).await;
         let _guard = slot.lifecycle_lock.lock().await;
         let mdir = self.module_dir.clone();
         let cid = id.clone();
 
-        tokio::task::spawn_blocking(move || {
+        let res = tokio::task::spawn_blocking(move || {
             let mount_dir = PathBuf::from(&entry.mount_dir);
             let was_mounted = mount::is_ext4_mounted(&mount_dir).unwrap_or(false);
             if !was_mounted {
@@ -230,8 +220,8 @@ impl ContainerManager {
             })
         })
         .await
-        .map_err(|e| (error_codes::INTERNAL_ERROR, format!("ssh-key join: {e}")))?
-        .map_err(|e| (e.rpc_code(), e.to_string()))
+        .map_err(|e| DaemonError::join("ssh-key join", e))??;
+        Ok(res)
     }
 }
 
@@ -240,7 +230,7 @@ mod tests {
     use super::*;
     use crate::config_store::ConfigStore;
     use crate::sideveil_seam::EventHub;
-    use strata_protocol::rpc::SessionMode;
+    use strata_protocol::rpc::{SessionMode, error_codes};
 
     #[tokio::test]
     async fn temp_mount_leases_block_start_compact_fsck_and_backup() {
@@ -273,7 +263,7 @@ mod tests {
             manager.fsck_container(Some("main")).await.map(|_| ()),
         ] {
             assert_eq!(
-                res.expect_err("must reject active temp lease").0,
+                res.expect_err("must reject active temp lease").code(),
                 error_codes::IMAGE_BUSY
             );
         }

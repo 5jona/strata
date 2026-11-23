@@ -9,12 +9,12 @@ use strata_protocol::rpc::{
     BackupParams, ContainerConfigPatchParams, ContainerConfigResult, ContainerLogsParams,
     ContainerSelectorParams, DaemonHealthResult, EventsSubscribeResult, HudSetParams, PingResult,
     SessionAcquireParams, SessionReleaseParams, SessionReleaseResult, SshKeyAddParams,
-    SyncDnsResult, TaskCancelParams, TaskCancelResult, TaskLogsParams, TaskRunParams, error_codes,
-    methods,
+    SyncDnsResult, TaskCancelParams, TaskCancelResult, TaskLogsParams, TaskRunParams, methods,
 };
 use strata_protocol::{DaemonSummarySnapshot, RpcRequest, RpcResponse};
 
 use crate::config_store::ConfigStore;
+use crate::error::{DaemonError, DaemonResult};
 use crate::manager::ContainerManager;
 use crate::sideveil_seam::SideVeilBridgeSeam;
 use crate::task_runner::TaskRunner;
@@ -61,7 +61,10 @@ impl Dispatcher {
         let id = req.id.clone();
         match self.dispatch(caller, &req.method, req.params).await {
             Ok(result) => RpcResponse::ok(id, result),
-            Err((code, message)) => RpcResponse::err(id, code, message),
+            Err(err) => {
+                let (code, message) = err.to_rpc_tuple();
+                RpcResponse::err(id, code, message)
+            }
         }
     }
 
@@ -70,7 +73,7 @@ impl Dispatcher {
         caller: RpcCaller,
         method: &str,
         params: Option<Value>,
-    ) -> Result<Value, (i32, String)> {
+    ) -> DaemonResult<Value> {
         match method {
             methods::DAEMON_PING => to_json(PingResult {
                 pong: true,
@@ -186,8 +189,7 @@ impl Dispatcher {
                     let p: SessionAcquireParams = parse_optional_params(params)?;
                     to_json(self.manager.acquire_session(conn_id, p).await?)
                 }
-                RpcCaller::SideVeilBridge => Err((
-                    error_codes::PERMISSION_DENIED,
+                RpcCaller::SideVeilBridge => Err(DaemonError::PermissionDenied(
                     "session.acquire is restricted to local strata.sock clients".to_owned(),
                 )),
             },
@@ -197,8 +199,7 @@ impl Dispatcher {
                     let released = self.manager.release_session(p).await?;
                     to_json(SessionReleaseResult { released })
                 }
-                RpcCaller::SideVeilBridge => Err((
-                    error_codes::PERMISSION_DENIED,
+                RpcCaller::SideVeilBridge => Err(DaemonError::PermissionDenied(
                     "session.release is restricted to local strata.sock clients".to_owned(),
                 )),
             },
@@ -222,10 +223,7 @@ impl Dispatcher {
                 to_json(self.sideveil.update_hud(p))
             }
             methods::EVENTS_SUBSCRIBE => to_json(EventsSubscribeResult { subscribed: true }),
-            other => Err((
-                error_codes::METHOD_NOT_FOUND,
-                format!("unknown method '{other}'"),
-            )),
+            other => Err(DaemonError::MethodNotFound(other.to_owned())),
         }
     }
 
@@ -234,34 +232,26 @@ impl Dispatcher {
     }
 }
 
-fn parse_optional_params<T: DeserializeOwned + Default>(
-    params: Option<Value>,
-) -> Result<T, (i32, String)> {
+fn parse_optional_params<T: DeserializeOwned + Default>(params: Option<Value>) -> DaemonResult<T> {
     match params {
         None | Some(Value::Null) => Ok(T::default()),
         Some(v) => serde_json::from_value(v)
-            .map_err(|e| (error_codes::INVALID_PARAMS, format!("invalid params: {e}"))),
+            .map_err(|e| DaemonError::InvalidParams(format!("invalid params: {e}"))),
     }
 }
 
-fn parse_required_params<T: DeserializeOwned>(params: Option<Value>) -> Result<T, (i32, String)> {
+fn parse_required_params<T: DeserializeOwned>(params: Option<Value>) -> DaemonResult<T> {
     let Some(v) = params else {
-        return Err((
-            error_codes::INVALID_PARAMS,
+        return Err(DaemonError::InvalidParams(
             "missing required params object".to_owned(),
         ));
     };
     serde_json::from_value(v)
-        .map_err(|e| (error_codes::INVALID_PARAMS, format!("invalid params: {e}")))
+        .map_err(|e| DaemonError::InvalidParams(format!("invalid params: {e}")))
 }
 
-fn to_json<T: serde::Serialize>(value: T) -> Result<Value, (i32, String)> {
-    serde_json::to_value(value).map_err(|e| {
-        (
-            error_codes::INTERNAL_ERROR,
-            format!("serialize result: {e}"),
-        )
-    })
+fn to_json<T: serde::Serialize>(value: T) -> DaemonResult<Value> {
+    serde_json::to_value(value).map_err(|e| DaemonError::Internal(format!("serialize result: {e}")))
 }
 
 fn current_uid() -> u32 {

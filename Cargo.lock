@@ -233,6 +233,7 @@ dependencies = [
  "strata-protocol",
  "strata-runtime",
  "strata-sys",
+ "thiserror",
  "tokio",
 ]
 

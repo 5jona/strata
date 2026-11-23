@@ -11,13 +11,14 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use strata_protocol::rpc::{
     TaskCancelParams, TaskLogsParams, TaskLogsResult, TaskOutputPayload, TaskRunParams,
-    TaskRunResult, TaskStream, TaskSummary, error_codes,
+    TaskRunResult, TaskStream, TaskSummary,
 };
 use strata_runtime::{EnterSpec, spec_pipe};
 use strata_sys::pidfd::PidFd;
 use tokio::process::Command;
 use tokio::sync::Mutex;
 
+use crate::error::{DaemonError, DaemonResult};
 use crate::manager::ContainerManager;
 use crate::sideveil_seam::EventHub;
 use crate::task_runner::io::{now_unix_ms, spawn_stream_reader, spawn_task_waiter};
@@ -59,13 +60,9 @@ impl TaskRunner {
     }
 
     /// Spawns a headless command inside a running container and streams `task.output` / `task.exit`.
-    pub(crate) async fn run_task(
-        &self,
-        params: TaskRunParams,
-    ) -> Result<TaskRunResult, (i32, String)> {
+    pub(crate) async fn run_task(&self, params: TaskRunParams) -> DaemonResult<TaskRunResult> {
         if params.command.is_empty() {
-            return Err((
-                error_codes::INVALID_PARAMS,
+            return Err(DaemonError::InvalidParams(
                 "task command must not be empty".to_owned(),
             ));
         }
@@ -83,10 +80,8 @@ impl TaskRunner {
             term: Some("dumb".to_owned()),
         };
 
-        let spec_fd =
-            spec_pipe::create_spec_pipe(&spec).map_err(|e| (e.rpc_code(), e.to_string()))?;
-        let (err_read, err_write) =
-            spec_pipe::create_exec_error_pipe().map_err(|e| (e.rpc_code(), e.to_string()))?;
+        let spec_fd = spec_pipe::create_spec_pipe(&spec)?;
+        let (err_read, err_write) = spec_pipe::create_exec_error_pipe()?;
 
         let mut child = Command::new(&self.self_exe)
             .arg("__exec")
@@ -98,12 +93,7 @@ impl TaskRunner {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
-            .map_err(|e| {
-                (
-                    error_codes::INTERNAL_ERROR,
-                    format!("spawn task helper: {e}"),
-                )
-            })?;
+            .map_err(|e| DaemonError::Internal(format!("spawn task helper: {e}")))?;
 
         drop(spec_fd);
         drop(err_write);
@@ -115,17 +105,17 @@ impl TaskRunner {
             Ok(Ok(Some(err_msg))) => {
                 let _ = child.kill().await;
                 let _ = child.wait().await;
-                return Err((error_codes::INTERNAL_ERROR, err_msg));
+                return Err(DaemonError::Internal(err_msg));
             }
             Ok(Err(e)) => {
                 let _ = child.kill().await;
                 let _ = child.wait().await;
-                return Err((e.rpc_code(), e.to_string()));
+                return Err(e.into());
             }
             Err(e) => {
                 let _ = child.kill().await;
                 let _ = child.wait().await;
-                return Err((error_codes::INTERNAL_ERROR, format!("task exec check: {e}")));
+                return Err(DaemonError::join("task exec check", e));
             }
         }
 
@@ -206,24 +196,18 @@ impl TaskRunner {
     }
 
     /// Cancels a running task via `pidfd_send_signal(SIGTERM)`.
-    pub(crate) async fn cancel_task(
-        &self,
-        params: TaskCancelParams,
-    ) -> Result<bool, (i32, String)> {
+    pub(crate) async fn cancel_task(&self, params: TaskCancelParams) -> DaemonResult<bool> {
         let pidfd = {
             let guard = self.tasks.lock().await;
             let Some(entry) = guard.iter().find(|t| t.summary.task_id == params.task_id) else {
-                return Err((
-                    error_codes::TASK_NOT_FOUND,
-                    format!("task '{}' not found", params.task_id),
-                ));
+                return Err(DaemonError::TaskNotFound(params.task_id));
             };
             entry.pidfd.clone()
         };
         if let Some(pfd) = pidfd {
             let sent = pfd
                 .send_signal(libc::SIGTERM)
-                .map_err(|e| (error_codes::INTERNAL_ERROR, e.to_string()))?;
+                .map_err(|e| DaemonError::Internal(e.to_string()))?;
             return Ok(sent);
         }
         Ok(false)
@@ -240,16 +224,10 @@ impl TaskRunner {
     }
 
     /// Replays buffered stdout/stderr lines for a tracked task (`task.logs`).
-    pub(crate) async fn task_logs(
-        &self,
-        params: TaskLogsParams,
-    ) -> Result<TaskLogsResult, (i32, String)> {
+    pub(crate) async fn task_logs(&self, params: TaskLogsParams) -> DaemonResult<TaskLogsResult> {
         let guard = self.tasks.lock().await;
         let Some(entry) = guard.iter().find(|t| t.summary.task_id == params.task_id) else {
-            return Err((
-                error_codes::TASK_NOT_FOUND,
-                format!("task '{}' not found", params.task_id),
-            ));
+            return Err(DaemonError::TaskNotFound(params.task_id));
         };
         let max_lines = params
             .limit

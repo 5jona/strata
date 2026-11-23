@@ -4,12 +4,12 @@ use std::process::Child;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use strata_protocol::rpc::error_codes;
 use strata_protocol::{ContainerConfig, ContainerPhase, ContainerStatusSnapshot};
 use strata_runtime::storage;
 use strata_sys::{namespace, pidfd::PidFd};
 use tokio::io::unix::AsyncFd;
 
+use crate::error::{DaemonError, DaemonResult};
 use crate::manager::launch::{build_stage2_spec, spawn_stage2_init};
 use crate::manager::{ContainerManager, ContainerSlot, StopOutcome};
 
@@ -18,7 +18,7 @@ impl ContainerManager {
     pub(crate) async fn start_container(
         self: &Arc<Self>,
         requested: Option<&str>,
-    ) -> Result<ContainerStatusSnapshot, (i32, String)> {
+    ) -> DaemonResult<ContainerStatusSnapshot> {
         let (id, cfg, is_default) = self.resolve_container(requested).await?;
         let slot = self.get_or_create_slot(&id).await;
         let _guard = slot.lifecycle_lock.lock().await;
@@ -33,10 +33,7 @@ impl ContainerManager {
         }
 
         if self.leases.has_temp_mount_lease(&id).await {
-            return Err((
-                error_codes::IMAGE_BUSY,
-                format!("container '{id}' has active temporary session leases"),
-            ));
+            return Err(DaemonError::TempLeaseActive(id));
         }
 
         self.start_locked(&id, &cfg, &slot, false).await?;
@@ -76,8 +73,7 @@ impl ContainerManager {
             storage::teardown_container(&cid, &cfg_owned, ns_pid, mnt_ns)
         })
         .await
-        .map_err(|e| (error_codes::INTERNAL_ERROR, format!("teardown join: {e}")))?
-        .map_err(|e| (e.rpc_code(), e.to_string()))?;
+        .map_err(|e| DaemonError::join("teardown join", e))??;
 
         {
             let mut live = slot.state.write().await;
@@ -96,15 +92,12 @@ impl ContainerManager {
     pub(crate) async fn restart_container(
         self: &Arc<Self>,
         requested: Option<&str>,
-    ) -> Result<ContainerStatusSnapshot, (i32, String)> {
+    ) -> DaemonResult<ContainerStatusSnapshot> {
         let (id, cfg, is_default) = self.resolve_container(requested).await?;
         let slot = self.get_or_create_slot(&id).await;
         let _guard = slot.lifecycle_lock.lock().await;
         if self.leases.has_temp_mount_lease(&id).await {
-            return Err((
-                error_codes::IMAGE_BUSY,
-                format!("container '{id}' has active temporary session leases"),
-            ));
+            return Err(DaemonError::TempLeaseActive(id));
         }
         let _ = self.stop_locked(&id, &cfg, &slot).await?;
         self.start_locked(&id, &cfg, &slot, false).await?;
@@ -117,7 +110,7 @@ impl ContainerManager {
         cfg: &ContainerConfig,
         slot: &Arc<ContainerSlot>,
         is_restart: bool,
-    ) -> Result<(), (i32, String)> {
+    ) -> DaemonResult<()> {
         let prev_phase = {
             let mut live = slot.state.write().await;
             live.prepare_start(is_restart)
@@ -130,13 +123,12 @@ impl ContainerManager {
         let mount_res =
             tokio::task::spawn_blocking(move || storage::mount_rootfs(&mount_cfg, mdir.as_deref()))
                 .await
-                .map_err(|e| (error_codes::INTERNAL_ERROR, format!("mount join: {e}")))?;
+                .map_err(|e| DaemonError::join("mount join", e))?;
 
         if let Err(err) = mount_res {
-            let msg = err.to_string();
-            let code = err.rpc_code();
-            self.mark_failed(id, slot, &msg).await;
-            return Err((code, msg));
+            let daemon_err = DaemonError::from(err);
+            self.mark_failed(id, slot, &daemon_err.to_string()).await;
+            return Err(daemon_err);
         }
 
         let spec = build_stage2_spec(id, cfg);
@@ -145,7 +137,7 @@ impl ContainerManager {
         let spawn_res =
             tokio::task::spawn_blocking(move || spawn_stage2_init(&self_exe, &log_path, &spec))
                 .await
-                .map_err(|e| (error_codes::INTERNAL_ERROR, format!("spawn join: {e}")))?;
+                .map_err(|e| DaemonError::join("spawn join", e))?;
 
         let (child, pid, pidfd, mnt_ns_inode) = match spawn_res {
             Ok(launched) => launched,
@@ -157,7 +149,7 @@ impl ContainerManager {
                 })
                 .await;
                 self.mark_failed(id, slot, &msg).await;
-                return Err((error_codes::INTERNAL_ERROR, msg));
+                return Err(DaemonError::Internal(msg));
             }
         };
 
@@ -255,36 +247,5 @@ impl ContainerManager {
                 let _ = mgr.start_locked(&id, &cfg, &slot, true).await;
             }
         });
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::manager::ContainerLiveState;
-
-    #[test]
-    fn persisted_restart_backoff_escalates_across_restarts_and_resets_on_explicit_start() {
-        let mut live = ContainerLiveState::default();
-        live.prepare_start(false);
-        live.phase = ContainerPhase::Running;
-
-        // Consecutive rapid crashes must escalate: 2s -> 4s -> 8s -> 16s -> 30s -> 30s.
-        let mut delays = Vec::new();
-        for _ in 0..6 {
-            let (_, _, _, delay) = live.record_unexpected_exit(250, "crashed".to_owned());
-            delays.push(delay);
-            live.prepare_start(true);
-            live.phase = ContainerPhase::Running;
-        }
-        assert_eq!(delays, vec![2_000, 4_000, 8_000, 16_000, 30_000, 30_000]);
-
-        // Staying healthy past 60s resets the backoff window to 2s.
-        let (_, _, _, post_healthy) = live.record_unexpected_exit(90_000, "late exit".to_owned());
-        assert_eq!(post_healthy, 2_000);
-
-        // Explicit user start resets accumulated failures back to 0.
-        live.prepare_start(false);
-        assert_eq!(live.restart_backoff.failures(), 0);
     }
 }

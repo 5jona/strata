@@ -2,6 +2,7 @@
 
 mod config_store;
 mod dispatcher;
+mod error;
 mod manager;
 mod net_watcher;
 mod rpc_server;

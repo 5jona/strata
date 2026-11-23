@@ -4,13 +4,14 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use strata_protocol::rpc::{ContainerConfigPatchParams, error_codes};
+use strata_protocol::rpc::ContainerConfigPatchParams;
 use strata_protocol::{ContainerConfig, StrataConfig};
 use strata_runtime::fs_atomic;
 use strata_sys::inotify::InotifyWatcher;
 use tokio::io::unix::AsyncFd;
 use tokio::sync::{RwLock, watch};
 
+use crate::error::{DaemonError, DaemonResult};
 use crate::manager::ContainerManager;
 use crate::sideveil_seam::SideVeilBridgeSeam;
 
@@ -56,23 +57,17 @@ impl ConfigStore {
     }
 
     /// Re-reads and validates `config.json` from disk, updating in-memory state if valid.
-    pub(crate) async fn reload_from_disk(&self) -> Result<StrataConfig, (i32, String)> {
+    pub(crate) async fn reload_from_disk(&self) -> DaemonResult<StrataConfig> {
         let (parsed, _) = self.reload_from_disk_inner().await?;
         Ok(parsed)
     }
 
-    async fn reload_from_disk_inner(&self) -> Result<(StrataConfig, bool), (i32, String)> {
-        let raw = fs::read_to_string(&self.path).map_err(|e| {
-            (
-                error_codes::INTERNAL_ERROR,
-                format!("read '{}': {e}", self.path.display()),
-            )
-        })?;
+    async fn reload_from_disk_inner(&self) -> DaemonResult<(StrataConfig, bool)> {
+        let raw = fs::read_to_string(&self.path)
+            .map_err(|e| DaemonError::Internal(format!("read '{}': {e}", self.path.display())))?;
         let parsed: StrataConfig = serde_json::from_str(&raw)
-            .map_err(|e| (error_codes::INVALID_PARAMS, format!("parse config: {e}")))?;
-        parsed
-            .validate()
-            .map_err(|e| (error_codes::INVALID_PARAMS, e.to_string()))?;
+            .map_err(|e| DaemonError::InvalidParams(format!("parse config: {e}")))?;
+        parsed.validate()?;
 
         let mut guard = self.inner.write().await;
         let changed = *guard != parsed;
@@ -86,7 +81,7 @@ impl ConfigStore {
     pub(crate) async fn patch_container(
         &self,
         params: ContainerConfigPatchParams,
-    ) -> Result<(String, ContainerConfig), (i32, String)> {
+    ) -> DaemonResult<(String, ContainerConfig)> {
         let mut guard = self.inner.write().await;
         let mut candidate = guard.clone();
         let target_id = candidate
@@ -94,10 +89,7 @@ impl ConfigStore {
             .to_owned();
 
         let Some(entry) = candidate.containers.get_mut(&target_id) else {
-            return Err((
-                error_codes::CONTAINER_NOT_FOUND,
-                format!("container '{target_id}' not found"),
-            ));
+            return Err(DaemonError::ContainerNotFound(target_id));
         };
 
         if let Some(v) = params.enabled {
@@ -131,22 +123,15 @@ impl ConfigStore {
             entry.extra_mounts = v;
         }
 
-        candidate
-            .validate()
-            .map_err(|e| (error_codes::INVALID_PARAMS, e.to_string()))?;
+        candidate.validate()?;
 
-        persist_config(&self.path, &candidate).map_err(|e| (error_codes::INTERNAL_ERROR, e))?;
+        persist_config(&self.path, &candidate).map_err(DaemonError::Internal)?;
 
         let updated = candidate
             .containers
             .get(&target_id)
             .cloned()
-            .ok_or_else(|| {
-                (
-                    error_codes::CONTAINER_NOT_FOUND,
-                    format!("container '{target_id}' missing after patch"),
-                )
-            })?;
+            .ok_or_else(|| DaemonError::ContainerMissingAfterPatch(target_id.clone()))?;
         *guard = candidate;
         Ok((target_id, updated))
     }

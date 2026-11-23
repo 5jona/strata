@@ -4,13 +4,12 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use strata_protocol::capabilities::CapProfile;
-use strata_protocol::rpc::{
-    AttachLease, SessionAcquireParams, SessionMode, SessionReleaseParams, error_codes,
-};
+use strata_protocol::rpc::{AttachLease, SessionAcquireParams, SessionMode, SessionReleaseParams};
 use strata_runtime::storage;
 use strata_sys::{cgroup, namespace};
 use tokio::sync::Mutex;
 
+use crate::error::{DaemonError, DaemonResult};
 use crate::manager::ContainerManager;
 
 #[derive(Debug, Clone)]
@@ -98,7 +97,7 @@ impl ContainerManager {
         &self,
         conn_id: u64,
         params: SessionAcquireParams,
-    ) -> Result<AttachLease, (i32, String)> {
+    ) -> DaemonResult<AttachLease> {
         let (id, cfg, _) = self.resolve_container(params.container.as_deref()).await?;
         let slot = self.get_or_create_slot(&id).await;
         let _guard = slot.lifecycle_lock.lock().await;
@@ -111,12 +110,7 @@ impl ContainerManager {
 
         if params.debug {
             if is_running {
-                return Err((
-                    error_codes::CONTAINER_ALREADY_RUNNING,
-                    format!(
-                        "stop running container '{id}' before entering full host-runtime debug mode"
-                    ),
-                ));
+                return Err(DaemonError::ContainerAlreadyRunning(id));
             }
             self.mount_temp_rootfs(&cfg, "debug").await?;
             let lease_id = self
@@ -171,26 +165,17 @@ impl ContainerManager {
         &self,
         cfg: &strata_protocol::ContainerConfig,
         kind: &str,
-    ) -> Result<(), (i32, String)> {
+    ) -> DaemonResult<()> {
         let mount_cfg = cfg.clone();
         let mdir = self.module_dir.clone();
         tokio::task::spawn_blocking(move || storage::mount_rootfs(&mount_cfg, mdir.as_deref()))
             .await
-            .map_err(|e| {
-                (
-                    error_codes::INTERNAL_ERROR,
-                    format!("{kind} mount join: {e}"),
-                )
-            })?
-            .map(|_| ())
-            .map_err(|e| (e.rpc_code(), e.to_string()))
+            .map_err(|e| DaemonError::join(format!("{kind} mount join"), e))??;
+        Ok(())
     }
 
     /// Releases a single lease explicitly and tears down temporary oneshot/debug mounts if unused.
-    pub(crate) async fn release_session(
-        &self,
-        params: SessionReleaseParams,
-    ) -> Result<bool, (i32, String)> {
+    pub(crate) async fn release_session(&self, params: SessionReleaseParams) -> DaemonResult<bool> {
         let Some(lease) = self.leases.remove(&params.lease_id).await else {
             return Ok(false);
         };

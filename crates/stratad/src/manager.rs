@@ -4,98 +4,24 @@ mod launch;
 pub(crate) mod leases;
 pub(crate) mod ops;
 mod snapshot;
+pub(crate) mod state;
 pub(crate) mod supervisor;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Instant;
 
-use strata_protocol::rpc::{StorageCleanupReport, error_codes};
-use strata_protocol::{ContainerConfig, ContainerPhase, ContainerStatusSnapshot, RestartBackoff};
+use strata_protocol::rpc::StorageCleanupReport;
+use strata_protocol::{ContainerConfig, ContainerStatusSnapshot};
 use strata_runtime::sync;
 use strata_sys::{mount, namespace};
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::RwLock;
 
 use crate::config_store::ConfigStore;
+use crate::error::{DaemonError, DaemonResult};
 use crate::manager::leases::LeaseRegistry;
+pub(crate) use crate::manager::state::ContainerSlot;
 use crate::sideveil_seam::EventHub;
-
-/// Per-container live state tracked inside `stratad`.
-#[derive(Debug)]
-pub(crate) struct ContainerLiveState {
-    pub(crate) phase: ContainerPhase,
-    pub(crate) ns_pid: Option<u32>,
-    pub(crate) mnt_ns_inode: Option<u64>,
-    pub(crate) started_at: Option<Instant>,
-    pub(crate) restart_count: u32,
-    pub(crate) restart_backoff: RestartBackoff,
-    pub(crate) last_error: Option<String>,
-    pub(crate) desired_running: bool,
-    pub(crate) generation: u64,
-}
-
-impl Default for ContainerLiveState {
-    fn default() -> Self {
-        Self {
-            phase: ContainerPhase::default(),
-            ns_pid: None,
-            mnt_ns_inode: None,
-            started_at: None,
-            restart_count: 0,
-            restart_backoff: RestartBackoff::standard(),
-            last_error: None,
-            desired_running: false,
-            generation: 0,
-        }
-    }
-}
-
-impl ContainerLiveState {
-    pub(crate) fn prepare_start(&mut self, is_restart: bool) -> ContainerPhase {
-        let prev = self.phase;
-        self.phase = ContainerPhase::Starting;
-        self.desired_running = true;
-        self.last_error = None;
-        self.generation = self.generation.saturating_add(1);
-        if !is_restart {
-            self.restart_backoff.reset();
-        }
-        prev
-    }
-
-    pub(crate) fn record_unexpected_exit(
-        &mut self,
-        ran_for_ms: u64,
-        reason: String,
-    ) -> (ContainerPhase, Option<u32>, Option<u64>, u64) {
-        let prev = self.phase;
-        let ns_pid = self.ns_pid;
-        let mnt_ns = self.mnt_ns_inode;
-        self.phase = ContainerPhase::Failed;
-        self.ns_pid = None;
-        self.mnt_ns_inode = None;
-        self.started_at = None;
-        self.last_error = Some(reason);
-        let delay_ms = self.restart_backoff.record_exit(ran_for_ms);
-        (prev, ns_pid, mnt_ns, delay_ms)
-    }
-}
-
-#[derive(Debug)]
-pub(crate) struct ContainerSlot {
-    pub(crate) lifecycle_lock: Mutex<()>,
-    pub(crate) state: RwLock<ContainerLiveState>,
-}
-
-impl ContainerSlot {
-    fn new() -> Self {
-        Self {
-            lifecycle_lock: Mutex::new(()),
-            state: RwLock::new(ContainerLiveState::default()),
-        }
-    }
-}
 
 /// Central multi-container orchestrator.
 #[derive(Debug)]
@@ -143,14 +69,11 @@ impl ContainerManager {
     pub(crate) async fn resolve_container(
         &self,
         requested: Option<&str>,
-    ) -> Result<(String, ContainerConfig, bool), (i32, String)> {
+    ) -> DaemonResult<(String, ContainerConfig, bool)> {
         let cfg = self.config_store.snapshot().await;
         let Some((id, entry)) = cfg.get_container(requested) else {
             let name = cfg.resolve_container_id(requested);
-            return Err((
-                error_codes::CONTAINER_NOT_FOUND,
-                format!("container '{name}' not found"),
-            ));
+            return Err(DaemonError::ContainerNotFound(name.to_owned()));
         };
         Ok((id.to_owned(), entry.clone(), id == cfg.default_container))
     }
@@ -169,8 +92,8 @@ impl ContainerManager {
                 );
                 continue;
             }
-            if let Err((_, msg)) = self.start_container(Some(id.as_str())).await {
-                eprintln!("stratad: auto-start for '{id}' failed: {msg}");
+            if let Err(err) = self.start_container(Some(id.as_str())).await {
+                eprintln!("stratad: auto-start for '{id}' failed: {err}");
             }
         }
     }
@@ -254,7 +177,7 @@ impl ContainerManager {
     pub(crate) async fn container_status(
         &self,
         requested: Option<&str>,
-    ) -> Result<ContainerStatusSnapshot, (i32, String)> {
+    ) -> DaemonResult<ContainerStatusSnapshot> {
         let (id, entry, is_default) = self.resolve_container(requested).await?;
         Ok(self.build_snapshot(&id, &entry, is_default).await)
     }
@@ -275,7 +198,7 @@ impl ContainerManager {
     pub(crate) async fn running_target(
         &self,
         requested: Option<&str>,
-    ) -> Result<(String, u32, ContainerConfig), (i32, String)> {
+    ) -> DaemonResult<(String, u32, ContainerConfig)> {
         let (id, entry, _) = self.resolve_container(requested).await?;
         let slot = self.get_or_create_slot(&id).await;
         let live = slot.state.read().await;
@@ -285,10 +208,9 @@ impl ContainerManager {
         {
             return Ok((id, pid, entry));
         }
-        Err((
-            error_codes::CONTAINER_NOT_RUNNING,
-            format!("container '{id}' is not running"),
-        ))
+        Err(DaemonError::ContainerNotRunning(format!(
+            "container '{id}' is not running"
+        )))
     }
 
     pub(crate) fn log_file_path(&self, container_id: &str) -> PathBuf {
@@ -297,4 +219,4 @@ impl ContainerManager {
 }
 
 /// Helper alias used by `supervisor` teardown return path.
-pub(crate) type StopOutcome = Result<StorageCleanupReport, (i32, String)>;
+pub(crate) type StopOutcome = DaemonResult<StorageCleanupReport>;
