@@ -220,9 +220,13 @@ def save_encoded_image(
             fd_o, tmp_out = tempfile.mkstemp(prefix=".strata-vis-", suffix=".png", dir=parent)
             with os.fdopen(fd_o, "wb") as f:
                 f.write(png_bytes)
-            os.replace(tmp_out, out_path)
+            actual_out = out_path
+            root, cur_ext = os.path.splitext(out_path)
+            if cur_ext.lower() in {".webp", ".jpg", ".jpeg"}:
+                actual_out = f"{root}.png"
+            os.replace(tmp_out, actual_out)
             tmp_out = None
-            return {"path": out_path, "format": "png", "width": width, "height": height, "bytes": len(png_bytes)}
+            return {"path": actual_out, "format": "png", "width": width, "height": height, "bytes": len(png_bytes)}
     finally:
         for p in (tmp_png, tmp_out):
             if p and os.path.exists(p):

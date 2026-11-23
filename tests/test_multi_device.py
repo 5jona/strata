@@ -144,9 +144,11 @@ class TestMultiDeviceDiscoveryAndSelection(unittest.TestCase):
 class TestTransportFallbackAndSelfHeal(unittest.TestCase):
     def setUp(self) -> None:
         devices.reset_device_state()
+        transport.reset_transport_state()
 
     def tearDown(self) -> None:
         devices.reset_device_state()
+        transport.reset_transport_state()
 
     def test_wifi_failure_falls_back_to_adb_ssh(self) -> None:
         rec = devices.DeviceRecord(
@@ -178,20 +180,20 @@ class TestTransportFallbackAndSelfHeal(unittest.TestCase):
         rec = devices.DeviceRecord(
             id="phone-a", adb_serial="SER_A", adb_usb_serial="SER_A", adb_state="device", ssh_user="root",
         )
-        with tempfile.TemporaryDirectory() as td, \
-             mock.patch.dict(os.environ, {"XDG_RUNTIME_DIR": td}, clear=False):
-            ctl_a = devices.device_control_path("phone-a")
-            ctl_b = devices.device_control_path("tablet-b")
+        with tempfile.TemporaryDirectory() as td, mock.patch.dict(os.environ, {"XDG_RUNTIME_DIR": td}, clear=False):
+            ctl_a, ctl_b = devices.device_control_path("phone-a"), devices.device_control_path("tablet-b")
             for p in (ctl_a, ctl_b):
                 with open(p, "w", encoding="utf-8") as f:
                     f.write("sock")
-            adb_fwd_count = 0
-            ssh_count = 0
+            adb_fwd_count, ssh_count, exit_calls = 0, 0, []
 
             def _fake_run(argv, **kw):
                 nonlocal adb_fwd_count, ssh_count
                 if argv[0] == "adb":
                     adb_fwd_count += 1
+                    return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+                if "-O" in argv and "exit" in argv:
+                    exit_calls.append(list(argv))
                     return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
                 ssh_count += 1
                 if ssh_count == 1:
@@ -202,11 +204,8 @@ class TestTransportFallbackAndSelfHeal(unittest.TestCase):
                  mock.patch.object(devices, "_port_in_use", return_value=False), \
                  mock.patch("subprocess.run", side_effect=_fake_run):
                 res = transport.ssh_exec("echo ok", device="phone-a")
-
-            self.assertEqual(res["rc"], 0)
-            self.assertEqual(res["json"], {"healed": True})
-            self.assertEqual(adb_fwd_count, 2)
-            self.assertEqual(ssh_count, 2)
+            self.assertEqual((res["rc"], res["json"]), (0, {"healed": True}))
+            self.assertEqual((adb_fwd_count, ssh_count, len(exit_calls)), (2, 2, 1))
             self.assertFalse(os.path.exists(ctl_a))
             self.assertTrue(os.path.exists(ctl_b))
 

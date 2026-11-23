@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import atexit
 from dataclasses import dataclass
 import ipaddress
 import os
@@ -9,6 +10,10 @@ import subprocess
 from typing import Any, Callable
 
 from . import devices
+
+_OWNED_CONTROL_ROUTES: dict[str, tuple[str, str, str]] = {}
+_OWNED_SSH_FORWARDS: set[tuple[str, str, str, str, int, int]] = set()
+_OWNED_ADB_FORWARDS: set[tuple[str, int]] = set()
 
 
 @dataclass
@@ -99,12 +104,88 @@ def build_candidate_routes(
     )]
 
 
-def cleanup_control_socket(ctl_path: str) -> None:
+def register_control_route(route: TransportRoute) -> None:
+    if route.control_path:
+        _OWNED_CONTROL_ROUTES[route.control_path] = (route.host, route.port, route.user)
+
+
+def register_ssh_forward(route: TransportRoute, local_port: int, remote_port: int) -> None:
+    register_control_route(route)
+    if route.control_path:
+        _OWNED_SSH_FORWARDS.add((route.control_path, route.host, route.port, route.user, local_port, remote_port))
+
+
+def reset_transport_state() -> None:
+    """Clear in-memory transport cleanup registries (for unit tests)."""
+    _OWNED_CONTROL_ROUTES.clear()
+    _OWNED_SSH_FORWARDS.clear()
+    _OWNED_ADB_FORWARDS.clear()
+
+
+def _ssh_ctl_cmd(ctl_path: str, host: str, port: str, user: str, extra: list[str]) -> list[str]:
+    dest = f"{user}@{host}" if (user and host) else (host or "_")
+    cmd = ["ssh"]
+    if port:
+        cmd.extend(["-p", str(port)])
+    cmd.extend(["-o", "BatchMode=yes", "-o", f"ControlPath={ctl_path}", *extra, dest])
+    return cmd
+
+
+def cleanup_control_socket(
+    ctl_path: str,
+    *,
+    host: str | None = None,
+    port: str | None = None,
+    user: str | None = None,
+) -> None:
+    if not ctl_path:
+        return
+    saved = _OWNED_CONTROL_ROUTES.pop(ctl_path, None)
+    eff_host = host if host is not None else (saved[0] if saved else "")
+    eff_port = port if port is not None else (saved[1] if saved else "")
+    eff_user = user if user is not None else (saved[2] if saved else "")
+    if "%" in ctl_path or os.path.exists(ctl_path):
+        try:
+            subprocess.run(
+                _ssh_ctl_cmd(ctl_path, eff_host, eff_port, eff_user, ["-O", "exit"]),
+                capture_output=True, text=True, timeout=5.0, check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            pass
     try:
-        if ctl_path and os.path.exists(ctl_path):
+        if os.path.exists(ctl_path):
             os.unlink(ctl_path)
     except OSError:
         pass
+
+
+def cleanup_all_transports() -> None:
+    """Best-effort atexit cleanup for owned SSH port forwards, ControlMasters, and ADB forwards."""
+    for ctl, host, port, user, lport, rport in list(_OWNED_SSH_FORWARDS):
+        if "%" in ctl or os.path.exists(ctl):
+            try:
+                subprocess.run(
+                    _ssh_ctl_cmd(ctl, host, port, user, ["-O", "cancel", "-L", f"127.0.0.1:{lport}:127.0.0.1:{rport}"]),
+                    capture_output=True, text=True, timeout=5.0, check=False,
+                )
+            except (OSError, subprocess.TimeoutExpired):
+                pass
+    _OWNED_SSH_FORWARDS.clear()
+    for ctl, (host, port, user) in list(_OWNED_CONTROL_ROUTES.items()):
+        cleanup_control_socket(ctl, host=host, port=port, user=user)
+    _OWNED_CONTROL_ROUTES.clear()
+    for serial, lport in list(_OWNED_ADB_FORWARDS):
+        try:
+            subprocess.run(
+                ["adb", "-s", serial, "forward", "--remove", f"tcp:{lport}"],
+                capture_output=True, text=True, timeout=5.0, check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+    _OWNED_ADB_FORWARDS.clear()
+
+
+atexit.register(cleanup_all_transports)
 
 
 def ensure_adb_forward(serial: str, local_port: int, remote_port: int) -> None:
@@ -114,6 +195,7 @@ def ensure_adb_forward(serial: str, local_port: int, remote_port: int) -> None:
     )
     if res.returncode != 0:
         raise RuntimeError(f"adb forward failed for {serial}: {(res.stderr or res.stdout).strip()}")
+    _OWNED_ADB_FORWARDS.add((serial, local_port))
 
 
 def run_with_routes(
@@ -128,11 +210,13 @@ def run_with_routes(
         except Exception as exc:
             last_res = {"ok": False, "rc": 255, "json": None, "stdout": "", "stderr": str(exc)}
             continue
+        register_control_route(route)
         res = run_once(route)
         if route.kind == "adb-ssh" and res.get("rc") == 255 and route.adb_serial and route.local_port:
-            cleanup_control_socket(route.control_path)
+            cleanup_control_socket(route.control_path, host=route.host, port=route.port, user=route.user)
             try:
                 ensure_adb_forward(route.adb_serial, route.local_port, route.remote_ssh_port)
+                register_control_route(route)
                 res = run_once(route)
             except Exception as exc:
                 res = {"ok": False, "rc": 255, "json": None, "stdout": "", "stderr": str(exc)}
@@ -140,7 +224,7 @@ def run_with_routes(
         if res.get("rc") not in (124, 255):
             return res
         if idx + 1 < len(routes):
-            cleanup_control_socket(route.control_path)
+            cleanup_control_socket(route.control_path, host=route.host, port=route.port, user=route.user)
     return last_res
 
 

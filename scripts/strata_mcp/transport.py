@@ -12,8 +12,11 @@ from typing import Any, Callable
 from .transport_routing import (
     TransportRoute,
     build_candidate_routes,
+    cleanup_all_transports,
     cleanup_control_socket,
     ensure_adb_forward,
+    register_ssh_forward,
+    reset_transport_state,
     resolve_ssh_target,
     run_with_routes,
     ssh_config,
@@ -111,6 +114,43 @@ def build_ssh_base_args(
     return cmd
 
 
+def extract_trailing_json(stdout: str) -> Any:
+    """Parse stdout as JSON, tolerating leading SSH banners before trailing JSON."""
+    text = stdout.strip()
+    if not text:
+        return None
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
+    if not text.endswith(("}", "]")):
+        return None
+    decoder, pos = json.JSONDecoder(), 0
+    for line in text.splitlines(keepends=True):
+        stripped = line.lstrip()
+        if stripped.startswith(("{", "[")):
+            try:
+                val, end = decoder.raw_decode(text, pos + len(line) - len(stripped))
+                if end == len(text):
+                    return val
+            except json.JSONDecodeError:
+                pass
+        pos += len(line)
+    last_nl, checked = text.rfind("\n") + 1, 0
+    for idx in range(last_nl, len(text)):
+        if text[idx] in "{[":
+            checked += 1
+            if checked > 64:
+                break
+            try:
+                val, end = decoder.raw_decode(text, idx)
+                if end == len(text):
+                    return val
+            except json.JSONDecodeError:
+                continue
+    return None
+
+
 def ssh_exec(
     remote_cmd: str,
     timeout: float = 30.0,
@@ -133,11 +173,7 @@ def ssh_exec(
         except subprocess.TimeoutExpired:
             return {"ok": False, "rc": 124, "json": None, "stdout": "", "stderr": f"SSH command timed out after {eff}s"}
         stdout = res.stdout.strip()
-        try:
-            parsed = json.loads(stdout) if stdout else None
-        except json.JSONDecodeError:
-            parsed = None
-        return {"rc": res.returncode, "json": parsed, "stdout": stdout, "stderr": res.stderr.strip()}
+        return {"rc": res.returncode, "json": extract_trailing_json(stdout), "stdout": stdout, "stderr": res.stderr.strip()}
 
     return run_with_routes(routes, _once)
 
@@ -240,12 +276,15 @@ def open_ssh_port_forward(
     def _once(route: TransportRoute) -> dict[str, Any]:
         cmd = ["ssh"] + (["-p", route.port] if route.port else []) + [
             "-f", "-N", "-o", "BatchMode=yes", "-o", "ExitOnForwardFailure=yes",
-            "-o", "StrictHostKeyChecking=accept-new", "-o", f"ControlPath={route.control_path}",
+            "-o", "StrictHostKeyChecking=accept-new", "-o", "ControlMaster=auto",
+            "-o", f"ControlPath={route.control_path}",
         ]
         if route.known_hosts_path:
             cmd.extend(["-o", f"UserKnownHostsFile={route.known_hosts_path}"])
         cmd.extend(["-L", f"127.0.0.1:{local_port}:127.0.0.1:{remote_port}", f"{route.user}@{route.host}" if route.user else route.host])
         res = subprocess.run(cmd, capture_output=True, text=True, timeout=15.0, check=False)
+        if res.returncode == 0:
+            register_ssh_forward(route, local_port, remote_port)
         return {"ok": res.returncode == 0, "rc": res.returncode, "stderr": res.stderr.strip(), "route": route.kind}
 
     return run_with_routes(routes, _once)
@@ -253,8 +292,9 @@ def open_ssh_port_forward(
 
 __all__ = [
     "B", "DEVICE_PROP", "I", "MAX_TIMEOUT_SEC", "N", "S", "TransportRoute",
-    "argv_to_cmd", "build_candidate_routes", "build_ssh_base_args", "cleanup_control_socket",
-    "control_path", "ensure_adb_forward", "extract_ssh_overrides", "invoke_exec",
-    "make_tool", "open_ssh_port_forward", "opt_flag", "resolve_ssh_target",
-    "run_with_routes", "scp_pull", "scp_push", "ssh_config", "ssh_exec",
+    "argv_to_cmd", "build_candidate_routes", "build_ssh_base_args", "cleanup_all_transports",
+    "cleanup_control_socket", "control_path", "ensure_adb_forward", "extract_ssh_overrides",
+    "extract_trailing_json", "invoke_exec", "make_tool", "open_ssh_port_forward", "opt_flag",
+    "reset_transport_state", "resolve_ssh_target", "run_with_routes", "scp_pull", "scp_push",
+    "ssh_config", "ssh_exec",
 ]

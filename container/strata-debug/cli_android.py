@@ -134,10 +134,20 @@ def _cmd_perfetto(args: argparse.Namespace) -> int:
         res = perfetto_session.stop_ring_session(session_key=args.session, analyze=args.analyze)
     elif action == "analyze":
         target = args.path or args.out
+        if not target and args.session:
+            status = perfetto_session.ring_session_status(session_key=args.session)
+            if not status.get("ok"):
+                res = {"ok": False, "action": "analyze", "error": status.get("error", "invalid session key")}
+                _emit(res)
+                return 1
+            target = str(status.get("remotePath") or "").strip() or None
         if not target:
-            res = {"ok": False, "error": "--path is required for --action analyze"}
+            hint = f" (no trace metadata for session '{args.session}')" if args.session else ""
+            res = {"ok": False, "action": "analyze", "error": f"--path is required for --action analyze{hint}"}
         else:
             res = perfetto_analyze.analyze_trace_file(target)
+            if not args.path and not args.out and args.session and isinstance(res, dict):
+                res.setdefault("sessionKey", args.session)
     else:
         buf = args.buffer_kb if args.buffer_kb is not None else perfetto_ops.DEFAULT_BUFFER_KB
         res = perfetto_ops.capture_perfetto(

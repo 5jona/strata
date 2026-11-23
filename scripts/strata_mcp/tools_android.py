@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import os
+import re
+import uuid
 from typing import Any, Callable
 
 from .transport import (
@@ -118,7 +120,8 @@ def dispatch_android_tool(
         if local_path:
             if not os.path.isfile(local_path):
                 raise FileNotFoundError(f"APK file not found: {local_path}")
-            remote_path = f"/data/local/tmp/strata_apk_{os.path.basename(local_path)}"
+            safe_base = re.sub(r"[^A-Za-z0-9._-]", "_", os.path.basename(local_path)) or "app.apk"
+            remote_path = f"/data/local/tmp/strata_apk_{os.getpid()}_{uuid.uuid4().hex[:12]}_{safe_base}"
             ssh_kw = extract_ssh_overrides(args)
             ssh_kw["host_scope"] = True
             push_res = push_fn(local_path, remote_path, **ssh_kw)

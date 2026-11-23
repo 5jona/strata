@@ -102,16 +102,22 @@ def _handle_visual_check(
 
     res = run_argv(cmd, 30.0)
     if want_pull and res.get("rc") == 0 and remote_out:
+        saved = res["json"].get("saved") if isinstance(res.get("json"), dict) else None
+        actual_remote = str(saved.get("path")) if isinstance(saved, dict) and saved.get("path") else str(remote_out)
+        actual_fmt = str(saved.get("format") if isinstance(saved, dict) and saved.get("format") else fmt).lower()
+        actual_ext = "png" if actual_fmt == "png" else ("jpg" if actual_fmt in {"jpg", "jpeg"} else "webp")
         local_out = str(args.get("localOut") or "").strip()
         if not local_out:
             cap_dir = os.path.join(tempfile.gettempdir(), "strata-mcp-captures")
-            local_out = os.path.join(cap_dir, f"cap-{int(time.time() * 1000)}.{ext}")
+            local_out = os.path.join(cap_dir, f"cap-{int(time.time() * 1000)}.{actual_ext}")
+        elif actual_ext == "png" and os.path.splitext(local_out)[1].lower() in {".webp", ".jpg", ".jpeg"}:
+            local_out = f"{os.path.splitext(local_out)[0]}.png"
         ssh_kw = extract_ssh_overrides(args)
         try:
-            pull_res = pull_fn(str(remote_out), local_out, **ssh_kw) if ssh_kw else pull_fn(str(remote_out), local_out)
+            pull_res = pull_fn(actual_remote, local_out, **ssh_kw) if ssh_kw else pull_fn(actual_remote, local_out)
         finally:
             if auto_remote:
-                run_argv(["rm", "-f", str(remote_out)], 15.0)
+                run_argv(["rm", "-f", actual_remote], 15.0)
         if pull_res.get("ok"):
             res["localPath"] = local_out
             res["pulled"] = True

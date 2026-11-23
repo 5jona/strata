@@ -164,7 +164,8 @@ def dispatch_device_tool(
             devices.select_device(None)
             return {"ok": True, "selected": None, "cleared": True}
         chosen = devices.select_device(str(args["device"]))
-        assert chosen is not None
+        if chosen is None:
+            return {"ok": False, "selected": None, "error": f"failed to select device '{args['device']}'"}
         return {"ok": True, "selected": chosen.id, "device": chosen.to_dict(selected_id=chosen.id)}
 
     if name == "perfetto_trace":
