@@ -1,0 +1,34 @@
+{
+  "version": 1,
+  "defaultContainer": "main",
+  "sideveil": {
+    "enabled": true,
+    "hubSock": "/data/system/sideveil/run/hub.sock",
+    "pluginId": "strata.manager"
+  },
+  "containers": {
+    "main": {
+      "enabled": true,
+      "autoStart": true,
+      "imagePath": "/data/local/strata/containers/main/rootfs.img",
+      "mountDir": "/data/local/strata/containers/main/mnt",
+      "hostname": "strata-main",
+      "ssh": {
+        "enabled": true,
+        "listenAddr": "0.0.0.0",
+        "port": 2222,
+        "keepaliveSecs": 60
+      },
+      "oomScoreAdj": -300,
+      "hostBridge": true,
+      "hostRuntime": false,
+      "bindDataLocalTmp": true,
+      "extraCharDevs": ["uinput"],
+      "extraMounts": [],
+      "syncAndroidDns": true,
+      "dnsServers": ["223.5.5.5", "1.1.1.1", "8.8.8.8"],
+      "fsckOnMount": true,
+      "initCommand": []
+    }
+  }
+}

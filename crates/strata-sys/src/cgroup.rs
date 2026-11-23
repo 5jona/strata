@@ -118,7 +118,7 @@ pub fn current_process_in_strata_cgroup() -> bool {
 }
 
 /// Writes `/proc/<pid>/oom_score_adj` for a container init process.
-pub fn write_oom_score_adj(pid: u32, score: i16) -> SysResult<()> {
+pub fn write_oom_score_adj(pid: u32, score: i32) -> SysResult<()> {
     if !(-1000..=1000).contains(&score) {
         return Err(SysError::InvalidArgument {
             op: "write_oom_score_adj",

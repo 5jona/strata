@@ -11,7 +11,12 @@ import {
 import { KeyRound, Plus, RefreshCw, Save } from 'lucide-react';
 import { useEffect, useId, useState } from 'react';
 import { summarizeSshKey } from '../lib/strataFormat.ts';
-import type { BindMount, ContainerConfig, ContainerConfigPatchParams } from '../types.ts';
+import {
+  type BindMount,
+  type ContainerConfig,
+  type ContainerConfigPatchParams,
+  STRATA_PROTOCOL,
+} from '../types.ts';
 import { DebugPassthroughCard } from './DebugPassthroughCard.tsx';
 import { StrataTraceCard } from './StrataTraceCard.tsx';
 
@@ -41,7 +46,9 @@ export function ConfigTab({
   const hostnameId = useId();
   const sshPortId = useId();
   const [hostname, setHostname] = useState(config?.hostname ?? '');
-  const [sshPort, setSshPort] = useState(String(config?.ssh.port ?? 2222));
+  const [sshPort, setSshPort] = useState(
+    String(config?.ssh.port ?? STRATA_PROTOCOL.DEFAULT_SSH_PORT),
+  );
   const [autoStart, setAutoStart] = useState(config?.autoStart ?? true);
   const [hostBridge, setHostBridge] = useState(config?.hostBridge ?? true);
   const [hostRuntime, setHostRuntime] = useState(config?.hostRuntime ?? false);

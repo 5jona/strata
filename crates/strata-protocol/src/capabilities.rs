@@ -1,6 +1,6 @@
 //! Linux v3 capability bitmask calculations for container privilege profiles.
 
-use serde::{Deserialize, Serialize};
+pub use crate::generated::config::CapProfile;
 
 /// Standard Linux capability numbers (from `<linux/capability.h>`).
 pub mod cap {
@@ -32,18 +32,6 @@ pub mod cap {
 
     /// Fallback highest capability number if `/proc/sys/kernel/cap_last_cap` is unreadable.
     pub const FALLBACK_LAST_CAP: u32 = 40;
-}
-
-/// Container Linux capability policy derived from configuration or debug override.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum CapProfile {
-    /// Standard developer container without Android PID 1 `nsenter` bridge privileges.
-    Isolated,
-    /// Developer container with host-exec bridge privileges (matching `host_bridge=1`).
-    HostBridge,
-    /// Full privileged runtime mode (`debug` or `hostRuntime=true`).
-    FullHostRuntime,
 }
 
 /// 64-bit Linux capability bitmask split into v3 low/high 32-bit words.

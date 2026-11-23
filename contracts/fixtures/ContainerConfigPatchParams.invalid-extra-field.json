@@ -1,0 +1,8 @@
+{
+  "$def": "ContainerConfigPatchParams",
+  "invalid": true,
+  "data": {
+    "container": "main",
+    "unknownField": true
+  }
+}

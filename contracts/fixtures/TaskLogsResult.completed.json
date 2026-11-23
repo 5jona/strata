@@ -1,0 +1,20 @@
+{
+  "summary": {
+    "taskId": "task-1",
+    "container": "main",
+    "pid": 20002,
+    "command": ["/bin/sh", "-c", "uname -a"],
+    "running": false,
+    "exitCode": 0,
+    "startedAtMs": 1700000000000
+  },
+  "entries": [
+    {
+      "taskId": "task-1",
+      "container": "main",
+      "stream": "stdout",
+      "chunk": "Linux strata-main 6.6.0 aarch64 GNU/Linux",
+      "seq": 1
+    }
+  ]
+}

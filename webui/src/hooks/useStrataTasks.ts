@@ -1,14 +1,17 @@
-import { useHaptics, usePluginEvent, useSideVeilPlugin } from '@pochita/sideveil-sdk';
+import {
+  PLUGIN_EVENT_LAGGED_EVENT,
+  useHaptics,
+  usePluginEvent,
+  useSideVeilPlugin,
+} from '@pochita/sideveil-sdk';
 import type { LogEntry } from '@pochita/ui';
 import { useCallback, useRef, useState } from 'react';
 import { formatClockTime } from '../lib/strataFormat.ts';
+import { invokeStrataRpc, useStrataEvent } from '../lib/strataRpc.ts';
 import {
   STRATA_EVENTS,
   STRATA_METHODS,
-  type TaskExitPayload,
-  type TaskLogsResult,
   type TaskOutputPayload,
-  type TaskRunResult,
   type TaskSummary,
 } from '../types.ts';
 
@@ -51,12 +54,12 @@ export function useStrataTasks(containerId: string, notify: NotifyFn): StrataTas
   const containerIdRef = useRef<string>(containerId);
   containerIdRef.current = containerId;
 
-  usePluginEvent<TaskOutputPayload>(STRATA_EVENTS.TASK_OUTPUT, (payload) => {
+  useStrataEvent(STRATA_EVENTS.TASK_OUTPUT, (payload) => {
     if (!payload || payload.taskId !== activeTaskIdRef.current) return;
     setTaskEntries((prev) => [...prev.slice(-(MAX_LOG_ENTRIES - 1)), toTaskLogEntry(payload)]);
   });
 
-  usePluginEvent<{ dropped?: number }>(STRATA_EVENTS.PLUGIN_EVENT_LAGGED, (payload) => {
+  usePluginEvent<{ dropped?: number }>(PLUGIN_EVENT_LAGGED_EVENT, (payload) => {
     const dropped = typeof payload?.dropped === 'number' ? payload.dropped : 0;
     if (dropped <= 0 || !activeTaskIdRef.current) return;
     setTaskEntries((prev) => [
@@ -70,7 +73,7 @@ export function useStrataTasks(containerId: string, notify: NotifyFn): StrataTas
     ]);
   });
 
-  usePluginEvent<TaskExitPayload>(STRATA_EVENTS.TASK_EXIT, (payload) => {
+  useStrataEvent(STRATA_EVENTS.TASK_EXIT, (payload) => {
     if (!payload) return;
     setTasks((prev) =>
       prev.map((item) =>
@@ -102,7 +105,7 @@ export function useStrataTasks(containerId: string, notify: NotifyFn): StrataTas
     async (taskId: string) => {
       setActiveTaskId(taskId);
       try {
-        const logs = await bridge.invokePlugin<TaskLogsResult>(STRATA_METHODS.TASK_LOGS, {
+        const logs = await invokeStrataRpc(bridge, STRATA_METHODS.TASK_LOGS, {
           taskId,
           limit: MAX_LOG_ENTRIES,
         });
@@ -120,7 +123,7 @@ export function useStrataTasks(containerId: string, notify: NotifyFn): StrataTas
       setRunningTaskAction(true);
       void triggerHaptic('click');
       try {
-        const started = await bridge.invokePlugin<TaskRunResult>(STRATA_METHODS.TASK_RUN, {
+        const started = await invokeStrataRpc(bridge, STRATA_METHODS.TASK_RUN, {
           container: containerIdRef.current,
           command,
           timeoutSecs: 120,
@@ -156,7 +159,7 @@ export function useStrataTasks(containerId: string, notify: NotifyFn): StrataTas
     async (taskId: string) => {
       void triggerHaptic('cancel');
       try {
-        await bridge.invokePlugin(STRATA_METHODS.TASK_CANCEL, { taskId });
+        await invokeStrataRpc(bridge, STRATA_METHODS.TASK_CANCEL, { taskId });
         notify('已发送中止信号', 'info', taskId);
       } catch (err) {
         notify('中止任务失败', 'danger', err instanceof Error ? err.message : String(err));

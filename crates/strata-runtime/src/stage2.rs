@@ -24,7 +24,7 @@ pub struct Stage2Spec {
     pub container_id: String,
     pub mount_dir: String,
     pub hostname: String,
-    pub oom_score_adj: Option<i16>,
+    pub oom_score_adj: Option<i32>,
     pub cap_profile: CapProfile,
     pub host_runtime: bool,
     pub bind_data_local_tmp: bool,

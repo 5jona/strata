@@ -8,7 +8,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 use strata_protocol::rpc::{
-    TaskExitPayload, TaskOutputPayload, TaskRunParams, TaskRunResult, TaskStream, events, methods,
+    TaskExitPayload, TaskOutputPayload, TaskRunParams, TaskRunResult, TaskStream, error_codes,
+    events, methods,
 };
 use strata_protocol::{EventEnvelope, RpcRequest, RpcResponse};
 
@@ -47,14 +48,14 @@ impl StrataClient {
     ) -> Result<Value, (i32, String)> {
         let req_id = format!("cli-{}", NEXT_REQ_ID.fetch_add(1, Ordering::Relaxed));
         let req = RpcRequest::new(req_id.clone(), method, params);
-        let payload =
-            serde_json::to_string(&req).map_err(|e| (-32000, format!("encode request: {e}")))?;
+        let payload = serde_json::to_string(&req)
+            .map_err(|e| (error_codes::INTERNAL_ERROR, format!("encode request: {e}")))?;
 
         self.writer
             .write_all(payload.as_bytes())
             .and_then(|()| self.writer.write_all(b"\n"))
             .and_then(|()| self.writer.flush())
-            .map_err(|e| (-32000, format!("write socket: {e}")))?;
+            .map_err(|e| (error_codes::INTERNAL_ERROR, format!("write socket: {e}")))?;
 
         let mut line = String::new();
         loop {
@@ -62,9 +63,12 @@ impl StrataClient {
             let n = self
                 .reader
                 .read_line(&mut line)
-                .map_err(|e| (-32000, format!("read socket: {e}")))?;
+                .map_err(|e| (error_codes::INTERNAL_ERROR, format!("read socket: {e}")))?;
             if n == 0 {
-                return Err((-32000, "stratad closed connection unexpectedly".to_owned()));
+                return Err((
+                    error_codes::INTERNAL_ERROR,
+                    "stratad closed connection unexpectedly".to_owned(),
+                ));
             }
             let trimmed = line.trim();
             if trimmed.is_empty() {
@@ -88,7 +92,12 @@ impl StrataClient {
         params: Option<Value>,
     ) -> Result<T, (i32, String)> {
         let val = self.call(method, params)?;
-        serde_json::from_value(val).map_err(|e| (-32000, format!("decode '{method}' result: {e}")))
+        serde_json::from_value(val).map_err(|e| {
+            (
+                error_codes::INTERNAL_ERROR,
+                format!("decode '{method}' result: {e}"),
+            )
+        })
     }
 
     /// Subscribes to daemon events, launches a headless streaming task, prints stdout/stderr live,

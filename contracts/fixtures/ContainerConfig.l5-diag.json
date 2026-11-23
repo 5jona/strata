@@ -1,0 +1,39 @@
+{
+  "enabled": true,
+  "autoStart": true,
+  "imagePath": "/data/local/strata/containers/main/rootfs.img",
+  "mountDir": "/data/local/strata/containers/main/mnt",
+  "hostname": "strata-main",
+  "ssh": {
+    "enabled": true,
+    "listenAddr": "0.0.0.0",
+    "port": 2222,
+    "keepaliveSecs": 60
+  },
+  "oomScoreAdj": -300,
+  "hostBridge": true,
+  "hostRuntime": false,
+  "bindDataLocalTmp": true,
+  "extraCharDevs": ["uinput", "net/tun"],
+  "extraMounts": [
+    {
+      "hostPath": "/sys/fs/pstore",
+      "containerPath": "/sys/fs/pstore",
+      "readOnly": true
+    },
+    {
+      "hostPath": "/sys/kernel/tracing",
+      "containerPath": "/sys/kernel/tracing",
+      "readOnly": true
+    },
+    {
+      "hostPath": "/sys/fs/bpf",
+      "containerPath": "/sys/fs/bpf",
+      "readOnly": true
+    }
+  ],
+  "syncAndroidDns": true,
+  "dnsServers": ["223.5.5.5", "1.1.1.1", "8.8.8.8"],
+  "fsckOnMount": true,
+  "initCommand": []
+}

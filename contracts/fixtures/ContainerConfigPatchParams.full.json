@@ -1,0 +1,19 @@
+{
+  "container": "main",
+  "enabled": true,
+  "autoStart": true,
+  "imagePath": "/data/local/strata/containers/main/rootfs-v2.img",
+  "mountDir": "/data/local/strata/containers/main/mnt-v2",
+  "hostname": "strata-lab",
+  "sshPort": 2223,
+  "hostBridge": true,
+  "hostRuntime": false,
+  "extraCharDevs": ["uinput"],
+  "extraMounts": [
+    {
+      "hostPath": "/sys/fs/pstore",
+      "containerPath": "/sys/fs/pstore",
+      "readOnly": true
+    }
+  ]
+}

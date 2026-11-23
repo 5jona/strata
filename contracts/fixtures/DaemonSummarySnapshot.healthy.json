@@ -1,0 +1,10 @@
+{
+  "pid": 4096,
+  "uid": 0,
+  "uptimeMs": 1240000,
+  "defaultContainer": "main",
+  "totalContainers": 1,
+  "runningContainers": 1,
+  "activeTasks": 0,
+  "sideveilConnected": true
+}

@@ -1,6 +1,7 @@
 import { definePluginManifest } from '@pochita/sideveil-sdk';
+import { STRATA_PROTOCOL } from './types.ts';
 
-export const STRATA_PLUGIN_ID = 'strata.manager';
+export const STRATA_PLUGIN_ID = STRATA_PROTOCOL.SIDEVEIL_PLUGIN_ID;
 
 export const STRATA_MANIFEST = definePluginManifest({
   id: STRATA_PLUGIN_ID,

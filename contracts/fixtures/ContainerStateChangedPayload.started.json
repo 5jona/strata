@@ -1,0 +1,32 @@
+{
+  "container": "main",
+  "previous": "starting",
+  "current": "running",
+  "snapshot": {
+    "id": "main",
+    "isDefault": true,
+    "enabled": true,
+    "autoStart": true,
+    "phase": "running",
+    "nsPid": 14820,
+    "mounted": true,
+    "mountDir": "/data/local/strata/containers/main/mnt",
+    "imagePath": "/data/local/strata/containers/main/rootfs.img",
+    "loopDevices": ["/dev/block/loop9"],
+    "hostname": "strata-main",
+    "sshEnabled": true,
+    "sshListenAddr": "0.0.0.0",
+    "sshPort": 2222,
+    "primaryIpv4": "127.0.0.1",
+    "hostBridge": true,
+    "hostRuntime": false,
+    "uptimeMs": 1000,
+    "restartCount": 0,
+    "activeLeases": 0,
+    "disk": {
+      "imageExists": true,
+      "imageAllocatedBytes": 926941184,
+      "imageVirtualBytes": 34359738368
+    }
+  }
+}

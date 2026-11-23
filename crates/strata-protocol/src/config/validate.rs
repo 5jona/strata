@@ -26,7 +26,7 @@ pub enum ConfigValidationError {
     #[error("container '{container}' has invalid hostname '{hostname}'")]
     InvalidHostname { container: String, hostname: String },
     #[error("container '{container}' has invalid oomScoreAdj {value} (expected -1000..=1000)")]
-    InvalidOomScoreAdj { container: String, value: i16 },
+    InvalidOomScoreAdj { container: String, value: i32 },
     #[error("container '{container}' has invalid ssh port {port}")]
     InvalidSshPort { container: String, port: u16 },
     #[error("container '{container}' has disallowed character device '{dev}'")]

@@ -4,40 +4,18 @@ pub mod validate;
 
 use std::collections::BTreeMap;
 
-use serde::{Deserialize, Serialize};
-
+pub use crate::generated::config::{
+    BindMount, ContainerConfig, SideVeilBridgeConfig, SshConfig, StrataConfig,
+};
 pub use validate::{ConfigValidationError, validate_container_id};
 
 use crate::capabilities::CapProfile;
 use crate::constants::{
     CONFIG_SCHEMA_VERSION, CONTAINER_DROPBEAR_PID_PATH, DEFAULT_CONTAINER_ID,
-    DEFAULT_CONTAINERS_ROOT, DEFAULT_DNS_SERVERS, DEFAULT_SIDEVEIL_HUB_SOCK, L5_DIAG_MOUNT_PATHS,
-    SIDEVEIL_PLUGIN_ID,
+    DEFAULT_CONTAINERS_ROOT, DEFAULT_DNS_SERVERS, DEFAULT_EXTRA_CHAR_DEVS, DEFAULT_OOM_SCORE_ADJ,
+    DEFAULT_SIDEVEIL_HUB_SOCK, DEFAULT_SSH_KEEPALIVE_SECS, DEFAULT_SSH_LISTEN_ADDR,
+    DEFAULT_SSH_PORT, L5_DIAG_MOUNT_PATHS, SIDEVEIL_PLUGIN_ID,
 };
-
-/// Top-level multi-container Strata configuration persisted at `/data/adb/strata/config.json`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct StrataConfig {
-    #[serde(default = "default_schema_version")]
-    pub version: u32,
-    #[serde(default = "default_container_name")]
-    pub default_container: String,
-    #[serde(default)]
-    pub sideveil: SideVeilBridgeConfig,
-    #[serde(default = "default_containers_map")]
-    pub containers: BTreeMap<String, ContainerConfig>,
-}
-
-/// Optional SideVeil `uds-native` plugin bridge configuration.
-/// Silently retries in the background when SideVeil is absent so Strata stays 100% standalone.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", default)]
-pub struct SideVeilBridgeConfig {
-    pub enabled: bool,
-    pub hub_sock: String,
-    pub plugin_id: String,
-}
 
 impl Default for SideVeilBridgeConfig {
     fn default() -> Self {
@@ -49,35 +27,15 @@ impl Default for SideVeilBridgeConfig {
     }
 }
 
-/// Dropbear SSH listener settings for a container.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", default)]
-pub struct SshConfig {
-    pub enabled: bool,
-    pub listen_addr: String,
-    pub port: u16,
-    pub keepalive_secs: u16,
-}
-
 impl Default for SshConfig {
     fn default() -> Self {
         Self {
             enabled: true,
-            listen_addr: "0.0.0.0".to_owned(),
-            port: 2222,
-            keepalive_secs: 60,
+            listen_addr: DEFAULT_SSH_LISTEN_ADDR.to_owned(),
+            port: DEFAULT_SSH_PORT,
+            keepalive_secs: DEFAULT_SSH_KEEPALIVE_SECS,
         }
     }
-}
-
-/// Extra host-to-container bind mount entry.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct BindMount {
-    pub host_path: String,
-    pub container_path: String,
-    #[serde(default)]
-    pub read_only: bool,
 }
 
 /// Returns the canonical opt-in read-only L5 kernel diagnostic bind mounts.
@@ -91,41 +49,6 @@ pub fn l5_diag_mounts() -> Vec<BindMount> {
             read_only: true,
         })
         .collect()
-}
-
-/// Per-container runtime, storage, isolation, and networking specification.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ContainerConfig {
-    #[serde(default = "default_true")]
-    pub enabled: bool,
-    #[serde(default = "default_true")]
-    pub auto_start: bool,
-    pub image_path: String,
-    pub mount_dir: String,
-    pub hostname: String,
-    #[serde(default)]
-    pub ssh: SshConfig,
-    #[serde(default = "default_oom_score_adj")]
-    pub oom_score_adj: Option<i16>,
-    #[serde(default = "default_true")]
-    pub host_bridge: bool,
-    #[serde(default)]
-    pub host_runtime: bool,
-    #[serde(default = "default_true")]
-    pub bind_data_local_tmp: bool,
-    #[serde(default)]
-    pub extra_char_devs: Vec<String>,
-    #[serde(default)]
-    pub extra_mounts: Vec<BindMount>,
-    #[serde(default = "default_true")]
-    pub sync_android_dns: bool,
-    #[serde(default = "default_dns_list")]
-    pub dns_servers: Vec<String>,
-    #[serde(default = "default_true")]
-    pub fsck_on_mount: bool,
-    #[serde(default)]
-    pub init_command: Vec<String>,
 }
 
 impl Default for StrataConfig {
@@ -150,11 +73,11 @@ impl ContainerConfig {
             mount_dir: format!("{DEFAULT_CONTAINERS_ROOT}/{id}/mnt"),
             hostname: format!("strata-{id}"),
             ssh: SshConfig::default(),
-            oom_score_adj: default_oom_score_adj(),
+            oom_score_adj: Some(DEFAULT_OOM_SCORE_ADJ),
             host_bridge: true,
             host_runtime: false,
             bind_data_local_tmp: true,
-            extra_char_devs: Vec::new(),
+            extra_char_devs: default_extra_char_devs(),
             extra_mounts: Vec::new(),
             sync_android_dns: true,
             dns_servers: default_dns_list(),
@@ -243,14 +166,6 @@ impl StrataConfig {
     }
 }
 
-fn default_schema_version() -> u32 {
-    CONFIG_SCHEMA_VERSION
-}
-
-fn default_container_name() -> String {
-    DEFAULT_CONTAINER_ID.to_owned()
-}
-
 fn default_containers_map() -> BTreeMap<String, ContainerConfig> {
     let mut map = BTreeMap::new();
     map.insert(
@@ -260,16 +175,15 @@ fn default_containers_map() -> BTreeMap<String, ContainerConfig> {
     map
 }
 
-fn default_true() -> bool {
-    true
-}
-
-fn default_oom_score_adj() -> Option<i16> {
-    Some(-300)
-}
-
 fn default_dns_list() -> Vec<String> {
     DEFAULT_DNS_SERVERS
+        .iter()
+        .map(|s| (*s).to_owned())
+        .collect()
+}
+
+fn default_extra_char_devs() -> Vec<String> {
+    DEFAULT_EXTRA_CHAR_DEVS
         .iter()
         .map(|s| (*s).to_owned())
         .collect()
@@ -284,7 +198,8 @@ mod tests {
         let cfg = StrataConfig::default();
         assert!(cfg.validate().is_ok());
         let (id, main) = cfg.get_container(None).expect("main container must exist");
-        assert_eq!(id, "main");
+        assert_eq!(id, DEFAULT_CONTAINER_ID);
+        assert_eq!(main.extra_char_devs, vec!["uinput".to_owned()]);
         let init = main.effective_init_command();
         assert_eq!(init[0], "/usr/sbin/dropbear");
         assert!(init.contains(&"-s".to_owned()));

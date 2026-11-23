@@ -1,0 +1,15 @@
+{
+  "leaseId": "lease-1",
+  "container": "main",
+  "mode": "attached",
+  "nsPid": 12549,
+  "mntNsInode": 4026532911,
+  "cgroupV2Path": "/sys/fs/cgroup/strata/main",
+  "mountDir": "/data/local/strata/containers/main/mnt",
+  "hostname": "strata-main",
+  "capProfile": "host-bridge",
+  "hostRuntime": false,
+  "bindDataLocalTmp": true,
+  "extraCharDevs": ["uinput"],
+  "extraMounts": []
+}

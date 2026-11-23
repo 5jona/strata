@@ -1,24 +1,17 @@
-import { useHaptics, usePluginEvent, useSideVeilPlugin } from '@pochita/sideveil-sdk';
+import { useHaptics, useSideVeilPlugin } from '@pochita/sideveil-sdk';
 import { type LogEntry, useToast } from '@pochita/ui';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { formatBytes, formatClockTime } from '../lib/strataFormat.ts';
+import { invokeStrataRpc, useStrataEvent } from '../lib/strataRpc.ts';
 import {
-  type BackupStartResult,
-  type CompactResult,
   type ContainerConfig,
   type ContainerConfigPatchParams,
-  type ContainerConfigResult,
-  type ContainerLogsResult,
-  type ContainerStateChangedPayload,
   type ContainerStatusSnapshot,
   type DaemonSummarySnapshot,
-  type FsckResult,
   type HudStateResult,
-  type MaintenanceDonePayload,
-  type SshKeysResult,
   STRATA_EVENTS,
   STRATA_METHODS,
-  type StorageCleanupReport,
+  STRATA_PROTOCOL,
   type TaskSummary,
 } from '../types.ts';
 import { useStrataTasks } from './useStrataTasks.ts';
@@ -58,7 +51,7 @@ export function useStrataRuntime(isOnline: boolean, isDark: boolean): StrataRunt
   const { pushToast } = useToast();
 
   const [containers, setContainers] = useState<ContainerStatusSnapshot[]>([]);
-  const [selectedId, setSelectedId] = useState<string>('main');
+  const [selectedId, setSelectedId] = useState<string>(STRATA_PROTOCOL.DEFAULT_CONTAINER_ID);
   const [daemonSummary, setDaemonSummary] = useState<DaemonSummarySnapshot | null>(null);
   const [hudState, setHudState] = useState<HudStateResult>({
     enabled: false,
@@ -97,16 +90,9 @@ export function useStrataRuntime(isOnline: boolean, isDark: boolean): StrataRunt
       const cid = targetId ?? selectedIdRef.current;
       try {
         const [logsRes, cfgRes, keysRes] = await Promise.all([
-          bridge.invokePlugin<ContainerLogsResult>(STRATA_METHODS.CONTAINER_LOGS, {
-            container: cid,
-            lines: 80,
-          }),
-          bridge.invokePlugin<ContainerConfigResult>(STRATA_METHODS.CONTAINER_CONFIG_GET, {
-            container: cid,
-          }),
-          bridge.invokePlugin<SshKeysResult>(STRATA_METHODS.CONTAINER_SSH_KEY_LIST, {
-            container: cid,
-          }),
+          invokeStrataRpc(bridge, STRATA_METHODS.CONTAINER_LOGS, { container: cid, lines: 80 }),
+          invokeStrataRpc(bridge, STRATA_METHODS.CONTAINER_CONFIG_GET, { container: cid }),
+          invokeStrataRpc(bridge, STRATA_METHODS.CONTAINER_SSH_KEY_LIST, { container: cid }),
         ]);
         const ts = formatClockTime(Date.now());
         setDropbearLogs(
@@ -135,10 +121,10 @@ export function useStrataRuntime(isOnline: boolean, isDark: boolean): StrataRunt
     setLastError(null);
     try {
       const [list, summary, hud, taskList] = await Promise.all([
-        bridge.invokePlugin<ContainerStatusSnapshot[]>(STRATA_METHODS.CONTAINER_LIST),
-        bridge.invokePlugin<DaemonSummarySnapshot>(STRATA_METHODS.DAEMON_STATUS),
-        bridge.invokePlugin<HudStateResult>(STRATA_METHODS.HUD_STATE),
-        bridge.invokePlugin<TaskSummary[]>(STRATA_METHODS.TASK_LIST),
+        invokeStrataRpc(bridge, STRATA_METHODS.CONTAINER_LIST),
+        invokeStrataRpc(bridge, STRATA_METHODS.DAEMON_STATUS),
+        invokeStrataRpc(bridge, STRATA_METHODS.HUD_STATE),
+        invokeStrataRpc(bridge, STRATA_METHODS.TASK_LIST),
       ]);
       setContainers(list);
       setDaemonSummary(summary);
@@ -149,7 +135,7 @@ export function useStrataRuntime(isOnline: boolean, isDark: boolean): StrataRunt
         list.find((item) => item.id === selectedIdRef.current)?.id ??
         list.find((item) => item.isDefault)?.id ??
         list[0]?.id ??
-        'main';
+        STRATA_PROTOCOL.DEFAULT_CONTAINER_ID;
       setSelectedId(nextSelected);
       await refreshConfigAndLogs(nextSelected);
     } catch (err) {
@@ -165,13 +151,12 @@ export function useStrataRuntime(isOnline: boolean, isDark: boolean): StrataRunt
 
   useEffect(() => {
     if (!isOnline) return;
-    void bridge
-      .invokePlugin<HudStateResult>(STRATA_METHODS.HUD_SET, { isDark })
+    void invokeStrataRpc(bridge, STRATA_METHODS.HUD_SET, { isDark })
       .then(setHudState)
       .catch(() => {});
   }, [bridge, isDark, isOnline]);
 
-  usePluginEvent<ContainerStateChangedPayload>(STRATA_EVENTS.CONTAINER_STATE_CHANGED, (payload) => {
+  useStrataEvent(STRATA_EVENTS.CONTAINER_STATE_CHANGED, (payload) => {
     if (!payload?.snapshot) return;
     setContainers((prev) => {
       const exists = prev.some((c) => c.id === payload.snapshot.id);
@@ -181,7 +166,7 @@ export function useStrataRuntime(isOnline: boolean, isDark: boolean): StrataRunt
     });
   });
 
-  usePluginEvent<MaintenanceDonePayload>(STRATA_EVENTS.CONTAINER_MAINTENANCE_DONE, (payload) => {
+  useStrataEvent(STRATA_EVENTS.CONTAINER_MAINTENANCE_DONE, (payload) => {
     if (!payload) return;
     if (payload.ok) {
       notify('后台备份完成', 'success', payload.summary);
@@ -198,14 +183,16 @@ export function useStrataRuntime(isOnline: boolean, isDark: boolean): StrataRunt
       void triggerHaptic(action === 'stop' ? 'heavy' : 'click');
       try {
         if (action === 'start') {
-          await bridge.invokePlugin<ContainerStatusSnapshot>(
+          await invokeStrataRpc(
+            bridge,
             STRATA_METHODS.CONTAINER_START,
             { container: cid },
             { timeoutMs: 20_000 },
           );
           notify('容器已启动', 'success', cid);
         } else if (action === 'stop') {
-          const report = await bridge.invokePlugin<StorageCleanupReport>(
+          const report = await invokeStrataRpc(
+            bridge,
             STRATA_METHODS.CONTAINER_STOP,
             { container: cid },
             { timeoutMs: 20_000 },
@@ -216,7 +203,8 @@ export function useStrataRuntime(isOnline: boolean, isDark: boolean): StrataRunt
             `清理挂载=${report.unmountedPaths} 残留=${report.residualMounts}/${report.residualLoops}`,
           );
         } else {
-          await bridge.invokePlugin<ContainerStatusSnapshot>(
+          await invokeStrataRpc(
+            bridge,
             STRATA_METHODS.CONTAINER_RESTART,
             { container: cid },
             { timeoutMs: 25_000 },
@@ -240,10 +228,11 @@ export function useStrataRuntime(isOnline: boolean, isDark: boolean): StrataRunt
       void triggerHaptic('click');
       try {
         if (op === 'dns') {
-          await bridge.invokePlugin(STRATA_METHODS.CONTAINER_SYNC_DNS, { container: cid });
+          await invokeStrataRpc(bridge, STRATA_METHODS.CONTAINER_SYNC_DNS, { container: cid });
           notify('DNS 与宿主机桥接已同步', 'success', cid);
         } else if (op === 'compact') {
-          const res = await bridge.invokePlugin<CompactResult>(
+          const res = await invokeStrataRpc(
+            bridge,
             STRATA_METHODS.CONTAINER_COMPACT,
             { container: cid },
             { timeoutMs: 45_000 },
@@ -254,7 +243,8 @@ export function useStrataRuntime(isOnline: boolean, isDark: boolean): StrataRunt
             `${formatBytes(res.beforeBytes)} → ${formatBytes(res.afterBytes)}`,
           );
         } else if (op === 'fsck') {
-          const res = await bridge.invokePlugin<FsckResult>(
+          const res = await invokeStrataRpc(
+            bridge,
             STRATA_METHODS.CONTAINER_FSCK,
             { container: cid },
             { timeoutMs: 45_000 },
@@ -263,10 +253,10 @@ export function useStrataRuntime(isOnline: boolean, isDark: boolean): StrataRunt
         } else {
           const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
           const outputPath = `/data/local/tmp/strata-${cid}-${stamp}.img.gz`;
-          const res = await bridge.invokePlugin<BackupStartResult>(
-            STRATA_METHODS.CONTAINER_BACKUP_START,
-            { container: cid, outputPath },
-          );
+          const res = await invokeStrataRpc(bridge, STRATA_METHODS.CONTAINER_BACKUP_START, {
+            container: cid,
+            outputPath,
+          });
           notify('后台压缩备份已启动', 'info', res.outputPath);
         }
         await refreshAll();
@@ -283,10 +273,7 @@ export function useStrataRuntime(isOnline: boolean, isDark: boolean): StrataRunt
     async (patch: { enabled?: boolean; clickThrough?: boolean }) => {
       void triggerHaptic('tick');
       try {
-        const next = await bridge.invokePlugin<HudStateResult>(STRATA_METHODS.HUD_SET, {
-          ...patch,
-          isDark,
-        });
+        const next = await invokeStrataRpc(bridge, STRATA_METHODS.HUD_SET, { ...patch, isDark });
         setHudState(next);
       } catch (err) {
         notify('HUD 更新失败', 'danger', err instanceof Error ? err.message : String(err));
@@ -301,10 +288,10 @@ export function useStrataRuntime(isOnline: boolean, isDark: boolean): StrataRunt
       setBusyAction('config');
       void triggerHaptic('click');
       try {
-        const res = await bridge.invokePlugin<ContainerConfigResult>(
-          STRATA_METHODS.CONTAINER_CONFIG_PATCH,
-          { ...patch, container: cid },
-        );
+        const res = await invokeStrataRpc(bridge, STRATA_METHODS.CONTAINER_CONFIG_PATCH, {
+          ...patch,
+          container: cid,
+        });
         setContainerConfig(res.config);
         notify('配置已保存', 'success', '重启动容器后生效');
         await refreshAll();
@@ -325,7 +312,7 @@ export function useStrataRuntime(isOnline: boolean, isDark: boolean): StrataRunt
       setBusyAction('ssh-key');
       void triggerHaptic('click');
       try {
-        const res = await bridge.invokePlugin<SshKeysResult>(STRATA_METHODS.CONTAINER_SSH_KEY_ADD, {
+        const res = await invokeStrataRpc(bridge, STRATA_METHODS.CONTAINER_SSH_KEY_ADD, {
           container: cid,
           publicKey,
         });

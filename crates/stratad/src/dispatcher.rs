@@ -4,12 +4,13 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use serde::de::DeserializeOwned;
-use serde_json::{Value, json};
+use serde_json::Value;
 use strata_protocol::rpc::{
     BackupParams, ContainerConfigPatchParams, ContainerConfigResult, ContainerLogsParams,
-    ContainerSelectorParams, DaemonHealthResult, HudSetParams, PingResult, SessionAcquireParams,
-    SessionReleaseParams, SshKeyAddParams, TaskCancelParams, TaskLogsParams, TaskRunParams,
-    error_codes, methods,
+    ContainerSelectorParams, DaemonHealthResult, EventsSubscribeResult, HudSetParams, PingResult,
+    SessionAcquireParams, SessionReleaseParams, SessionReleaseResult, SshKeyAddParams,
+    SyncDnsResult, TaskCancelParams, TaskCancelResult, TaskLogsParams, TaskRunParams, error_codes,
+    methods,
 };
 use strata_protocol::{DaemonSummarySnapshot, RpcRequest, RpcResponse};
 
@@ -133,7 +134,10 @@ impl Dispatcher {
             methods::CONTAINER_SYNC_DNS => {
                 let p: ContainerSelectorParams = parse_optional_params(params)?;
                 let container = self.manager.sync_dns(p.container.as_deref()).await?;
-                Ok(json!({ "container": container, "synced": true }))
+                to_json(SyncDnsResult {
+                    container,
+                    synced: true,
+                })
             }
             methods::CONTAINER_COMPACT => {
                 let p: ContainerSelectorParams = parse_optional_params(params)?;
@@ -191,7 +195,7 @@ impl Dispatcher {
                 RpcCaller::LocalCtl { .. } => {
                     let p: SessionReleaseParams = parse_required_params(params)?;
                     let released = self.manager.release_session(p).await?;
-                    Ok(json!({ "released": released }))
+                    to_json(SessionReleaseResult { released })
                 }
                 RpcCaller::SideVeilBridge => Err((
                     error_codes::PERMISSION_DENIED,
@@ -205,7 +209,7 @@ impl Dispatcher {
             methods::TASK_CANCEL => {
                 let p: TaskCancelParams = parse_required_params(params)?;
                 let cancelled = self.task_runner.cancel_task(p).await?;
-                Ok(json!({ "cancelled": cancelled }))
+                to_json(TaskCancelResult { cancelled })
             }
             methods::TASK_LIST => to_json(self.task_runner.list_tasks().await),
             methods::TASK_LOGS => {
@@ -217,7 +221,7 @@ impl Dispatcher {
                 let p: HudSetParams = parse_optional_params(params)?;
                 to_json(self.sideveil.update_hud(p))
             }
-            methods::EVENTS_SUBSCRIBE => Ok(json!({ "subscribed": true })),
+            methods::EVENTS_SUBSCRIBE => to_json(EventsSubscribeResult { subscribed: true }),
             other => Err((
                 error_codes::METHOD_NOT_FOUND,
                 format!("unknown method '{other}'"),

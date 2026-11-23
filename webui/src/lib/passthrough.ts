@@ -18,7 +18,7 @@ function isSameMountPath(a: BindMount, b: BindMount): boolean {
 }
 
 export function isL5DiagMount(mount: BindMount): boolean {
-  return L5_DIAG_MOUNTS.some((l5) => isSameMountPath(l5, mount));
+  return L5_DIAG_MOUNTS.some((l5) => l5.containerPath === mount.containerPath);
 }
 
 export function hasL5DiagMounts(mounts: readonly BindMount[]): boolean {

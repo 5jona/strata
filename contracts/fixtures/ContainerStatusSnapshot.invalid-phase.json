@@ -1,0 +1,8 @@
+{
+  "$def": "ContainerStatusSnapshot",
+  "invalid": true,
+  "data": {
+    "id": "main",
+    "phase": "crashed"
+  }
+}

@@ -1,17 +1,14 @@
 //! Pure container lifecycle state machine, status snapshots, and restart backoff policy.
 
-use serde::{Deserialize, Serialize};
+pub use crate::generated::state::{
+    ContainerDiskStats, ContainerPhase, ContainerStatusSnapshot, DaemonSummarySnapshot,
+};
 
-/// Observable lifecycle phase for a managed container.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum ContainerPhase {
-    #[default]
-    Stopped,
-    Starting,
-    Running,
-    Stopping,
-    Failed,
+#[allow(clippy::derivable_impls)]
+impl Default for ContainerPhase {
+    fn default() -> Self {
+        Self::Stopped
+    }
 }
 
 impl ContainerPhase {
@@ -38,69 +35,6 @@ impl ContainerPhase {
     pub fn is_running(self) -> bool {
         matches!(self, Self::Running)
     }
-}
-
-/// Disk allocation and rootfs utilization snapshot.
-#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ContainerDiskStats {
-    pub image_exists: bool,
-    pub image_allocated_bytes: u64,
-    pub image_virtual_bytes: u64,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub rootfs_total_bytes: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub rootfs_used_bytes: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub rootfs_available_bytes: Option<u64>,
-}
-
-/// Complete status snapshot for one container returned by `container.status` and `container.list`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ContainerStatusSnapshot {
-    pub id: String,
-    pub is_default: bool,
-    pub enabled: bool,
-    pub auto_start: bool,
-    pub phase: ContainerPhase,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub ns_pid: Option<u32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub mnt_ns_inode: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cgroup_path: Option<String>,
-    pub mounted: bool,
-    pub mount_dir: String,
-    pub image_path: String,
-    pub loop_devices: Vec<String>,
-    pub hostname: String,
-    pub ssh_enabled: bool,
-    pub ssh_listen_addr: String,
-    pub ssh_port: u16,
-    pub primary_ipv4: String,
-    pub host_bridge: bool,
-    pub host_runtime: bool,
-    pub uptime_ms: u64,
-    pub restart_count: u32,
-    pub active_leases: usize,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub last_error: Option<String>,
-    pub disk: ContainerDiskStats,
-}
-
-/// Compact daemon summary suitable for `daemon.status` and SideVeil Native HUD snapshots.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct DaemonSummarySnapshot {
-    pub pid: u32,
-    pub uid: u32,
-    pub uptime_ms: u64,
-    pub default_container: String,
-    pub total_containers: usize,
-    pub running_containers: usize,
-    pub active_tasks: usize,
-    pub sideveil_connected: bool,
 }
 
 /// Deterministic exponential backoff calculator for supervising container init restarts.
