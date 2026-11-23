@@ -271,13 +271,16 @@ class TestMcpServerDispatch(unittest.TestCase):
         pulls: list[tuple[str, str]] = []
         with mock.patch.object(mcp, "ssh_exec", side_effect=lambda c, timeout=30.0: (cmds.append(c) or {"rc": 0, "json": {"ok": True}, "stdout": '{"ok": true}', "stderr": ""})), \
              mock.patch.object(mcp, "scp_pull", side_effect=lambda r, l, **kw: (pulls.append((r, l)) or {"ok": True, "rc": 0, "bytes": 100})):
-            resp = mcp.handle_rpc_request({"jsonrpc": "2.0", "id": 11, "method": "tools/call", "params": {"name": "visual_check", "arguments": {"format": "png", "pullToLocal": True}}})
+            resp = mcp.handle_rpc_request({"jsonrpc": "2.0", "id": 11, "method": "tools/call", "params": {"name": "visual_check", "arguments": {"format": "png", "maxWidth": 720, "pullToLocal": True}}})
             assert resp is not None and not resp["result"].get("isError")
             payload = json.loads(resp["result"]["content"][0]["text"])
             self.assertTrue(payload["pulled"] and payload["localPath"].endswith(".png"))
+            self.assertIn("--max-width 720", cmds[0])
             self.assertEqual(len(pulls), 1)
             self.assertTrue(pulls[0][0].startswith("/tmp/strata-mcp-cap-"))
             self.assertTrue(cmds[-1].startswith("rm -f /tmp/strata-mcp-cap-"))
+            parsed = debug_cli.build_parser().parse_args(["visual", "--max-width", "720", "--format", "png"])
+            self.assertEqual(parsed.max_width, 720)
 
 
 if __name__ == "__main__":

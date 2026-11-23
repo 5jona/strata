@@ -57,7 +57,7 @@ def _load_cursor(cursor_path: str) -> tuple[dict[str, Any], str | None]:
     if not os.path.isfile(cursor_path):
         return {}, f"cursor file '{cursor_path}' not found; falling back to recent tail"
     try:
-        with open(cursor_path, encoding="utf-8") as f:
+        with open(cursor_path, encoding="utf-8", errors="replace") as f:
             data = json.load(f)
     except (OSError, json.JSONDecodeError) as exc:
         return {}, f"corrupt cursor file '{cursor_path}': {exc}; falling back to recent tail"
@@ -76,6 +76,8 @@ def _probe_latest_watermark(timeout: float = 8.0) -> dict[str, str]:
         [HOST_EXEC, "/system/bin/logcat", "-d", "-v", "threadtime", "-t", "1"],
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         timeout=timeout,
         check=False,
     )
@@ -88,6 +90,8 @@ def _probe_latest_watermark(timeout: float = 8.0) -> dict[str, str]:
         [HOST_EXEC, "/system/bin/date", "+%m-%d %H:%M:%S.000"],
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         timeout=timeout,
         check=False,
     )
@@ -171,7 +175,15 @@ def read_incremental(
     else:
         cmd.extend(["-t", str(max(limit * 4, 200))])
 
-    res = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, check=False)
+    res = subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=timeout,
+        check=False,
+    )
     lines = res.stdout.splitlines()
     entries, latest_ts, latest_digest = filter_logcat_lines(
         lines,

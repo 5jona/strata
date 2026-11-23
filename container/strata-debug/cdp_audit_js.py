@@ -7,7 +7,11 @@ DOM_AUDIT_JS = r"""(() => {
   const rootOverflowY = document.documentElement.scrollHeight > vh + 1;
   const overflowSamples = [];
   const offscreenSamples = [];
+  const truncated = [];
+  const smallTargets = [];
   const interactiveRects = [];
+  let truncatedCount = 0;
+  let smallTargetsCount = 0;
   const els = Array.from(document.querySelectorAll('*')).slice(0, 600);
   for (const el of els) {
     const cs = getComputedStyle(el);
@@ -24,6 +28,22 @@ DOM_AUDIT_JS = r"""(() => {
           clientW: Math.round(el.clientWidth),
         });
       }
+      const clips = cs.textOverflow === 'ellipsis' || cs.overflowX === 'hidden' || cs.overflow === 'hidden';
+      const txt = (el.textContent || '').trim();
+      const hasOwnText = el.children.length === 0 || cs.textOverflow === 'ellipsis';
+      if (clips && txt && hasOwnText && el.clientWidth > 0) {
+        truncatedCount++;
+        if (truncated.length < 12) {
+          truncated.push({
+            tag: el.tagName.toLowerCase(),
+            id: el.id || null,
+            cls: typeof el.className === 'string' ? el.className.slice(0, 40) : null,
+            text: txt.slice(0, 40),
+            scrollW: Math.round(el.scrollWidth),
+            clientW: Math.round(el.clientWidth),
+          });
+        }
+      }
     }
     if ((r.right > vw + 2 || r.left < -2) && offscreenSamples.length < 8) {
       offscreenSamples.push({
@@ -35,6 +55,19 @@ DOM_AUDIT_JS = r"""(() => {
     }
     if (el.matches('button,a,input,select,[role=button]')) {
       interactiveRects.push({ tag: el.tagName.toLowerCase(), r });
+      if (r.width > 0 && r.height > 0 && (r.width < 36 || r.height < 36)) {
+        smallTargetsCount++;
+        if (smallTargets.length < 12) {
+          smallTargets.push({
+            tag: el.tagName.toLowerCase(),
+            id: el.id || null,
+            ariaLabel: el.getAttribute('aria-label') || null,
+            text: ((el.textContent || '').trim()).slice(0, 30) || null,
+            w: Math.round(r.width),
+            h: Math.round(r.height),
+          });
+        }
+      }
     }
   }
   let overlapCount = 0;
@@ -90,6 +123,10 @@ DOM_AUDIT_JS = r"""(() => {
     rootOverflowY,
     overflowCount: overflowSamples.length,
     overflowSamples,
+    truncatedCount,
+    truncated,
+    smallTargetsCount,
+    smallTargets,
     offscreenCount: offscreenSamples.length,
     offscreenSamples,
     overlapCount,

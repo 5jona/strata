@@ -81,8 +81,75 @@ class TestVisualCheck(unittest.TestCase):
         sheet, sw, sh = visual_check.stitch_burst_sheet([(crop, cw, ch), (black, 8, 8)])
         self.assertEqual((sw, sh, len(sheet)), (16, 16, 16 * 16 * 4))
 
+    def test_downsample_rgba_and_max_width_export(self) -> None:
+        w, h = 20, 10
+        rgba = b"\x10\x80\xf0\xff" * (w * h)
+        # No-op when max_width is None or >= width
+        same, sw, sh = visual_check.downsample_rgba(rgba, w, h, None)
+        self.assertEqual((sw, sh, len(same)), (w, h, len(rgba)))
+        same2, sw2, sh2 = visual_check.downsample_rgba(rgba, w, h, 24)
+        self.assertEqual((sw2, sh2, len(same2)), (w, h, len(rgba)))
+
+        # Proportional downscale: 20x10 -> 10x5
+        small, nw, nh = visual_check.downsample_rgba(rgba, w, h, 10)
+        self.assertEqual((nw, nh, len(small)), (10, 5, 10 * 5 * 4))
+
+        # Pure-Python fallback (PIL blocked) writes valid PNG with downscaled IHDR dimensions
+        with tempfile.TemporaryDirectory() as td:
+            out_png = os.path.join(td, "down.png")
+            real_import = __import__
+
+            def _no_pil(name, *a, **kw):
+                if name == "PIL" or name.startswith("PIL."):
+                    raise ImportError("blocked for test")
+                return real_import(name, *a, **kw)
+
+            with mock.patch("builtins.__import__", side_effect=_no_pil):
+                meta = visual_check.save_encoded_image(rgba, w, h, out_png, fmt="png", max_width=8)
+            self.assertEqual((meta["format"], meta["width"], meta["height"]), ("png", 8, 4))
+            with open(out_png, "rb") as f:
+                data = f.read()
+            self.assertTrue(data.startswith(b"\x89PNG\r\n\x1a\n"))
+            ihdr_w, ihdr_h = struct.unpack_from("!II", data, 16)
+            self.assertEqual((ihdr_w, ihdr_h), (8, 4))
+
 
 class TestLogcatAndSysProbe(unittest.TestCase):
+    def test_logcat_invalid_utf8_bytes_do_not_crash(self) -> None:
+        real_run = subprocess.run
+        bad_payload = (
+            b"11-23 12:00:00.100  1000  1001 W BinaryTag: bad-byte=\x8f-end\n"
+            b"11-23 12:00:00.200  1000  1001 E BinaryTag: ok-line\n"
+        )
+
+        def _fake_run(cmd, *args, **kwargs):
+            # Execute a real child process writing invalid UTF-8 bytes to verify errors='replace'
+            return real_run(
+                [sys.executable, "-c", f"import sys; sys.stdout.buffer.write({bad_payload!r})"],
+                *args,
+                **kwargs,
+            )
+
+        with tempfile.TemporaryDirectory() as td:
+            cpath = os.path.join(td, "bad.cursor")
+            with mock.patch.object(logcat_cursor.subprocess, "run", side_effect=_fake_run):
+                marked = logcat_cursor.mark_cursor(cpath)
+                self.assertEqual(marked["ts"], "11-23 12:00:00.200")
+                res = logcat_cursor.read_incremental(cpath, priority="W", advance=False)
+                self.assertTrue(res["ok"])
+                # Remove cursor to read both lines including the invalid-UTF-8 line
+                os.unlink(cpath)
+                res_all = logcat_cursor.read_incremental(cpath, priority="W", advance=False)
+                self.assertTrue(res_all["ok"])
+                self.assertEqual(res_all["count"], 2)
+                self.assertIn("\ufffd", res_all["entries"][0]["msg"])
+
+    def test_cdp_audit_js_includes_truncation_and_small_targets(self) -> None:
+        import cdp_audit_js
+
+        js = cdp_audit_js.DOM_AUDIT_JS
+        for key in ("truncatedCount", "truncated", "smallTargetsCount", "smallTargets", "textOverflow"):
+            self.assertIn(key, js)
     def test_logcat_parse_and_incremental_filter(self) -> None:
         lines = [
             "11-22 10:00:01.100  1234  1235 I SideVeil: panel opened",

@@ -109,12 +109,12 @@ function StrataWorkbench() {
             : 'min-h-[calc(100dvh-1rem)] flex-1 rounded-[var(--radius-panel)]'
         }
         headerLeading={
-          <div className="flex size-7 items-center justify-center rounded-[var(--radius-control)] bg-[var(--accent-soft)] text-[var(--accent)]">
+          <div className="strata-header-icon flex size-7 items-center justify-center rounded-[var(--radius-control)] bg-[var(--accent-soft)] text-[var(--accent)]">
             <Layers className="size-3.5" />
           </div>
         }
         headerTrailing={
-          <div className="flex items-center gap-1">
+          <div className="strata-header-actions flex items-center gap-1">
             <Badge variant={backendOnline ? 'success' : 'warning'} dot pulse={backendOnline}>
               {!isNativeHost ? '预览' : backendState === 'online' ? '在线' : '离线'}
             </Badge>

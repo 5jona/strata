@@ -75,10 +75,18 @@ export function OverviewTab({
                 {phaseInfo.label}
               </Badge>
             </div>
-            <p className="mt-1 truncate font-mono text-[11px] text-[var(--text-secondary)]">
-              {isRunning
-                ? `PID ${container.nsPid ?? '-'} · 运行 ${formatUptime(container.uptimeMs)} · ${container.loopDevices[0] ?? '无 loop'}`
-                : `镜像 ${container.imagePath}`}
+            <p className="strata-meta-line mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 font-mono text-[11px] leading-snug text-[var(--text-secondary)]">
+              {isRunning ? (
+                <>
+                  <span>{`PID ${container.nsPid ?? '-'}`}</span>
+                  <span>·</span>
+                  <span>{`运行 ${formatUptime(container.uptimeMs)}`}</span>
+                  <span>·</span>
+                  <span className="break-all">{container.loopDevices[0] ?? '无 loop'}</span>
+                </>
+              ) : (
+                <span className="break-all">{`镜像 ${container.imagePath}`}</span>
+              )}
             </p>
           </div>
         </div>

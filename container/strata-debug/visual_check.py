@@ -160,8 +160,26 @@ def encode_png_pure(rgba: bytes, width: int, height: int) -> bytes:
     )
 
 
+def downsample_rgba(rgba: bytes, width: int, height: int, max_width: int | None) -> tuple[bytes, int, int]:
+    """Proportional nearest-neighbor RGBA downsampler (zero external deps)."""
+    if not max_width or max_width <= 0 or width <= max_width:
+        return rgba, width, height
+    new_w = max(1, int(max_width))
+    new_h = max(1, round(height * new_w / width))
+    mv, stride = memoryview(rgba), width * 4
+    xs = [min(width - 1, (x * width) // new_w) * 4 for x in range(new_w)]
+    out = bytearray(new_w * new_h * 4)
+    pos = 0
+    for y in range(new_h):
+        row = min(height - 1, (y * height) // new_h) * stride
+        for xo in xs:
+            out[pos : pos + 4] = mv[row + xo : row + xo + 4]
+            pos += 4
+    return bytes(out), new_w, new_h
+
+
 def save_encoded_image(
-    rgba: bytes, width: int, height: int, out_path: str, fmt: str = "webp", quality: int = 75
+    rgba: bytes, width: int, height: int, out_path: str, fmt: str = "webp", quality: int = 75, max_width: int | None = None
 ) -> dict[str, Any]:
     parent = os.path.dirname(os.path.abspath(out_path)) or "."
     os.makedirs(parent, exist_ok=True)
@@ -172,17 +190,21 @@ def save_encoded_image(
             from PIL import Image  # type: ignore[import-not-found]
 
             img = Image.frombytes("RGBA", (width, height), rgba)
+            if max_width and max_width > 0 and width > max_width:
+                new_h = max(1, round(height * max_width / width))
+                img = img.resize((max_width, new_h), getattr(getattr(Image, "Resampling", Image), "LANCZOS", 1))
+                width, height = img.size
             eff_fmt = fmt.upper()
             if eff_fmt in {"JPG", "JPEG"}:
-                img = img.convert("RGB")
-                eff_fmt = "JPEG"
+                img, eff_fmt = img.convert("RGB"), "JPEG"
             fd, tmp_out = tempfile.mkstemp(prefix=".strata-vis-", dir=parent)
             os.close(fd)
             img.save(tmp_out, format=eff_fmt, quality=quality)
             os.replace(tmp_out, out_path)
             tmp_out = None
-            return {"path": out_path, "format": eff_fmt.lower(), "bytes": os.path.getsize(out_path)}
+            return {"path": out_path, "format": eff_fmt.lower(), "width": width, "height": height, "bytes": os.path.getsize(out_path)}
         except ImportError:
+            rgba, width, height = downsample_rgba(rgba, width, height, max_width)
             png_bytes = encode_png_pure(rgba, width, height)
             if fmt.lower() == "webp" and shutil.which("cwebp"):
                 fd_p, tmp_png = tempfile.mkstemp(prefix=".strata-vis-", suffix=".png", dir=parent)
@@ -190,21 +212,17 @@ def save_encoded_image(
                     f.write(png_bytes)
                 fd_o, tmp_out = tempfile.mkstemp(prefix=".strata-vis-", suffix=".webp", dir=parent)
                 os.close(fd_o)
-                res = subprocess.run(
-                    ["cwebp", "-quiet", "-q", str(quality), tmp_png, "-o", tmp_out],
-                    timeout=15.0,
-                    check=False,
-                )
+                res = subprocess.run(["cwebp", "-quiet", "-q", str(quality), tmp_png, "-o", tmp_out], timeout=15.0, check=False)
                 if res.returncode == 0 and os.path.isfile(tmp_out):
                     os.replace(tmp_out, out_path)
                     tmp_out = None
-                    return {"path": out_path, "format": "webp", "bytes": os.path.getsize(out_path)}
+                    return {"path": out_path, "format": "webp", "width": width, "height": height, "bytes": os.path.getsize(out_path)}
             fd_o, tmp_out = tempfile.mkstemp(prefix=".strata-vis-", suffix=".png", dir=parent)
             with os.fdopen(fd_o, "wb") as f:
                 f.write(png_bytes)
             os.replace(tmp_out, out_path)
             tmp_out = None
-            return {"path": out_path, "format": "png", "bytes": len(png_bytes)}
+            return {"path": out_path, "format": "png", "width": width, "height": height, "bytes": len(png_bytes)}
     finally:
         for p in (tmp_png, tmp_out):
             if p and os.path.exists(p):
@@ -223,20 +241,14 @@ def stitch_burst_sheet(frames: list[tuple[bytes, int, int]]) -> tuple[bytes, int
     blank = b"\x00" * (w * h * 4)
     while len(padded) < 4:
         padded.append((blank, w, h))
-    out_w, out_h = w * 2, h * 2
     stride = w * 4
-    rows: list[bytes] = []
-    for y in range(h):
-        rows.append(padded[0][0][y * stride : (y + 1) * stride] + padded[1][0][y * stride : (y + 1) * stride])
-    for y in range(h):
-        rows.append(padded[2][0][y * stride : (y + 1) * stride] + padded[3][0][y * stride : (y + 1) * stride])
-    return b"".join(rows), out_w, out_h
+    rows = [padded[0][0][y * stride : (y + 1) * stride] + padded[1][0][y * stride : (y + 1) * stride] for y in range(h)]
+    rows.extend(padded[2][0][y * stride : (y + 1) * stride] + padded[3][0][y * stride : (y + 1) * stride] for y in range(h))
+    return b"".join(rows), w * 2, h * 2
 
 
 def capture_raw_frame(timeout: float = 10.0) -> tuple[bytes, int, int]:
-    res = subprocess.run(
-        [HOST_EXEC, "/system/bin/screencap"], capture_output=True, timeout=timeout, check=False
-    )
+    res = subprocess.run([HOST_EXEC, "/system/bin/screencap"], capture_output=True, timeout=timeout, check=False)
     if res.returncode != 0 or not res.stdout:
         raise RuntimeError(f"raw screencap failed (rc={res.returncode})")
     w, h, _fmt, rgba = parse_screencap_header(res.stdout)
@@ -244,14 +256,8 @@ def capture_raw_frame(timeout: float = 10.0) -> tuple[bytes, int, int]:
 
 
 def run_visual_check(
-    *,
-    roi_spec: str | None = None,
-    out_path: str | None = None,
-    fmt: str = "webp",
-    quality: int = 75,
-    golden_raw: str | None = None,
-    burst_count: int = 1,
-    burst_interval_ms: int = 80,
+    *, roi_spec: str | None = None, out_path: str | None = None, fmt: str = "webp", quality: int = 75,
+    golden_raw: str | None = None, burst_count: int = 1, burst_interval_ms: int = 80, max_width: int | None = None,
 ) -> dict[str, Any]:
     roi = parse_roi(roi_spec)
     frames: list[tuple[bytes, int, int]] = []
@@ -262,9 +268,7 @@ def run_visual_check(
             time.sleep(burst_interval_ms / 1000.0)
 
     rgba, cw, ch = frames[-1]
-    health = analyze_rgba_health(rgba, cw, ch)
-    result: dict[str, Any] = {"ok": True, "health": health}
-
+    result: dict[str, Any] = {"ok": True, "health": analyze_rgba_health(rgba, cw, ch)}
     if golden_raw and os.path.isfile(golden_raw):
         with open(golden_raw, "rb") as f:
             gw, gh, _, g_rgba = parse_screencap_header(f.read())
@@ -273,9 +277,6 @@ def run_visual_check(
             result["goldenDiff"] = compute_ssim_luma(rgba, g_crop, cw, ch)
 
     if out_path:
-        if len(frames) > 1:
-            sheet_rgba, sw, sh = stitch_burst_sheet(frames)
-            result["saved"] = save_encoded_image(sheet_rgba, sw, sh, out_path, fmt=fmt, quality=quality)
-        else:
-            result["saved"] = save_encoded_image(rgba, cw, ch, out_path, fmt=fmt, quality=quality)
+        out_rgba, ow, oh = stitch_burst_sheet(frames) if len(frames) > 1 else (rgba, cw, ch)
+        result["saved"] = save_encoded_image(out_rgba, ow, oh, out_path, fmt=fmt, quality=quality, max_width=max_width)
     return result

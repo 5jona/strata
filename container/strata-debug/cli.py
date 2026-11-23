@@ -124,7 +124,8 @@ def _cmd_sys_probe(args: argparse.Namespace) -> int:
 def _cmd_visual(args: argparse.Namespace) -> int:
     return _emit(visual_check.run_visual_check(
         roi_spec=args.roi, out_path=args.out, fmt=args.format, quality=args.quality,
-        golden_raw=args.golden, burst_count=4 if args.burst_sheet else 1, burst_interval_ms=args.burst_interval_ms,
+        golden_raw=args.golden, burst_count=4 if args.burst_sheet else 1,
+        burst_interval_ms=args.burst_interval_ms, max_width=args.max_width,
     ))
 
 
@@ -237,6 +238,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_v.add_argument("--out")
     p_v.add_argument("--format", default="webp")
     p_v.add_argument("--quality", type=int, default=75)
+    p_v.add_argument("--max-width", type=int)
     p_v.add_argument("--golden")
     p_v.add_argument("--burst-sheet", action="store_true")
     p_v.add_argument("--burst-interval-ms", type=int, default=80)

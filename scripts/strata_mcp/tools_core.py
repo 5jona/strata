@@ -42,14 +42,14 @@ CORE_TOOLS: list[dict[str, Any]] = [
     make_tool("cdp_console", "Capture WebView console events and uncaught exceptions over CDP.", {
         "target": S, "pid": I, "urlMatch": S, "durationSec": N, "timeoutSec": N,
     }),
-    make_tool("cdp_audit", "L1 WebView DOM health audit (overflow, overlap, offscreen, contrast, console errors).", {
+    make_tool("cdp_audit", "L1 WebView DOM health audit (overflow, truncation, small targets, overlap, offscreen, contrast, console errors).", {
         "target": S, "pid": I, "urlContains": S, "urlMatch": S, "evalJs": S,
     }),
     make_tool("logcat_cursor", "L2a incremental logcat cursor: --mark watermark or read new lines with crash highlights.", {
         "mark": B, "cursor": S, "priority": S, "tag": S, "pid": I, "limit": I, "noAdvance": B,
     }),
-    make_tool("visual_check", "L3 raw screencap health check (black/blank/solid-color/blur/SSIM) with optional pull to PC.", {
-        "roi": S, "out": S, "format": S, "quality": I, "golden": S, "burstSheet": B,
+    make_tool("visual_check", "L3 raw screencap health check (black/blank/solid-color/blur/SSIM) with optional downsampled pull to PC.", {
+        "roi": S, "out": S, "format": S, "quality": I, "maxWidth": I, "golden": S, "burstSheet": B,
         "pullToLocal": B, "localOut": S,
     }),
     make_tool("gesture_replay", "L2b /dev/uinput multitouch Protocol B virtual touchscreen gesture replay.", {
@@ -84,7 +84,7 @@ def _handle_visual_check(
     pull_fn: Callable[..., dict[str, Any]],
 ) -> dict[str, Any]:
     fmt = str(args.get("format", "webp"))
-    ext = "png" if fmt.lower() == "png" else "webp"
+    ext = "png" if fmt.lower() == "png" else ("jpg" if fmt.lower() in {"jpg", "jpeg"} else "webp")
     want_pull = bool(args.get("pullToLocal")) or bool(args.get("localOut"))
     remote_out = args.get("out")
     auto_remote = False
@@ -93,6 +93,7 @@ def _handle_visual_check(
         auto_remote = True
 
     cmd = ["strata-debug", "visual", "--format", fmt, "--quality", str(int(args.get("quality", 75)))]
+    opt_flag(cmd, "--max-width", int(args["maxWidth"]) if args.get("maxWidth") is not None else None)
     opt_flag(cmd, "--roi", args.get("roi"))
     opt_flag(cmd, "--out", remote_out)
     opt_flag(cmd, "--golden", args.get("golden"))
