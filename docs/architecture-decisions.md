@@ -31,3 +31,18 @@ This document captures empirical Android 16+ GKI constraints and the core archit
 - **Context**: Strata serves both as a standalone developer Linux runtime (usable even to debug SideVeil itself) and as a SideVeil `uds-native` plugin backend (`strata.manager`).
 - **Decision**: `stratad` exposes a standalone NDJSON JSON-RPC 2.0 control plane over `/data/adb/strata/run/strata.sock` (`0700 root:root`, `SO_PEERCRED` `uid == 0`) routed through a transport-agnostic `Dispatcher` and `PluginEventSink`. SideVeil `hub.sock` connectivity is isolated behind an optional auto-reconnecting seam.
 - **Consequences**: 100% standalone operation when SideVeil is absent or down, with zero protocol translation overhead when bridging to SideVeil in Phase 2.
+
+## ADR-007: Pure Bearer HTTP/WS API + Tauri v2 Desktop Companion (No Browser-Hosted UI)
+- **Context**: Full container lifecycle management (provisioning, cloning, interactive terminal, managed services) is awkward on mobile touchscreens, while serving a full web console from `stratad` would add cookie session management, CSRF surface, and dual-breakpoint CSS complexity.
+- **Decision**: Expose a minimal Bearer-authenticated API in `stratad/src/web/` (`GET /api/info`, `POST /api/rpc`, `GET /ws/events`, `GET/DELETE /ws/pty/:id`, default loopback `127.0.0.1:7681` with opt-in RFC1918 LAN toggle), paired with a dedicated cross-platform Tauri v2 companion (`desktop/`) reusing `@gojona/ui` and a standalone KernelSU WebUI (`webroot/`) for on-device administration.
+- **Consequences**: Minimal daemon attack surface, zero cookie/HTML serving in `stratad`, native USB ADB forwarding + low-latency xterm.js PTY on PC, and strict `http://tauri.localhost` CORS/origin verification.
+
+## ADR-008: Root-Default In-Container User Without `USER_NS` or `sudo`
+- **Context**: Because stock Android GKI kernels lack `CONFIG_USER_NS`, container UIDs share the host Android kernel UID namespace. The default first Linux non-root user (`uid=1000`) collides directly with Android `AID_SYSTEM`, while `1001/1002/2000/10000+` collide with system services and Android apps (affecting `netd` policy routing and UID-based proxy rules). Moreover, ColorOS `secureguard_new` monitors non-root `uid != 0` privilege transitions.
+- **Decision**: Keep `root` (`uid=0`, working directory `/root/work`) as the canonical interactive, SSH, and Desktop PTY user, and do not bundle `sudo` by default. Software that strictly refuses to run as `root` should drop privileges locally via a dedicated service user avoiding Android's `1000`–`2000` and `10000+` UID ranges.
+- **Consequences**: Zero UID collision with Android system/app networking rules and zero OEM kernel escalation kills.
+
+## ADR-009: Non-Blocking `strata rpc` CLI for KernelSU Serialized `libsu` Shell
+- **Context**: KernelSU Manager executes `ksu.exec()` commands sequentially through a single shared `libsu` root shell. If a CLI subcommand blocks reading `stdin` when invoked without explicit input, it permanently deadlocks every subsequent KernelSU WebUI page across all installed modules.
+- **Decision**: `strata rpc <method> [json]` reads `stdin` only when `-` is explicitly provided as the payload argument, and KSU WebUI shell invocations redirect `</dev/null`.
+- **Consequences**: Deterministic non-blocking WebUI RPCs that cannot wedge KernelSU Manager.

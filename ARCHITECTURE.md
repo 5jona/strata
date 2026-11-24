@@ -49,34 +49,38 @@ Every crate inherits `[lints] workspace = true`, forbids `mod.rs` (uses `foo.rs`
 #### `crates/strata-sys/src/` — Audited Linux/Android Syscall Layer
 - `loopdev.rs`, `mount.rs`, `devfs.rs`, `selinux.rs`: Loop device attach/detach ioctls, ext4 mount/unmount/`FITRIM`, minimal `tmpfs /dev` and read-only `/sys` fallback, SELinux xattr labeling.
 - `namespace.rs`, `caps.rs`, `cgroup.rs`, `pidfd.rs`, `inotify.rs`: `unshare`/`setns`, `capset`, cgroup v2 migration and `cgroup.kill`, `pidfd_open`/`pidfd_send_signal`, and config file watching.
+- `kernel_caps.rs`, `pty.rs`, `rootfs_io.rs`, `rootfs_io/*`: Stock GKI capability probing, PTY master/slave allocation & window sizing, and `openat2(RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS)` jailed host-side rootfs I/O.
 - `net.rs`, `net/netlink.rs`, `procfs.rs`, `error.rs`: Interface IPv4 lookup, netlink address/route events, `/proc` mountinfo/namespace parsers, and typed OS error mapping.
 
 #### `crates/strata-runtime/src/` — Single-Threaded Isolation & Storage Engine
 - `stage2.rs`: Single-threaded `stratad __init` bootstrap (cgroup join, `unshare`, `/dev`, `pivot_root`, capability drop, `execve`).
 - `enter.rs`: Single-threaded `setns` enter path shared by `stratad __exec` and local `strata` CLI sessions.
 - `spec_pipe.rs`: Inherited read-only spec pipe (`Stage2Spec`/`EnterSpec`) and `O_CLOEXEC` pre-exec error pipe.
-- `storage.rs`, `storage/maintenance.rs`: Ext4 mount, dual-signal zero-residual teardown, `FITRIM` compaction, `e2fsck`, and gzip image backup.
-- `fs_atomic.rs`, `sync.rs`, `sync/debug_tools.rs`: Atomic write-sync-chmod-rename persistence, `/etc/resolv.conf` + `/run/strata/host.env` sync, and `host-exec`/`strata-debug` staging.
+- `storage.rs`, `storage/maintenance.rs`, `provision.rs`, `provision/*`: Ext4 mount, dual-signal zero-residual teardown, `FITRIM` compaction, `e2fsck`, gzip image backup, sparse clone, and streaming archive import/provisioning.
+- `fs_atomic.rs`, `sync.rs`, `sync/{debug_tools,ssh_keys}.rs`: Atomic write-sync-chmod-rename persistence, `/etc/resolv.conf` + `/run/strata/host.env` sync, OpenSSH key management, and `host-exec`/`strata-debug` staging.
 
 #### `crates/stratad/src/` — UID 0 Tokio Supervisor Daemon
 - `main.rs`: Pre-Tokio `__init`/`__exec` helper dispatch, daemon startup, signal handling, and clean shutdown.
-- `rpc_server.rs`, `dispatcher.rs`: Bounded-frame `strata.sock` server (`SO_PEERCRED` `uid == 0`) and transport-agnostic JSON-RPC router (`RpcCaller::LocalCtl` vs. `RpcCaller::SideVeilBridge`).
-- `manager.rs`, `manager/{launch,leases,ops,snapshot,supervisor}.rs`: Multi-container lifecycle serialization, session/temp-mount leases, maintenance operations, status snapshots, and `pidfd` + `AsyncFd` restart supervision.
+- `rpc_server.rs`, `dispatcher.rs`, `dispatcher/*`: Bounded-frame `strata.sock` server (`SO_PEERCRED` `uid == 0`) and transport-agnostic JSON-RPC router (`RpcCaller::LocalCtl` vs. `RpcCaller::SideVeilBridge` vs. `RpcCaller::WebApi`).
+- `web.rs`, `web/*`: Embedded `axum` Bearer-authenticated HTTP/WebSocket control plane (`GET /api/info`, `POST /api/rpc`, `GET /ws/events`, `GET/DELETE /ws/pty/:id`), CORS + `http://tauri.localhost` origin allowlist, and detached PTY session eviction.
+- `manager.rs`, `manager/{launch,leases,lifecycle_ops,ops,snapshot,supervisor}.rs`: Multi-container lifecycle serialization, slot/port reservation locks, session/temp-mount leases, maintenance operations, status snapshots, and `pidfd` + `AsyncFd` restart supervision.
+- `services.rs`, `services/*`, `catalog.rs`, `catalog/*`, `jobs.rs`, `jobs/*`, `wakelock.rs`: In-container managed autostart services, HTTPS simplestreams image catalog, background provisioning jobs, and serialized wake-lock manager.
 - `task_runner.rs`, `task_runner/io.rs`: Headless streaming command/Python runner with ordered `task.output` -> `task.exit` delivery and ring-buffer log replay.
-- `config_store.rs`, `net_watcher.rs`: Atomic config persistence, shutdown-aware `inotify` reloader, and netlink DNS re-sync trigger.
+- `config_store.rs`, `config_store/*`, `net_watcher.rs`: Atomic config persistence, shutdown-aware `inotify` reloader, and netlink DNS re-sync trigger.
 - `sideveil_seam.rs`, `sideveil_seam/{bridge,session}.rs`, `sideveil_hud.rs`: Dual-channel `EventHub`, `sideveil-plugin-sdk`-backed auto-reconnecting `hub.sock` NDJSON bridge (`PluginBackendRunner` / `PluginBackendHandle`), and Native HUD publisher.
 
 #### `crates/strata-ctl/src/` — Synchronous CLI (`strata`)
 - `main.rs`, `client.rs`: Synchronous Unix socket NDJSON client talking to `/data/adb/strata/run/strata.sock` with streaming event output.
-- `commands.rs`, `commands/config.rs`, `format.rs`: Subcommands for `start`, `stop`, `restart`, `status`, `list`, `logs`, `dns`, `ssh-key`, `compact`, `fsck`, `backup`, `daemon`, and `config` patching (including `set-l5-diag`).
+- `commands.rs`, `commands/{config,web}.rs`, `format.rs`: Subcommands for `start`, `stop`, `restart`, `status`, `list`, `logs`, `dns`, `ssh-key`, `compact`, `fsck`, `backup`, `web`, `daemon`, `rpc` (explicit `-` only for stdin), and `config` patching (including `set-l5-diag`).
 - `interactive.rs`: Local single-threaded `setns` TTY execution for `strata enter|exec|py|debug` after acquiring a connection-scoped lease via `session.acquire`.
 - Installed via KernelSU symlink at `/data/adb/ksu/bin/strata` pointing to `${MODDIR}/bin/strata`.
 
-### 2.2 WebUI, Container Tooling, MCP & KernelSU Scripts
+### 2.2 WebUI, Desktop Companion, Container Tooling, MCP & KernelSU Scripts
 
 | Subsystem | Paths | Responsibility |
 | --- | --- | --- |
-| SideVeil Plugin UI | `webui/`, `plugins/strata.manager/` | React 19 + TS + Tailwind v4 frontend (`StrataManagerApp.tsx`, `components/`, `hooks/`, `lib/strataRpc.ts` delegating to `@gojona/sideveil-sdk`'s `createTypedPluginClient`), built into `plugins/strata.manager/web/` with `manifest.json` (`uds-native`, `toast`/`clipboard`/`haptics`/`native-hud`). |
+| SideVeil Plugin & KSU WebUI | `webui/`, `plugins/strata.manager/`, `webroot/` | React 19 + TS + Tailwind v4 frontends built into both SideVeil drawer plugin (`plugins/strata.manager/web/`) and standalone full-width KernelSU WebUI (`webroot/`, invoking `strata rpc ... </dev/null`). |
+| Desktop Companion | `desktop/` (`src/`, `crates/strata-desktop-core/`, `src-tauri/`) | Cross-platform Tauri v2 desktop manager featuring USB ADB forwarding, LAN Bearer pairing, xterm.js WebGL2 binary-flow-controlled PTY shell, container provisioning, and managed service controls. |
 | In-Container Bridge | `container/host-exec`, `container/setup-container.sh` | POSIX `nsenter -t 1 -m -u -C -T -r -w` host bridge and Ubuntu rootfs provisioning helper. |
 | Device Debug CLI | `container/strata-debug/` | Python 3 toolkit (`cli.py`, `cli_android.py`, `cdp_*`, `logcat_cursor.py`, `gesture_replay.py`, `visual_check.py`, `observe_step.py`, `app_ops.py`, `ui_tree.py`, `lsposed_ops.py`, `host_inspect.py`, `perfetto_*`, `kernel_probe.py`, `sys_probe.py`, `forward_bridge.py`). |
 | PC-Side MCP Server | `scripts/strata-debug-mcp.py`, `scripts/strata_mcp/` | Stdio JSON-RPC 2.0 MCP server exposing 27 tools over SSH ControlMaster (`transport.py`, `transport_routing.py`, `devices.py`, `device_discovery.py`, `tools_core.py`, `tools_android.py`, `tools_devices.py`). |
@@ -169,6 +173,7 @@ Stopped / Failed ---> Starting ---> Running ---> Stopping ---> Stopped
 | Workflow | Command | Scope |
 | --- | --- | --- |
 | Full Quality Gate | `mise run check` | `rust:check` (`cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`), `webui:check` (`pnpm check`), `python:check` (`py_compile` + `unittest discover -s tests -v`). |
+| Desktop Quality Gate | `cd desktop && pnpm check && cargo test` | Biome lint, TS typecheck, Vite build, desktop transport/PTY/standards tests, and `strata-desktop-core` unit tests. |
 | Android Cross-Build | `mise run build` | Release `aarch64-linux-android` binaries (`stratad`, `strata`) via `scripts/aarch64-android-linker.sh`. |
 | Module Archive | `bash build.sh` | Runs all quality gates, cross-compiles binaries, stages `bin/`, and packages `out/strata.zip` with exact POSIX modes. |
 | Hot-Reload Deploy | `bash reload.sh [--ssh <target> \| --adb <serial> \| --local]` | Builds (unless `--skip-build`), atomically stages module files and plugin assets, and restarts `stratad` without rebooting. |
