@@ -67,6 +67,14 @@ impl ContainerManager {
         self.emit_state_changed(id, prev_phase, ContainerPhase::Stopping)
             .await;
 
+        // Close active PTY sessions and stop supervised background services before rootfs teardown.
+        if let Some(ptys) = self.pty_registry.read().await.clone() {
+            ptys.close_container_sessions(id).await;
+        }
+        if let Some(services) = self.service_supervisor.read().await.clone() {
+            services.stop_container_services(id).await;
+        }
+
         let cid = id.to_owned();
         let cfg_owned = cfg.clone();
         let report = tokio::task::spawn_blocking(move || {
@@ -168,6 +176,13 @@ impl ContainerManager {
         self.emit_state_changed(id, ContainerPhase::Starting, ContainerPhase::Running)
             .await;
 
+        if let Some(services) = self.service_supervisor.read().await.clone() {
+            let cid = id.to_owned();
+            tokio::spawn(async move {
+                services.start_auto_services(&cid).await;
+            });
+        }
+
         self.spawn_exit_monitor(id.to_owned(), Arc::clone(slot), child, pidfd, generation);
         Ok(())
     }
@@ -222,6 +237,12 @@ impl ContainerManager {
 
                 mgr.emit_state_changed(&id, prev, ContainerPhase::Failed)
                     .await;
+                if let Some(ptys) = mgr.pty_registry.read().await.clone() {
+                    ptys.close_container_sessions(&id).await;
+                }
+                if let Some(services) = mgr.service_supervisor.read().await.clone() {
+                    services.stop_container_services(&id).await;
+                }
                 if let Ok((_, cfg, _)) = mgr.resolve_container(Some(&id)).await {
                     let cid = id.clone();
                     let _ = tokio::task::spawn_blocking(move || {

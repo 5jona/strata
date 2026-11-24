@@ -198,6 +198,7 @@ fn run_cli(args: &[String]) -> Result<i32, String> {
         "config" => commands::handle_config(&mut client, container, rest, json_mode),
         "task" => commands::handle_task(&mut client, container, rest, json_mode),
         "daemon" => commands::handle_daemon(&mut client, rest, json_mode),
+        "web" => commands::handle_web(&mut client, rest, json_mode),
         "rpc" => commands::handle_raw_rpc(&mut client, rest),
         other => Err(format!(
             "unknown subcommand '{other}' (run 'strata --help')"
@@ -232,7 +233,10 @@ Commands:
                                 set-char-devs <csv|none> | set-mounts <src:dst[:ro|rw],...|none>
                                 set-l5-diag <on|off>
   task <run|list|cancel|logs> Run, inspect, cancel, or replay logs of daemon tasks
-  daemon <status|ping|health> Inspect stratad daemon health and summary
-  rpc <method> [json-params]  Send a raw JSON-RPC 2.0 request to stratad"
+  daemon <status|ping|health|capabilities|logs>
+                              Inspect stratad daemon health, kernel caps, and logs
+  web <status|token|rotate-token|lan on|off|port <n>>
+                              Inspect or configure embedded HTTP/WS control plane
+  rpc <method> [json|-]       Send a raw JSON-RPC 2.0 request to stratad"
     );
 }

@@ -4,22 +4,28 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::path::Path;
 
+use strata_sys::rootfs_io::RootDir;
+
 use crate::error::{RuntimeError, RuntimeResult};
-use crate::fs_atomic::{ensure_dir_mode, sync_bytes_if_changed};
 
 const STRATA_DEBUG_LAUNCHER: &[u8] =
     b"#!/bin/sh\nexec /usr/bin/python3 /usr/local/lib/strata-debug/cli.py \"$@\"\n";
 
 /// Syncs `.py` files from `<mod_root>/container/strata-debug/` into
 /// `<mount_dir>/usr/local/lib/strata-debug/`, pruning stale `.py` files,
-/// `.pyc` files, and `__pycache__` directories in the destination.
-pub(crate) fn sync_strata_debug_package(mod_root: &Path, mount_dir: &Path) -> RuntimeResult<()> {
+/// `.pyc` files, and `__pycache__` directories in the destination safely within `root`.
+pub(crate) fn sync_strata_debug_package(
+    mod_root: &Path,
+    mount_dir: &Path,
+    root: &RootDir,
+) -> RuntimeResult<()> {
     let src_dir = mod_root.join("container/strata-debug");
     if !src_dir.is_dir() {
         return Ok(());
     }
-    let dst_dir = mount_dir.join("usr/local/lib/strata-debug");
-    ensure_dir_mode(&dst_dir, 0o755)?;
+    let rel_dst = Path::new("usr/local/lib/strata-debug");
+    root.ensure_dir(rel_dst, 0o755)
+        .map_err(RuntimeError::from_sys)?;
 
     let entries = fs::read_dir(&src_dir).map_err(|source| RuntimeError::Io {
         op: "read strata-debug dir",
@@ -44,25 +50,30 @@ pub(crate) fn sync_strata_debug_package(mod_root: &Path, mount_dir: &Path) -> Ru
             } else {
                 0o644
             };
-            sync_bytes_if_changed(&bytes, &dst_dir.join(name), mode)?;
+            root.sync_bytes_if_changed(&bytes, &rel_dst.join(name), mode)
+                .map_err(RuntimeError::from_sys)?;
             expected_py.insert(name.to_owned());
         }
     }
 
-    prune_stale_debug_artifacts(&dst_dir, &expected_py)?;
+    // Only prune inside `mount_dir/usr/local/lib/strata-debug` after `root.ensure_dir` proved no symlinks.
+    prune_stale_debug_artifacts(&mount_dir.join(rel_dst), root, rel_dst, &expected_py)?;
 
     if !expected_py.is_empty() {
-        sync_bytes_if_changed(
+        root.sync_bytes_if_changed(
             STRATA_DEBUG_LAUNCHER,
-            &mount_dir.join("usr/local/bin/strata-debug"),
+            Path::new("usr/local/bin/strata-debug"),
             0o755,
-        )?;
+        )
+        .map_err(RuntimeError::from_sys)?;
     }
     Ok(())
 }
 
 fn prune_stale_debug_artifacts(
     dst_dir: &Path,
+    root: &RootDir,
+    rel_dst: &Path,
     expected_py: &BTreeSet<String>,
 ) -> RuntimeResult<()> {
     let entries = fs::read_dir(dst_dir).map_err(|source| RuntimeError::Io {
@@ -72,23 +83,27 @@ fn prune_stale_debug_artifacts(
 
     for entry in entries.flatten() {
         let path = entry.path();
+        let Ok(meta) = fs::symlink_metadata(&path) else {
+            continue;
+        };
         let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
             continue;
         };
+        let rel_item = rel_dst.join(name);
 
-        if name == "__pycache__" && path.is_dir() {
+        if name == "__pycache__" && meta.is_dir() {
             let _ = fs::remove_dir_all(&path);
             continue;
         }
-        if !path.is_file() {
+        if !meta.is_file() {
             continue;
         }
         if name.ends_with(".pyc") || name.ends_with(".pyo") {
-            let _ = fs::remove_file(&path);
+            let _ = root.remove_file(&rel_item);
             continue;
         }
         if name.ends_with(".py") && !expected_py.contains(name) {
-            let _ = fs::remove_file(&path);
+            let _ = root.remove_file(&rel_item);
         }
     }
     Ok(())
@@ -126,7 +141,8 @@ mod tests {
         fs::write(dst_dir.join("stale.pyc"), b"\x00\x00").expect("write stale.pyc");
         fs::write(pycache.join("cli.cpython-312.pyc"), b"\x00\x00").expect("write cached pyc");
 
-        sync_strata_debug_package(&mod_root, &mnt).expect("sync package");
+        let root = RootDir::open(&mnt).expect("root");
+        sync_strata_debug_package(&mod_root, &mnt, &root).expect("sync package");
 
         assert!(dst_dir.join("cli.py").is_file());
         assert!(!dst_dir.join("notes.txt").exists());

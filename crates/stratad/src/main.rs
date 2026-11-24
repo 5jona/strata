@@ -1,14 +1,19 @@
 //! Strata UID 0 container supervisor daemon and single-threaded stage-2/enter helper entry point.
 
+mod catalog;
 mod config_store;
 mod dispatcher;
 mod error;
+mod jobs;
 mod manager;
 mod net_watcher;
 mod rpc_server;
+mod services;
 mod sideveil_hud;
 mod sideveil_seam;
 mod task_runner;
+mod wakelock;
+mod web;
 
 use std::os::fd::RawFd;
 use std::path::{Path, PathBuf};
@@ -16,14 +21,21 @@ use std::process::ExitCode;
 use std::sync::Arc;
 use std::time::Instant;
 
-use strata_protocol::constants::{DEFAULT_CONFIG_PATH, DEFAULT_RUN_DIR, DEFAULT_SOCKET_PATH};
+use strata_protocol::constants::{
+    DEFAULT_CONFIG_PATH, DEFAULT_RUN_DIR, DEFAULT_SOCKET_PATH, DEFAULT_WEB_TOKEN_PATH,
+};
 use strata_runtime::{fs_atomic, spec_pipe};
 
+use crate::catalog::CatalogClient;
 use crate::config_store::ConfigStore;
 use crate::dispatcher::Dispatcher;
+use crate::jobs::ProvisionJobManager;
 use crate::manager::ContainerManager;
+use crate::services::ServiceSupervisor;
 use crate::sideveil_seam::{EventHub, SideVeilBridgeSeam};
 use crate::task_runner::TaskRunner;
+use crate::wakelock::WakeLockManager;
+use crate::web::WebServerController;
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().collect();
@@ -177,6 +189,8 @@ async fn daemon_main(opts: DaemonArgs) -> Result<(), String> {
     let config_store = Arc::new(ConfigStore::load_or_seed(opts.config_path)?);
     let event_hub = Arc::new(EventHub::new());
     let sideveil = Arc::new(SideVeilBridgeSeam::new());
+    let wakelock = Arc::new(WakeLockManager::new());
+    let catalog = Arc::new(CatalogClient::new()?);
 
     let manager = Arc::new(ContainerManager::new(
         Arc::clone(&config_store),
@@ -188,8 +202,35 @@ async fn daemon_main(opts: DaemonArgs) -> Result<(), String> {
     let task_runner = Arc::new(TaskRunner::new(
         Arc::clone(&manager),
         Arc::clone(&event_hub),
+        self_exe.clone(),
+    ));
+    let jobs = Arc::new(ProvisionJobManager::new(
+        Arc::clone(&config_store),
+        Arc::clone(&manager),
+        Arc::clone(&catalog),
+        Arc::clone(&event_hub),
+        Arc::clone(&wakelock),
+    ));
+    let services = Arc::new(ServiceSupervisor::new(
+        Arc::clone(&config_store),
+        Arc::clone(&manager),
+        Arc::clone(&event_hub),
         self_exe,
     ));
+    let token_path = if opts.run_dir == Path::new(DEFAULT_RUN_DIR) {
+        PathBuf::from(DEFAULT_WEB_TOKEN_PATH)
+    } else {
+        opts.run_dir.join("web.token")
+    };
+    let web = Arc::new(WebServerController::new(
+        token_path,
+        Arc::clone(&config_store),
+        Arc::clone(&jobs),
+        Arc::clone(&wakelock),
+    )?);
+    manager
+        .attach_hooks(web.ptys(), Arc::clone(&services))
+        .await;
 
     let dispatcher = Arc::new(Dispatcher::new(
         started_at,
@@ -197,12 +238,17 @@ async fn daemon_main(opts: DaemonArgs) -> Result<(), String> {
         Arc::clone(&manager),
         Arc::clone(&task_runner),
         Arc::clone(&sideveil),
+        Arc::clone(&web),
+        Arc::clone(&catalog),
+        Arc::clone(&jobs),
+        Arc::clone(&services),
     ));
 
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     let inotify_handle = config_store.spawn_inotify_watcher(
         Arc::clone(&manager),
         Arc::clone(&sideveil),
+        Arc::clone(&web),
         shutdown_rx.clone(),
     );
     let net_watcher_handle =
@@ -213,6 +259,13 @@ async fn daemon_main(opts: DaemonArgs) -> Result<(), String> {
         Arc::clone(&manager),
         Arc::clone(&task_runner),
         Arc::clone(&event_hub),
+        shutdown_rx.clone(),
+    );
+    let web_handle = web.spawn_server(
+        Arc::clone(&dispatcher),
+        Arc::clone(&manager),
+        Arc::clone(&event_hub),
+        Arc::clone(&wakelock),
         shutdown_rx.clone(),
     );
 
@@ -230,9 +283,11 @@ async fn daemon_main(opts: DaemonArgs) -> Result<(), String> {
     eprintln!("stratad: received shutdown signal, draining containers cleanly...");
     let _ = shutdown_tx.send(true);
     task_runner.cancel_all().await;
+    services.stop_all().await;
     manager.stop_all().await;
 
     let _ = tokio::time::timeout(std::time::Duration::from_secs(2), server_handle).await;
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(2), web_handle).await;
     let _ = tokio::time::timeout(std::time::Duration::from_secs(2), bridge_handle).await;
     let _ = tokio::time::timeout(std::time::Duration::from_secs(2), net_watcher_handle).await;
     if let Some(handle) = inotify_handle {

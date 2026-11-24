@@ -30,6 +30,9 @@ fi
 if [ -d "$MODPATH/plugins/strata.manager" ]; then
     set_perm_recursive "$MODPATH/plugins/strata.manager" 0 0 0755 0644
 fi
+if [ -d "$MODPATH/webroot" ]; then
+    set_perm_recursive "$MODPATH/webroot" 0 0 0755 0644
+fi
 
 STATE_DIR="/data/adb/strata"
 RUN_DIR="${STATE_DIR}/run"

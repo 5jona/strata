@@ -11,8 +11,9 @@ pub mod state;
 
 pub use capabilities::{CapMask, CapProfile};
 pub use config::{
-    BindMount, ConfigValidationError, ContainerConfig, SideVeilBridgeConfig, SshConfig,
-    StrataConfig, validate_container_id,
+    BindMount, ConfigValidationError, ContainerConfig, ContainerServiceRuntime,
+    ContainerServiceSpec, ServiceRestartPolicy, ServiceStatus, SideVeilBridgeConfig, SshConfig,
+    StrataConfig, WebConsoleConfig, validate_container_id,
 };
 pub use rpc::{EventEnvelope, RpcError, RpcRequest, RpcResponse};
 pub use state::{

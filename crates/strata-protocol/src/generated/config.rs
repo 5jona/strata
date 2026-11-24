@@ -4,6 +4,28 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
+/// Automatic restart policy for a managed container background service.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ServiceRestartPolicy {
+    /// Restart only on non-zero exit or signal.
+    OnFailure,
+    /// Always restart unless explicitly stopped.
+    Always,
+    /// Do not restart after exit.
+    Never,
+}
+
+/// Runtime lifecycle status of a managed container background service.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ServiceStatus {
+    Stopped,
+    Running,
+    Crashed,
+    CircuitOpen,
+}
+
 /// Container Linux capability policy derived from configuration or debug override.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -26,6 +48,18 @@ pub enum SessionMode {
     Oneshot,
     /// Temporarily mount a stopped container with full host /dev, /sys, /proc.
     Debug,
+}
+
+/// Embedded HTTP/WebSocket PC Console control-plane settings.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WebConsoleConfig {
+    #[serde(default = "default_web_console_config_enabled")]
+    pub enabled: bool,
+    #[serde(default)]
+    pub lan_enabled: bool,
+    #[serde(default = "default_web_console_config_port")]
+    pub port: u16,
 }
 
 /// Optional SideVeil uds-native plugin bridge configuration.
@@ -52,6 +86,27 @@ pub struct SshConfig {
     pub port: u16,
     #[serde(default = "default_ssh_config_keepalive_secs")]
     pub keepalive_secs: u16,
+}
+
+/// Declarative configuration for a supervised background service inside a container.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContainerServiceSpec {
+    pub id: String,
+    pub name: String,
+    pub command: Vec<String>,
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub workdir: Option<String>,
+    #[serde(default)]
+    pub env: BTreeMap<String, String>,
+    #[serde(default = "default_container_service_spec_auto_start")]
+    pub auto_start: bool,
+    pub restart_policy: ServiceRestartPolicy,
+    #[serde(default = "default_container_service_spec_max_restarts")]
+    pub max_restarts: u32,
+    #[serde(default = "default_container_service_spec_backoff_ms")]
+    pub backoff_ms: u64,
 }
 
 /// Extra host-to-container bind mount entry.
@@ -95,8 +150,12 @@ pub struct ContainerConfig {
     pub dns_servers: Vec<String>,
     #[serde(default = "default_container_config_fsck_on_mount")]
     pub fsck_on_mount: bool,
+    #[serde(default = "default_container_config_noatime")]
+    pub noatime: bool,
     #[serde(default)]
     pub init_command: Vec<String>,
+    #[serde(default)]
+    pub services: Vec<ContainerServiceSpec>,
 }
 
 /// Top-level multi-container Strata configuration.
@@ -109,6 +168,8 @@ pub struct StrataConfig {
     pub default_container: String,
     #[serde(default)]
     pub sideveil: SideVeilBridgeConfig,
+    #[serde(default)]
+    pub web: WebConsoleConfig,
     #[serde(default)]
     pub containers: BTreeMap<String, ContainerConfig>,
 }
@@ -135,6 +196,9 @@ pub struct ContainerConfigPatchParams {
     pub host_bridge: Option<bool>,
     #[serde(default)]
     pub host_runtime: Option<bool>,
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub noatime: Option<bool>,
     #[serde(default)]
     pub extra_char_devs: Option<Vec<String>>,
     #[serde(default)]
@@ -196,6 +260,96 @@ pub struct SessionReleaseResult {
     pub released: bool,
 }
 
+/// Live runtime status for a supervised background service inside a container.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContainerServiceRuntime {
+    pub id: String,
+    pub name: String,
+    pub status: ServiceStatus,
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pid: Option<u32>,
+    pub uptime_ms: u64,
+    pub restart_count: u32,
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_error: Option<String>,
+    pub auto_start: bool,
+}
+
+/// Parameters for service.upsert.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ServiceUpsertParams {
+    #[serde(default)]
+    pub container: Option<String>,
+    pub spec: ContainerServiceSpec,
+}
+
+/// Parameters selecting one supervised service inside a container.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ServiceSelectorParams {
+    #[serde(default)]
+    pub container: Option<String>,
+    pub service_id: String,
+}
+
+/// Parameters for service.logs.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ServiceLogsParams {
+    #[serde(default)]
+    pub container: Option<String>,
+    pub service_id: String,
+    #[serde(default)]
+    pub limit: Option<usize>,
+}
+
+/// Result returned by service.logs.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ServiceLogsResult {
+    pub container: String,
+    pub service_id: String,
+    pub lines: Vec<String>,
+}
+
+/// Result returned by service.delete.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ServiceDeleteResult {
+    pub container: String,
+    pub service_id: String,
+    pub deleted: bool,
+}
+
+/// Event payload emitted on service.stateChanged transitions.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ServiceStateChangedPayload {
+    pub container: String,
+    pub service_id: String,
+    pub prev_status: ServiceStatus,
+    pub status: ServiceStatus,
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pid: Option<u32>,
+    pub restart_count: u32,
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_error: Option<String>,
+}
+
+fn default_web_console_config_enabled() -> bool {
+    true
+}
+
+fn default_web_console_config_port() -> u16 {
+    7681
+}
+
 fn default_side_veil_bridge_config_enabled() -> bool {
     true
 }
@@ -224,6 +378,18 @@ fn default_ssh_config_keepalive_secs() -> u16 {
     60
 }
 
+fn default_container_service_spec_auto_start() -> bool {
+    true
+}
+
+fn default_container_service_spec_max_restarts() -> u32 {
+    5
+}
+
+fn default_container_service_spec_backoff_ms() -> u64 {
+    1000
+}
+
 fn default_container_config_enabled() -> bool {
     true
 }
@@ -249,6 +415,10 @@ fn default_container_config_sync_android_dns() -> bool {
 }
 
 fn default_container_config_fsck_on_mount() -> bool {
+    true
+}
+
+fn default_container_config_noatime() -> bool {
     true
 }
 

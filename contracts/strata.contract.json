@@ -18,7 +18,12 @@
         "DEFAULT_SSH_KEEPALIVE_SECS": { "value": 60, "type": "u16", "doc": "Default Dropbear keepalive interval in seconds." },
         "DEFAULT_OOM_SCORE_ADJ": { "value": -300, "type": "i32", "doc": "Default container init oom_score_adj." },
         "DEFAULT_LOG_MAX_BYTES": { "value": 262144, "type": "u64", "doc": "Maximum log file size before rotation (256 KiB)." },
-        "DEFAULT_EXTRA_CHAR_DEV": { "value": "uinput", "type": "string", "doc": "Default character device exposed to primary container." }
+        "DEFAULT_EXTRA_CHAR_DEV": { "value": "uinput", "type": "string", "doc": "Default character device exposed to primary container." },
+        "DEFAULT_WEB_PORT": { "value": 7681, "type": "u16", "doc": "Default embedded Web/PC console HTTP+WS port." },
+        "DEFAULT_WEB_LISTEN_LOCAL": { "value": "127.0.0.1", "type": "string", "doc": "Default loopback-only Web console bind address." },
+        "DEFAULT_WEB_LISTEN_LAN": { "value": "0.0.0.0", "type": "string", "doc": "LAN-mode Web console bind address (restricted to RFC1918 peers)." },
+        "DEFAULT_DISTRO_MIRROR_TUNA": { "value": "https://mirrors.tuna.tsinghua.edu.cn/lxc-images", "type": "string", "doc": "Primary China-accessible Simplestreams ARM64 rootfs mirror." },
+        "DEFAULT_DISTRO_MIRROR_OFFICIAL": { "value": "https://images.linuxcontainers.org", "type": "string", "doc": "Official LinuxContainers Simplestreams fallback mirror." }
       }
     },
     "paths": {
@@ -31,6 +36,8 @@
         "DEFAULT_RUN_DIR": { "value": "/data/adb/strata/run", "type": "string" },
         "DEFAULT_SOCKET_PATH": { "value": "/data/adb/strata/run/strata.sock", "type": "string" },
         "DEFAULT_LOGS_DIR": { "value": "/data/adb/strata/run/logs", "type": "string" },
+        "DEFAULT_DAEMON_LOG_PATH": { "value": "/data/adb/strata/run/logs/stratad.log", "type": "string" },
+        "DEFAULT_WEB_TOKEN_PATH": { "value": "/data/adb/strata/run/web.token", "type": "string" },
         "DEFAULT_CONTAINERS_ROOT": { "value": "/data/local/strata/containers", "type": "string" },
         "CONTAINER_RUN_DIR": { "value": "/run/strata", "type": "string" },
         "CONTAINER_HOST_ENV_PATH": { "value": "/run/strata/host.env", "type": "string" },
@@ -60,17 +67,71 @@
         "METHOD_NOT_FOUND": { "value": -32601, "type": "i32" },
         "INVALID_PARAMS": { "value": -32602, "type": "i32" },
         "INTERNAL_ERROR": { "value": -32000, "type": "i32" },
+        "UNAUTHORIZED": { "value": -32001, "type": "i32" },
         "PERMISSION_DENIED": { "value": -32003, "type": "i32" },
         "IMAGE_BUSY": { "value": -32020, "type": "i32" },
         "CONTAINER_NOT_FOUND": { "value": -32021, "type": "i32" },
         "CONTAINER_ALREADY_RUNNING": { "value": -32022, "type": "i32" },
         "CONTAINER_NOT_RUNNING": { "value": -32023, "type": "i32" },
         "INVALID_STATE": { "value": -32024, "type": "i32" },
-        "TASK_NOT_FOUND": { "value": -32025, "type": "i32" }
+        "TASK_NOT_FOUND": { "value": -32025, "type": "i32" },
+        "CONTAINER_ALREADY_EXISTS": { "value": -32026, "type": "i32" },
+        "JOB_NOT_FOUND": { "value": -32027, "type": "i32" },
+        "SERVICE_NOT_FOUND": { "value": -32028, "type": "i32" }
       }
     }
   },
   "enums": {
+    "ServiceRestartPolicy": {
+      "doc": "Automatic restart policy for a managed container background service.",
+      "renameAll": "kebab-case",
+      "variants": [
+        { "name": "OnFailure", "doc": "Restart only on non-zero exit or signal." },
+        { "name": "Always", "doc": "Always restart unless explicitly stopped." },
+        { "name": "Never", "doc": "Do not restart after exit." }
+      ]
+    },
+    "ServiceStatus": {
+      "doc": "Runtime lifecycle status of a managed container background service.",
+      "renameAll": "kebab-case",
+      "variants": [
+        { "name": "Stopped" },
+        { "name": "Running" },
+        { "name": "Crashed" },
+        { "name": "CircuitOpen" }
+      ]
+    },
+    "DistroMirror": {
+      "doc": "Online Simplestreams ARM64 distro catalog mirror selection.",
+      "renameAll": "snake_case",
+      "variants": [
+        { "name": "Tuna", "doc": "Tsinghua TUNA lxc-images mirror (China primary)." },
+        { "name": "Official", "doc": "Official LinuxContainers images.linuxcontainers.org mirror." },
+        { "name": "Custom", "doc": "User-supplied Simplestreams base URL." }
+      ]
+    },
+    "ContainerJobKind": {
+      "doc": "Kind of asynchronous container provisioning or storage job.",
+      "renameAll": "snake_case",
+      "variants": [
+        { "name": "Create" },
+        { "name": "Import" },
+        { "name": "Clone" },
+        { "name": "Resize" },
+        { "name": "Export" }
+      ]
+    },
+    "ContainerJobState": {
+      "doc": "Execution state of an asynchronous container provisioning job.",
+      "renameAll": "snake_case",
+      "variants": [
+        { "name": "Pending" },
+        { "name": "Running" },
+        { "name": "Completed" },
+        { "name": "Failed" },
+        { "name": "Cancelled" }
+      ]
+    },
     "CapProfile": {
       "doc": "Container Linux capability policy derived from configuration or debug override.",
       "renameAll": "kebab-case",
@@ -110,6 +171,16 @@
     }
   },
   "structs": {
+    "WebConsoleConfig": {
+      "doc": "Embedded HTTP/WebSocket PC Console control-plane settings.",
+      "renameAll": "camelCase",
+      "rustDerives": ["Debug", "Clone", "PartialEq", "Eq", "Serialize", "Deserialize"],
+      "fields": [
+        { "name": "enabled", "type": "bool", "default": true },
+        { "name": "lan_enabled", "type": "bool", "default": false },
+        { "name": "port", "type": "u16", "default": 7681 }
+      ]
+    },
     "SideVeilBridgeConfig": {
       "doc": "Optional SideVeil uds-native plugin bridge configuration.",
       "renameAll": "camelCase",
@@ -129,6 +200,22 @@
         { "name": "listen_addr", "type": "string", "default": "0.0.0.0" },
         { "name": "port", "type": "u16", "default": 2222 },
         { "name": "keepalive_secs", "type": "u16", "default": 60 }
+      ]
+    },
+    "ContainerServiceSpec": {
+      "doc": "Declarative configuration for a supervised background service inside a container.",
+      "renameAll": "camelCase",
+      "rustDerives": ["Debug", "Clone", "PartialEq", "Eq", "Serialize", "Deserialize"],
+      "fields": [
+        { "name": "id", "type": "string" },
+        { "name": "name", "type": "string" },
+        { "name": "command", "type": { "list": "string" } },
+        { "name": "workdir", "type": "string", "optional": true, "skipSerializingIfNone": true },
+        { "name": "env", "type": { "map": ["string", "string"] }, "default": {} },
+        { "name": "auto_start", "type": "bool", "default": true },
+        { "name": "restart_policy", "type": { "ref": "ServiceRestartPolicy" } },
+        { "name": "max_restarts", "type": "u32", "default": 5 },
+        { "name": "backoff_ms", "type": "u64", "default": 1000 }
       ]
     },
     "BindMount": {
@@ -161,7 +248,9 @@
         { "name": "sync_android_dns", "type": "bool", "default": true },
         { "name": "dns_servers", "type": { "list": "string" }, "default": [] },
         { "name": "fsck_on_mount", "type": "bool", "default": true },
-        { "name": "init_command", "type": { "list": "string" }, "default": [] }
+        { "name": "noatime", "type": "bool", "default": true },
+        { "name": "init_command", "type": { "list": "string" }, "default": [] },
+        { "name": "services", "type": { "list": { "ref": "ContainerServiceSpec" } }, "default": [] }
       ]
     },
     "StrataConfig": {
@@ -172,6 +261,7 @@
         { "name": "version", "type": "u32", "default": 1 },
         { "name": "default_container", "type": "string", "default": "main" },
         { "name": "sideveil", "type": { "ref": "SideVeilBridgeConfig" }, "default": {} },
+        { "name": "web", "type": { "ref": "WebConsoleConfig" }, "default": {} },
         { "name": "containers", "type": { "map": ["string", { "ref": "ContainerConfig" }] }, "default": {} }
       ]
     },
@@ -189,6 +279,7 @@
         { "name": "ssh_port", "type": "u16", "optional": true },
         { "name": "host_bridge", "type": "bool", "optional": true },
         { "name": "host_runtime", "type": "bool", "optional": true },
+        { "name": "noatime", "type": "bool", "optional": true, "skipSerializingIfNone": true },
         { "name": "extra_char_devs", "type": { "list": "string" }, "optional": true },
         { "name": "extra_mounts", "type": { "list": { "ref": "BindMount" } }, "optional": true }
       ]
@@ -589,18 +680,372 @@
       "fields": [
         { "name": "subscribed", "type": "bool" }
       ]
+    },
+    "KernelCapabilitiesResult": {
+      "doc": "Live kernel container capability probe returned by daemon.capabilities.",
+      "renameAll": "camelCase",
+      "rustDerives": ["Debug", "Clone", "PartialEq", "Eq", "Serialize", "Deserialize"],
+      "fields": [
+        { "name": "kernel_release", "type": "string" },
+        { "name": "pid_ns", "type": "bool" },
+        { "name": "ipc_ns", "type": "bool" },
+        { "name": "sysv_ipc", "type": "bool" },
+        { "name": "user_ns", "type": "bool" },
+        { "name": "net_ns", "type": "bool" },
+        { "name": "overlay_fs", "type": "bool" },
+        { "name": "fuse_fs", "type": "bool" },
+        { "name": "cgroup_v2", "type": "bool" },
+        { "name": "cgroup_pids", "type": "bool" },
+        { "name": "cgroup_bpf", "type": "bool" },
+        { "name": "io_uring", "type": "bool" },
+        { "name": "kvm", "type": "bool" },
+        { "name": "devtmpfs", "type": "bool" },
+        { "name": "systemd_ready", "type": "bool" },
+        { "name": "docker_ready", "type": "bool" }
+      ]
+    },
+    "DaemonLogsParams": {
+      "doc": "Parameters for daemon.logs.",
+      "renameAll": "camelCase",
+      "rustDerives": ["Debug", "Clone", "Default", "PartialEq", "Eq", "Serialize", "Deserialize"],
+      "fields": [
+        { "name": "lines", "type": "usize", "optional": true }
+      ]
+    },
+    "DaemonLogsResult": {
+      "doc": "Result returned by daemon.logs.",
+      "renameAll": "camelCase",
+      "rustDerives": ["Debug", "Clone", "PartialEq", "Eq", "Serialize", "Deserialize"],
+      "fields": [
+        { "name": "log_path", "type": "string" },
+        { "name": "lines", "type": { "list": "string" } }
+      ]
+    },
+    "WebStatusResult": {
+      "doc": "Runtime status of the embedded HTTP/WebSocket PC Console server.",
+      "renameAll": "camelCase",
+      "rustDerives": ["Debug", "Clone", "PartialEq", "Eq", "Serialize", "Deserialize"],
+      "fields": [
+        { "name": "enabled", "type": "bool" },
+        { "name": "running", "type": "bool" },
+        { "name": "lan_enabled", "type": "bool" },
+        { "name": "listen_addr", "type": "string" },
+        { "name": "port", "type": "u16" },
+        { "name": "token_path", "type": "string" },
+        { "name": "webroot_available", "type": "bool" },
+        { "name": "active_pty_sessions", "type": "usize" },
+        { "name": "active_jobs", "type": "usize" },
+        { "name": "lan_urls", "type": { "list": "string" }, "default": [] }
+      ]
+    },
+    "WebConfigureParams": {
+      "doc": "Parameters for web.configure.",
+      "renameAll": "camelCase",
+      "rustDerives": ["Debug", "Clone", "Default", "PartialEq", "Eq", "Serialize", "Deserialize"],
+      "fields": [
+        { "name": "enabled", "type": "bool", "optional": true },
+        { "name": "lan_enabled", "type": "bool", "optional": true },
+        { "name": "port", "type": "u16", "optional": true }
+      ]
+    },
+    "WebRotateTokenResult": {
+      "doc": "Result returned by web.rotateToken.",
+      "renameAll": "camelCase",
+      "rustDerives": ["Debug", "Clone", "PartialEq", "Eq", "Serialize", "Deserialize"],
+      "fields": [
+        { "name": "token", "type": "string" },
+        { "name": "token_path", "type": "string" },
+        { "name": "sessions_revoked", "type": "usize" }
+      ]
+    },
+    "DistroCatalogParams": {
+      "doc": "Parameters for distro.catalog.",
+      "renameAll": "camelCase",
+      "rustDerives": ["Debug", "Clone", "Default", "PartialEq", "Eq", "Serialize", "Deserialize"],
+      "fields": [
+        { "name": "mirror", "type": { "ref": "DistroMirror" }, "optional": true },
+        { "name": "custom_url", "type": "string", "optional": true },
+        { "name": "refresh", "type": "bool", "default": false }
+      ]
+    },
+    "DistroEntry": {
+      "doc": "Single ARM64 rootfs image entry from a Simplestreams catalog.",
+      "renameAll": "camelCase",
+      "rustDerives": ["Debug", "Clone", "PartialEq", "Eq", "Serialize", "Deserialize"],
+      "fields": [
+        { "name": "id", "type": "string" },
+        { "name": "os", "type": "string" },
+        { "name": "release", "type": "string" },
+        { "name": "release_title", "type": "string" },
+        { "name": "arch", "type": "string" },
+        { "name": "variant", "type": "string" },
+        { "name": "version", "type": "string" },
+        { "name": "size_bytes", "type": "u64" },
+        { "name": "sha256", "type": "string" },
+        { "name": "download_url", "type": "string" }
+      ]
+    },
+    "DistroCatalogResult": {
+      "doc": "Result returned by distro.catalog.",
+      "renameAll": "camelCase",
+      "rustDerives": ["Debug", "Clone", "PartialEq", "Eq", "Serialize", "Deserialize"],
+      "fields": [
+        { "name": "mirror", "type": { "ref": "DistroMirror" } },
+        { "name": "base_url", "type": "string" },
+        { "name": "cached", "type": "bool" },
+        { "name": "fetched_at_ms", "type": "u64" },
+        { "name": "entries", "type": { "list": { "ref": "DistroEntry" } } }
+      ]
+    },
+    "ContainerCreateParams": {
+      "doc": "Parameters for container.create.",
+      "renameAll": "camelCase",
+      "rustDerives": ["Debug", "Clone", "PartialEq", "Eq", "Serialize", "Deserialize"],
+      "fields": [
+        { "name": "id", "type": "string" },
+        { "name": "distro_id", "type": "string", "optional": true },
+        { "name": "mirror", "type": { "ref": "DistroMirror" }, "optional": true },
+        { "name": "custom_url", "type": "string", "optional": true },
+        { "name": "source_url", "type": "string", "optional": true },
+        { "name": "expected_sha256", "type": "string", "optional": true },
+        { "name": "size_mb", "type": "u64", "default": 8192 },
+        { "name": "hostname", "type": "string", "optional": true },
+        { "name": "ssh_port", "type": "u16", "optional": true },
+        { "name": "ssh_public_keys", "type": { "list": "string" }, "default": [] },
+        { "name": "auto_start", "type": "bool", "default": false },
+        { "name": "host_bridge", "type": "bool", "default": true },
+        { "name": "noatime", "type": "bool", "default": true }
+      ]
+    },
+    "ContainerJobStartResult": {
+      "doc": "Result returned immediately when an async container provisioning job is accepted.",
+      "renameAll": "camelCase",
+      "rustDerives": ["Debug", "Clone", "PartialEq", "Eq", "Serialize", "Deserialize"],
+      "fields": [
+        { "name": "job_id", "type": "string" },
+        { "name": "container", "type": "string" },
+        { "name": "kind", "type": { "ref": "ContainerJobKind" } }
+      ]
+    },
+    "ContainerJobProgressPayload": {
+      "doc": "Progress snapshot emitted with container.job.progress and returned by container.jobStatus.",
+      "renameAll": "camelCase",
+      "rustDerives": ["Debug", "Clone", "PartialEq", "Eq", "Serialize", "Deserialize"],
+      "fields": [
+        { "name": "job_id", "type": "string" },
+        { "name": "container", "type": "string" },
+        { "name": "kind", "type": { "ref": "ContainerJobKind" } },
+        { "name": "state", "type": { "ref": "ContainerJobState" } },
+        { "name": "stage", "type": "string" },
+        { "name": "bytes_done", "type": "u64" },
+        { "name": "bytes_total", "type": "u64", "optional": true, "skipSerializingIfNone": true },
+        { "name": "percent", "type": "u8", "optional": true, "skipSerializingIfNone": true },
+        { "name": "message", "type": "string", "optional": true, "skipSerializingIfNone": true },
+        { "name": "error", "type": "string", "optional": true, "skipSerializingIfNone": true },
+        { "name": "started_at_ms", "type": "u64" },
+        { "name": "updated_at_ms", "type": "u64" }
+      ]
+    },
+    "ContainerJobSelectorParams": {
+      "doc": "Parameters for container.jobStatus and container.jobCancel.",
+      "renameAll": "camelCase",
+      "rustDerives": ["Debug", "Clone", "PartialEq", "Eq", "Serialize", "Deserialize"],
+      "fields": [
+        { "name": "job_id", "type": "string" }
+      ]
+    },
+    "ContainerJobCancelResult": {
+      "doc": "Result returned by container.jobCancel.",
+      "renameAll": "camelCase",
+      "rustDerives": ["Debug", "Clone", "PartialEq", "Eq", "Serialize", "Deserialize"],
+      "fields": [
+        { "name": "job_id", "type": "string" },
+        { "name": "cancelled", "type": "bool" }
+      ]
+    },
+    "ContainerDeleteParams": {
+      "doc": "Parameters for container.delete.",
+      "renameAll": "camelCase",
+      "rustDerives": ["Debug", "Clone", "PartialEq", "Eq", "Serialize", "Deserialize"],
+      "fields": [
+        { "name": "id", "type": "string" },
+        { "name": "delete_image", "type": "bool", "default": true },
+        { "name": "force", "type": "bool", "default": false }
+      ]
+    },
+    "ContainerDeleteResult": {
+      "doc": "Result returned by container.delete.",
+      "renameAll": "camelCase",
+      "rustDerives": ["Debug", "Clone", "PartialEq", "Eq", "Serialize", "Deserialize"],
+      "fields": [
+        { "name": "container", "type": "string" },
+        { "name": "image_deleted", "type": "bool" },
+        { "name": "cleanup", "type": { "ref": "StorageCleanupReport" } },
+        { "name": "new_default_container", "type": "string", "optional": true, "skipSerializingIfNone": true }
+      ]
+    },
+    "ContainerResizeParams": {
+      "doc": "Parameters for container.resize.",
+      "renameAll": "camelCase",
+      "rustDerives": ["Debug", "Clone", "PartialEq", "Eq", "Serialize", "Deserialize"],
+      "fields": [
+        { "name": "id", "type": "string", "optional": true },
+        { "name": "size_mb", "type": "u64" }
+      ]
+    },
+    "ContainerResizeResult": {
+      "doc": "Result returned by container.resize.",
+      "renameAll": "camelCase",
+      "rustDerives": ["Debug", "Clone", "PartialEq", "Eq", "Serialize", "Deserialize"],
+      "fields": [
+        { "name": "container", "type": "string" },
+        { "name": "previous_bytes", "type": "u64" },
+        { "name": "new_bytes", "type": "u64" },
+        { "name": "restarted", "type": "bool" }
+      ]
+    },
+    "ContainerCloneParams": {
+      "doc": "Parameters for container.clone.",
+      "renameAll": "camelCase",
+      "rustDerives": ["Debug", "Clone", "PartialEq", "Eq", "Serialize", "Deserialize"],
+      "fields": [
+        { "name": "source_id", "type": "string" },
+        { "name": "target_id", "type": "string" },
+        { "name": "ssh_port", "type": "u16", "optional": true },
+        { "name": "hostname", "type": "string", "optional": true }
+      ]
+    },
+    "ContainerCloneResult": {
+      "doc": "Result returned by container.clone.",
+      "renameAll": "camelCase",
+      "rustDerives": ["Debug", "Clone", "PartialEq", "Eq", "Serialize", "Deserialize"],
+      "fields": [
+        { "name": "source_id", "type": "string" },
+        { "name": "target_id", "type": "string" },
+        { "name": "image_path", "type": "string" },
+        { "name": "copied_bytes", "type": "u64" },
+        { "name": "virtual_bytes", "type": "u64" }
+      ]
+    },
+    "SshKeyRemoveParams": {
+      "doc": "Parameters for container.sshKeyRemove.",
+      "renameAll": "camelCase",
+      "rustDerives": ["Debug", "Clone", "PartialEq", "Eq", "Serialize", "Deserialize"],
+      "fields": [
+        { "name": "id", "type": "string", "optional": true },
+        { "name": "fingerprint_or_key", "type": "string" }
+      ]
+    },
+    "SshKeyRemoveResult": {
+      "doc": "Result returned by container.sshKeyRemove.",
+      "renameAll": "camelCase",
+      "rustDerives": ["Debug", "Clone", "PartialEq", "Eq", "Serialize", "Deserialize"],
+      "fields": [
+        { "name": "container", "type": "string" },
+        { "name": "removed", "type": "usize" },
+        { "name": "keys", "type": { "list": "string" } }
+      ]
+    },
+    "ContainerServiceRuntime": {
+      "doc": "Live runtime status for a supervised background service inside a container.",
+      "renameAll": "camelCase",
+      "rustDerives": ["Debug", "Clone", "PartialEq", "Eq", "Serialize", "Deserialize"],
+      "fields": [
+        { "name": "id", "type": "string" },
+        { "name": "name", "type": "string" },
+        { "name": "status", "type": { "ref": "ServiceStatus" } },
+        { "name": "pid", "type": "u32", "optional": true, "skipSerializingIfNone": true },
+        { "name": "uptime_ms", "type": "u64" },
+        { "name": "restart_count", "type": "u32" },
+        { "name": "last_error", "type": "string", "optional": true, "skipSerializingIfNone": true },
+        { "name": "auto_start", "type": "bool" }
+      ]
+    },
+    "ServiceUpsertParams": {
+      "doc": "Parameters for service.upsert.",
+      "renameAll": "camelCase",
+      "rustDerives": ["Debug", "Clone", "PartialEq", "Eq", "Serialize", "Deserialize"],
+      "fields": [
+        { "name": "container", "type": "string", "optional": true },
+        { "name": "spec", "type": { "ref": "ContainerServiceSpec" } }
+      ]
+    },
+    "ServiceSelectorParams": {
+      "doc": "Parameters selecting one supervised service inside a container.",
+      "renameAll": "camelCase",
+      "rustDerives": ["Debug", "Clone", "PartialEq", "Eq", "Serialize", "Deserialize"],
+      "fields": [
+        { "name": "container", "type": "string", "optional": true },
+        { "name": "service_id", "type": "string" }
+      ]
+    },
+    "ServiceLogsParams": {
+      "doc": "Parameters for service.logs.",
+      "renameAll": "camelCase",
+      "rustDerives": ["Debug", "Clone", "PartialEq", "Eq", "Serialize", "Deserialize"],
+      "fields": [
+        { "name": "container", "type": "string", "optional": true },
+        { "name": "service_id", "type": "string" },
+        { "name": "limit", "type": "usize", "optional": true }
+      ]
+    },
+    "ServiceLogsResult": {
+      "doc": "Result returned by service.logs.",
+      "renameAll": "camelCase",
+      "rustDerives": ["Debug", "Clone", "PartialEq", "Eq", "Serialize", "Deserialize"],
+      "fields": [
+        { "name": "container", "type": "string" },
+        { "name": "service_id", "type": "string" },
+        { "name": "lines", "type": { "list": "string" } }
+      ]
+    },
+    "ServiceDeleteResult": {
+      "doc": "Result returned by service.delete.",
+      "renameAll": "camelCase",
+      "rustDerives": ["Debug", "Clone", "PartialEq", "Eq", "Serialize", "Deserialize"],
+      "fields": [
+        { "name": "container", "type": "string" },
+        { "name": "service_id", "type": "string" },
+        { "name": "deleted", "type": "bool" }
+      ]
+    },
+    "ServiceStateChangedPayload": {
+      "doc": "Event payload emitted on service.stateChanged transitions.",
+      "renameAll": "camelCase",
+      "rustDerives": ["Debug", "Clone", "PartialEq", "Eq", "Serialize", "Deserialize"],
+      "fields": [
+        { "name": "container", "type": "string" },
+        { "name": "service_id", "type": "string" },
+        { "name": "prev_status", "type": { "ref": "ServiceStatus" } },
+        { "name": "status", "type": { "ref": "ServiceStatus" } },
+        { "name": "pid", "type": "u32", "optional": true, "skipSerializingIfNone": true },
+        { "name": "restart_count", "type": "u32" },
+        { "name": "last_error", "type": "string", "optional": true, "skipSerializingIfNone": true }
+      ]
     }
   },
   "rpcs": {
     "DAEMON_PING": { "method": "daemon.ping", "params": null, "result": { "ref": "PingResult" } },
     "DAEMON_STATUS": { "method": "daemon.status", "params": null, "result": { "ref": "DaemonSummarySnapshot" } },
     "DAEMON_HEALTH": { "method": "daemon.health", "params": null, "result": { "ref": "DaemonHealthResult" } },
+    "DAEMON_CAPABILITIES": { "method": "daemon.capabilities", "params": null, "result": { "ref": "KernelCapabilitiesResult" } },
+    "DAEMON_LOGS": { "method": "daemon.logs", "params": { "ref": "DaemonLogsParams" }, "result": { "ref": "DaemonLogsResult" } },
     "DAEMON_RELOAD_CONFIG": { "method": "daemon.reloadConfig", "params": null, "result": { "ref": "StrataConfig" } },
+    "WEB_STATUS": { "method": "web.status", "params": null, "result": { "ref": "WebStatusResult" } },
+    "WEB_CONFIGURE": { "method": "web.configure", "params": { "ref": "WebConfigureParams" }, "result": { "ref": "WebStatusResult" } },
+    "WEB_ROTATE_TOKEN": { "method": "web.rotateToken", "params": null, "result": { "ref": "WebRotateTokenResult" } },
+    "DISTRO_CATALOG": { "method": "distro.catalog", "params": { "ref": "DistroCatalogParams" }, "result": { "ref": "DistroCatalogResult" } },
     "CONTAINER_LIST": { "method": "container.list", "params": null, "result": { "list": { "ref": "ContainerStatusSnapshot" } } },
     "CONTAINER_STATUS": { "method": "container.status", "params": { "ref": "ContainerSelectorParams" }, "result": { "ref": "ContainerStatusSnapshot" } },
     "CONTAINER_START": { "method": "container.start", "params": { "ref": "ContainerSelectorParams" }, "result": { "ref": "ContainerStatusSnapshot" } },
     "CONTAINER_STOP": { "method": "container.stop", "params": { "ref": "ContainerSelectorParams" }, "result": { "ref": "StorageCleanupReport" } },
     "CONTAINER_RESTART": { "method": "container.restart", "params": { "ref": "ContainerSelectorParams" }, "result": { "ref": "ContainerStatusSnapshot" } },
+    "CONTAINER_CREATE": { "method": "container.create", "params": { "ref": "ContainerCreateParams" }, "result": { "ref": "ContainerJobStartResult" } },
+    "CONTAINER_DELETE": { "method": "container.delete", "params": { "ref": "ContainerDeleteParams" }, "result": { "ref": "ContainerDeleteResult" } },
+    "CONTAINER_RESIZE": { "method": "container.resize", "params": { "ref": "ContainerResizeParams" }, "result": { "ref": "ContainerResizeResult" } },
+    "CONTAINER_CLONE": { "method": "container.clone", "params": { "ref": "ContainerCloneParams" }, "result": { "ref": "ContainerCloneResult" } },
+    "CONTAINER_JOB_STATUS": { "method": "container.jobStatus", "params": { "ref": "ContainerJobSelectorParams" }, "result": { "ref": "ContainerJobProgressPayload" } },
+    "CONTAINER_JOB_CANCEL": { "method": "container.jobCancel", "params": { "ref": "ContainerJobSelectorParams" }, "result": { "ref": "ContainerJobCancelResult" } },
     "CONTAINER_LOGS": { "method": "container.logs", "params": { "ref": "ContainerLogsParams" }, "result": { "ref": "ContainerLogsResult" } },
     "CONTAINER_SYNC_DNS": { "method": "container.syncDns", "params": { "ref": "ContainerSelectorParams" }, "result": { "ref": "SyncDnsResult" } },
     "CONTAINER_COMPACT": { "method": "container.compact", "params": { "ref": "ContainerSelectorParams" }, "result": { "ref": "CompactResult" } },
@@ -611,12 +1056,20 @@
     "CONTAINER_CONFIG_PATCH": { "method": "container.configPatch", "params": { "ref": "ContainerConfigPatchParams" }, "result": { "ref": "ContainerConfigResult" } },
     "CONTAINER_SSH_KEY_LIST": { "method": "container.sshKeyList", "params": { "ref": "ContainerSelectorParams" }, "result": { "ref": "SshKeysResult" } },
     "CONTAINER_SSH_KEY_ADD": { "method": "container.sshKeyAdd", "params": { "ref": "SshKeyAddParams" }, "result": { "ref": "SshKeysResult" } },
+    "CONTAINER_SSH_KEY_REMOVE": { "method": "container.sshKeyRemove", "params": { "ref": "SshKeyRemoveParams" }, "result": { "ref": "SshKeyRemoveResult" } },
     "SESSION_ACQUIRE": { "method": "session.acquire", "params": { "ref": "SessionAcquireParams" }, "result": { "ref": "AttachLease" } },
     "SESSION_RELEASE": { "method": "session.release", "params": { "ref": "SessionReleaseParams" }, "result": { "ref": "SessionReleaseResult" } },
     "TASK_RUN": { "method": "task.run", "params": { "ref": "TaskRunParams" }, "result": { "ref": "TaskRunResult" } },
     "TASK_CANCEL": { "method": "task.cancel", "params": { "ref": "TaskCancelParams" }, "result": { "ref": "TaskCancelResult" } },
     "TASK_LIST": { "method": "task.list", "params": null, "result": { "list": { "ref": "TaskSummary" } } },
     "TASK_LOGS": { "method": "task.logs", "params": { "ref": "TaskLogsParams" }, "result": { "ref": "TaskLogsResult" } },
+    "SERVICE_LIST": { "method": "service.list", "params": { "ref": "ContainerSelectorParams" }, "result": { "list": { "ref": "ContainerServiceRuntime" } } },
+    "SERVICE_UPSERT": { "method": "service.upsert", "params": { "ref": "ServiceUpsertParams" }, "result": { "ref": "ContainerServiceRuntime" } },
+    "SERVICE_DELETE": { "method": "service.delete", "params": { "ref": "ServiceSelectorParams" }, "result": { "ref": "ServiceDeleteResult" } },
+    "SERVICE_START": { "method": "service.start", "params": { "ref": "ServiceSelectorParams" }, "result": { "ref": "ContainerServiceRuntime" } },
+    "SERVICE_STOP": { "method": "service.stop", "params": { "ref": "ServiceSelectorParams" }, "result": { "ref": "ContainerServiceRuntime" } },
+    "SERVICE_RESTART": { "method": "service.restart", "params": { "ref": "ServiceSelectorParams" }, "result": { "ref": "ContainerServiceRuntime" } },
+    "SERVICE_LOGS": { "method": "service.logs", "params": { "ref": "ServiceLogsParams" }, "result": { "ref": "ServiceLogsResult" } },
     "HUD_STATE": { "method": "hud.state", "params": null, "result": { "ref": "HudStateResult" } },
     "HUD_SET": { "method": "hud.set", "params": { "ref": "HudSetParams" }, "result": { "ref": "HudStateResult" } },
     "EVENTS_SUBSCRIBE": { "method": "events.subscribe", "params": null, "result": { "ref": "EventsSubscribeResult" } }
@@ -624,6 +1077,8 @@
   "events": {
     "CONTAINER_STATE_CHANGED": { "event": "container.stateChanged", "payload": { "ref": "ContainerStateChangedPayload" } },
     "CONTAINER_MAINTENANCE_DONE": { "event": "container.maintenanceDone", "payload": { "ref": "MaintenanceDonePayload" } },
+    "CONTAINER_JOB_PROGRESS": { "event": "container.job.progress", "payload": { "ref": "ContainerJobProgressPayload" } },
+    "SERVICE_STATE_CHANGED": { "event": "service.stateChanged", "payload": { "ref": "ServiceStateChangedPayload" } },
     "TASK_OUTPUT": { "event": "task.output", "payload": { "ref": "TaskOutputPayload" } },
     "TASK_EXIT": { "event": "task.exit", "payload": { "ref": "TaskExitPayload" } }
   },
@@ -639,10 +1094,19 @@
       "target": "rust",
       "path": "../crates/strata-protocol/src/generated/config.rs",
       "include": {
-        "enums": ["CapProfile", "SessionMode"],
+        "enums": ["CapProfile", "SessionMode", "ServiceRestartPolicy", "ServiceStatus"],
         "structs": [
+          "WebConsoleConfig",
           "SideVeilBridgeConfig",
           "SshConfig",
+          "ContainerServiceSpec",
+          "ContainerServiceRuntime",
+          "ServiceUpsertParams",
+          "ServiceSelectorParams",
+          "ServiceLogsParams",
+          "ServiceLogsResult",
+          "ServiceDeleteResult",
+          "ServiceStateChangedPayload",
           "BindMount",
           "ContainerConfig",
           "StrataConfig",
@@ -672,7 +1136,9 @@
           "BackupParams",
           "BackupResult",
           "BackupStartResult",
-          "MaintenanceDonePayload"
+          "MaintenanceDonePayload",
+          "ContainerDeleteParams",
+          "ContainerDeleteResult"
         ]
       }
     },
@@ -680,15 +1146,35 @@
       "target": "rust",
       "path": "../crates/strata-protocol/src/generated/rpc.rs",
       "include": {
-        "enums": ["TaskStream"],
+        "enums": ["TaskStream", "DistroMirror", "ContainerJobKind", "ContainerJobState"],
         "structs": [
           "ContainerSelectorParams",
           "PingResult",
           "DaemonHealthResult",
+          "KernelCapabilitiesResult",
+          "DaemonLogsParams",
+          "DaemonLogsResult",
+          "WebStatusResult",
+          "WebConfigureParams",
+          "WebRotateTokenResult",
+          "DistroCatalogParams",
+          "DistroEntry",
+          "DistroCatalogResult",
+          "ContainerCreateParams",
+          "ContainerJobStartResult",
+          "ContainerJobProgressPayload",
+          "ContainerJobSelectorParams",
+          "ContainerJobCancelResult",
+          "ContainerResizeParams",
+          "ContainerResizeResult",
+          "ContainerCloneParams",
+          "ContainerCloneResult",
           "ContainerLogsParams",
           "ContainerLogsResult",
           "SshKeyAddParams",
           "SshKeysResult",
+          "SshKeyRemoveParams",
+          "SshKeyRemoveResult",
           "TaskRunParams",
           "TaskRunResult",
           "TaskCancelParams",
@@ -713,10 +1199,19 @@
       "target": "ts",
       "path": "../webui/src/generated/configTypes.ts",
       "include": {
-        "enums": ["CapProfile", "SessionMode"],
+        "enums": ["CapProfile", "SessionMode", "ServiceRestartPolicy", "ServiceStatus"],
         "structs": [
+          "WebConsoleConfig",
           "SideVeilBridgeConfig",
           "SshConfig",
+          "ContainerServiceSpec",
+          "ContainerServiceRuntime",
+          "ServiceUpsertParams",
+          "ServiceSelectorParams",
+          "ServiceLogsParams",
+          "ServiceLogsResult",
+          "ServiceDeleteResult",
+          "ServiceStateChangedPayload",
           "BindMount",
           "ContainerConfig",
           "StrataConfig",
@@ -733,7 +1228,7 @@
       "target": "ts",
       "path": "../webui/src/generated/runtimeTypes.ts",
       "include": {
-        "enums": ["ContainerPhase", "TaskStream"],
+        "enums": ["ContainerPhase", "TaskStream", "DistroMirror", "ContainerJobKind", "ContainerJobState"],
         "structs": [
           "ContainerDiskStats",
           "ContainerStatusSnapshot",
@@ -750,10 +1245,32 @@
           "ContainerSelectorParams",
           "PingResult",
           "DaemonHealthResult",
+          "KernelCapabilitiesResult",
+          "DaemonLogsParams",
+          "DaemonLogsResult",
+          "WebStatusResult",
+          "WebConfigureParams",
+          "WebRotateTokenResult",
+          "DistroCatalogParams",
+          "DistroEntry",
+          "DistroCatalogResult",
+          "ContainerCreateParams",
+          "ContainerJobStartResult",
+          "ContainerJobProgressPayload",
+          "ContainerJobSelectorParams",
+          "ContainerJobCancelResult",
+          "ContainerDeleteParams",
+          "ContainerDeleteResult",
+          "ContainerResizeParams",
+          "ContainerResizeResult",
+          "ContainerCloneParams",
+          "ContainerCloneResult",
           "ContainerLogsParams",
           "ContainerLogsResult",
           "SshKeyAddParams",
           "SshKeysResult",
+          "SshKeyRemoveParams",
+          "SshKeyRemoveResult",
           "TaskRunParams",
           "TaskRunResult",
           "TaskCancelParams",
@@ -778,8 +1295,8 @@
       "eventsConstName": "STRATA_EVENTS",
       "eventMapName": "StrataEventPayloadMap",
       "imports": [
-        "import type {\n  AttachLease,\n  ContainerConfigPatchParams,\n  ContainerConfigResult,\n  SessionAcquireParams,\n  SessionReleaseParams,\n  SessionReleaseResult,\n  StrataConfig,\n} from './configTypes.ts';",
-        "import type {\n  BackupParams,\n  BackupResult,\n  BackupStartResult,\n  CompactResult,\n  ContainerLogsParams,\n  ContainerLogsResult,\n  ContainerSelectorParams,\n  ContainerStateChangedPayload,\n  ContainerStatusSnapshot,\n  DaemonHealthResult,\n  DaemonSummarySnapshot,\n  EventsSubscribeResult,\n  FsckResult,\n  HudSetParams,\n  HudStateResult,\n  MaintenanceDonePayload,\n  PingResult,\n  SshKeyAddParams,\n  SshKeysResult,\n  StorageCleanupReport,\n  SyncDnsResult,\n  TaskCancelParams,\n  TaskCancelResult,\n  TaskExitPayload,\n  TaskLogsParams,\n  TaskLogsResult,\n  TaskOutputPayload,\n  TaskRunParams,\n  TaskRunResult,\n  TaskSummary,\n} from './runtimeTypes.ts';"
+        "import type {\n  AttachLease,\n  ContainerConfigPatchParams,\n  ContainerConfigResult,\n  ContainerServiceRuntime,\n  ServiceDeleteResult,\n  ServiceLogsParams,\n  ServiceLogsResult,\n  ServiceSelectorParams,\n  ServiceStateChangedPayload,\n  ServiceUpsertParams,\n  SessionAcquireParams,\n  SessionReleaseParams,\n  SessionReleaseResult,\n  StrataConfig,\n} from './configTypes.ts';",
+        "import type {\n  BackupParams,\n  BackupResult,\n  BackupStartResult,\n  CompactResult,\n  ContainerCloneParams,\n  ContainerCloneResult,\n  ContainerCreateParams,\n  ContainerDeleteParams,\n  ContainerDeleteResult,\n  ContainerJobCancelResult,\n  ContainerJobProgressPayload,\n  ContainerJobSelectorParams,\n  ContainerJobStartResult,\n  ContainerLogsParams,\n  ContainerLogsResult,\n  ContainerResizeParams,\n  ContainerResizeResult,\n  ContainerSelectorParams,\n  ContainerStateChangedPayload,\n  ContainerStatusSnapshot,\n  DaemonHealthResult,\n  DaemonLogsParams,\n  DaemonLogsResult,\n  DaemonSummarySnapshot,\n  DistroCatalogParams,\n  DistroCatalogResult,\n  EventsSubscribeResult,\n  FsckResult,\n  HudSetParams,\n  HudStateResult,\n  KernelCapabilitiesResult,\n  MaintenanceDonePayload,\n  PingResult,\n  SshKeyAddParams,\n  SshKeyRemoveParams,\n  SshKeyRemoveResult,\n  SshKeysResult,\n  StorageCleanupReport,\n  SyncDnsResult,\n  TaskCancelParams,\n  TaskCancelResult,\n  TaskExitPayload,\n  TaskLogsParams,\n  TaskLogsResult,\n  TaskOutputPayload,\n  TaskRunParams,\n  TaskRunResult,\n  TaskSummary,\n  WebConfigureParams,\n  WebRotateTokenResult,\n  WebStatusResult,\n} from './runtimeTypes.ts';"
       ],
       "include": { "rpcs": true, "events": true }
     },

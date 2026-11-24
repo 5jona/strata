@@ -172,3 +172,30 @@ pub struct MaintenanceDonePayload {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }
+
+/// Parameters for container.delete.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContainerDeleteParams {
+    pub id: String,
+    #[serde(default = "default_container_delete_params_delete_image")]
+    pub delete_image: bool,
+    #[serde(default)]
+    pub force: bool,
+}
+
+/// Result returned by container.delete.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContainerDeleteResult {
+    pub container: String,
+    pub image_deleted: bool,
+    pub cleanup: StorageCleanupReport,
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub new_default_container: Option<String>,
+}
+
+fn default_container_delete_params_delete_image() -> bool {
+    true
+}

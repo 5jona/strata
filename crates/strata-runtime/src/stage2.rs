@@ -131,12 +131,13 @@ pub fn run_stage2(spec: Stage2Spec) -> RuntimeResult<Infallible> {
 
     caps::apply_cap_profile(spec.cap_profile).map_err(RuntimeError::from_sys)?;
 
-    exec_container_command(&spec.command, spec.term.as_deref())
+    exec_container_command(&spec.command, spec.term.as_deref(), None)
 }
 
 pub(crate) fn exec_container_command(
     command: &[String],
     term: Option<&str>,
+    extra_env: Option<&std::collections::BTreeMap<String, String>>,
 ) -> RuntimeResult<Infallible> {
     let Some((program, args)) = command.split_first() else {
         return Err(RuntimeError::InvalidArgument(
@@ -155,6 +156,11 @@ pub(crate) fn exec_container_command(
         .env("PATH", DEFAULT_CONTAINER_PATH)
         .env("PIP_DISABLE_PIP_VERSION_CHECK", "1")
         .env("TERM", term.unwrap_or("xterm-256color"));
+    if let Some(vars) = extra_env {
+        for (k, v) in vars {
+            cmd.env(k, v);
+        }
+    }
 
     let err = cmd.exec();
     Err(RuntimeError::Io {

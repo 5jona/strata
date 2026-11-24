@@ -1,4 +1,9 @@
-import type { ContainerPhase, ContainerStatusSnapshot, MaintenanceDonePayload } from '../types.ts';
+import type {
+  ContainerPhase,
+  ContainerStatusSnapshot,
+  MaintenanceDonePayload,
+  ServiceStatus,
+} from '../types.ts';
 
 /** Execution mode supported by the headless task runner input. */
 export type TaskRunnerMode = 'shell' | 'python';
@@ -28,6 +33,17 @@ export const PHASE_META: Record<
   starting: { label: '启动中', variant: 'accent' },
   stopping: { label: '停止中', variant: 'warning' },
   failed: { label: '异常', variant: 'danger' },
+};
+
+/** Display metadata mapping each managed service status to a badge variant and label. */
+export const SERVICE_STATUS_META: Record<
+  ServiceStatus,
+  { label: string; variant: 'success' | 'neutral' | 'warning' | 'danger' }
+> = {
+  running: { label: '运行中', variant: 'success' },
+  stopped: { label: '已停止', variant: 'neutral' },
+  crashed: { label: '已崩溃', variant: 'danger' },
+  'circuit-open': { label: '熔断', variant: 'warning' },
 };
 
 const MAINTENANCE_OP_LABELS: Readonly<Record<string, string>> = {

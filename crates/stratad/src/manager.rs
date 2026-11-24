@@ -2,26 +2,48 @@
 
 mod launch;
 pub(crate) mod leases;
+pub(crate) mod lifecycle_ops;
 pub(crate) mod ops;
 mod snapshot;
 pub(crate) mod state;
 pub(crate) mod supervisor;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex as StdMutex};
 
 use strata_protocol::rpc::StorageCleanupReport;
-use strata_protocol::{ContainerConfig, ContainerStatusSnapshot};
+use strata_protocol::{ContainerConfig, ContainerStatusSnapshot, StrataConfig};
 use strata_runtime::sync;
 use strata_sys::{mount, namespace};
 use tokio::sync::RwLock;
 
 use crate::config_store::ConfigStore;
 use crate::error::{DaemonError, DaemonResult};
+use crate::jobs::create::allocate_ssh_port;
 use crate::manager::leases::LeaseRegistry;
 pub(crate) use crate::manager::state::ContainerSlot;
+use crate::services::ServiceSupervisor;
 use crate::sideveil_seam::EventHub;
+use crate::web::pty_session::PtyRegistry;
+
+/// RAII reservation preventing concurrent `create`/`import`/`clone` races on ID or SSH port.
+#[derive(Debug)]
+pub(crate) struct ProvisionReservation {
+    manager: Arc<ContainerManager>,
+    container_id: String,
+}
+
+impl Drop for ProvisionReservation {
+    fn drop(&mut self) {
+        let mut guard = self
+            .manager
+            .in_flight_provisions
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        guard.remove(&self.container_id);
+    }
+}
 
 /// Central multi-container orchestrator.
 #[derive(Debug)]
@@ -32,7 +54,10 @@ pub(crate) struct ContainerManager {
     pub(crate) logs_dir: PathBuf,
     pub(crate) module_dir: Option<PathBuf>,
     slots: RwLock<HashMap<String, Arc<ContainerSlot>>>,
+    in_flight_provisions: StdMutex<HashMap<String, u16>>,
     pub(crate) leases: LeaseRegistry,
+    pub(crate) pty_registry: RwLock<Option<Arc<PtyRegistry>>>,
+    pub(crate) service_supervisor: RwLock<Option<Arc<ServiceSupervisor>>>,
 }
 
 impl ContainerManager {
@@ -51,8 +76,21 @@ impl ContainerManager {
             logs_dir,
             module_dir,
             slots: RwLock::new(HashMap::new()),
+            in_flight_provisions: StdMutex::new(HashMap::new()),
             leases: LeaseRegistry::new(),
+            pty_registry: RwLock::new(None),
+            service_supervisor: RwLock::new(None),
         }
+    }
+
+    /// Registers lifecycle hooks for PTY session teardown and managed container service supervision.
+    pub(crate) async fn attach_hooks(
+        &self,
+        ptys: Arc<PtyRegistry>,
+        services: Arc<ServiceSupervisor>,
+    ) {
+        *self.pty_registry.write().await = Some(ptys);
+        *self.service_supervisor.write().await = Some(services);
     }
 
     pub(crate) async fn get_or_create_slot(&self, id: &str) -> Arc<ContainerSlot> {
@@ -212,6 +250,55 @@ impl ContainerManager {
         Err(DaemonError::ContainerNotRunning(format!(
             "container '{id}' is not running"
         )))
+    }
+
+    /// Atomically reserves `(container_id, ssh_port)` across concurrent create/import/clone calls.
+    pub(crate) fn reserve_provision(
+        self: &Arc<Self>,
+        container_id: &str,
+        snapshot: &StrataConfig,
+        requested_port: Option<u16>,
+    ) -> DaemonResult<(u16, ProvisionReservation)> {
+        let mut guard = self
+            .in_flight_provisions
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if snapshot.containers.contains_key(container_id) || guard.contains_key(container_id) {
+            return Err(DaemonError::ContainerAlreadyExists(container_id.to_owned()));
+        }
+        let reserved: HashSet<u16> = guard.values().copied().collect();
+        let port = allocate_ssh_port(snapshot, &reserved, requested_port);
+        if reserved.contains(&port) {
+            return Err(DaemonError::InvalidParams(format!(
+                "SSH port {port} is already reserved by an in-flight provisioning job"
+            )));
+        }
+        guard.insert(container_id.to_owned(), port);
+        drop(guard);
+        Ok((
+            port,
+            ProvisionReservation {
+                manager: Arc::clone(self),
+                container_id: container_id.to_owned(),
+            },
+        ))
+    }
+
+    /// Evicts a deleted container's slot from memory.
+    pub(crate) async fn evict_slot(&self, id: &str) {
+        self.slots.write().await.remove(id);
+    }
+
+    /// Returns `true` if `id` is still running with the exact `expected_ns_pid`.
+    pub(crate) async fn is_running_with_pid(&self, id: &str, expected_ns_pid: u32) -> bool {
+        let slot = self.slots.read().await.get(id).cloned();
+        match slot {
+            Some(s) => {
+                let live = s.state.read().await;
+                live.phase.is_running() && live.ns_pid == Some(expected_ns_pid)
+            }
+            None => false,
+        }
     }
 
     pub(crate) fn log_file_path(&self, container_id: &str) -> PathBuf {

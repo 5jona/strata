@@ -1,7 +1,7 @@
 {
   "name": "strata-manager-webui",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
   "packageManager": "pnpm@12.22.0",
   "scripts": {
@@ -10,7 +10,11 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "node --import @gojona/config/register-ts --test test/*.test.mjs",
     "dev": "vite --config vite.config.mjs",
-    "build": "vite build --config vite.config.mjs",
+    "dev:plugin": "vite --config vite.config.mjs",
+    "dev:ksu": "vite --config vite.ksu.config.mjs",
+    "build:plugin": "vite build --config vite.config.mjs",
+    "build:ksu": "vite build --config vite.ksu.config.mjs",
+    "build": "pnpm build:plugin && pnpm build:ksu",
     "preview": "vite preview --config vite.config.mjs --port 4178",
     "check": "pnpm lint && pnpm typecheck && pnpm build && pnpm test"
   },

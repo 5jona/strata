@@ -55,6 +55,9 @@ pub(crate) fn run_interactive(
                 command,
                 workdir: Some("/root".to_owned()),
                 term: caller_term,
+                env: std::collections::BTreeMap::new(),
+                pty_ctty: false,
+                new_session: false,
             };
             match strata_runtime::run_enter(spec) {
                 Ok(never) => match never {},
@@ -92,16 +95,24 @@ pub(crate) fn run_interactive(
 }
 
 fn run_foreground_stage2(spec: &Stage2Spec) -> Result<i32, String> {
+    use std::os::unix::process::CommandExt;
+
     let self_exe = std::env::current_exe().map_err(|e| format!("resolve current_exe: {e}"))?;
     let spec_fd = spec_pipe::create_spec_pipe(spec).map_err(|e| e.to_string())?;
+    let spec_raw = spec_fd.as_raw_fd();
 
-    let mut child = Command::new(self_exe)
-        .arg("__stage2")
+    let mut cmd = Command::new(self_exe);
+    cmd.arg("__stage2")
         .arg("--spec-fd")
-        .arg(spec_fd.as_raw_fd().to_string())
+        .arg(spec_raw.to_string())
         .stdin(Stdio::inherit())
         .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit())
+        .stderr(Stdio::inherit());
+    // SAFETY: Clears `FD_CLOEXEC` exclusively on `spec_raw` using async-signal-safe `fcntl`.
+    unsafe {
+        cmd.pre_exec(move || spec_pipe::clear_cloexec_pre_exec(&[spec_raw]));
+    }
+    let mut child = cmd
         .spawn()
         .map_err(|e| format!("spawn foreground stage2: {e}"))?;
 

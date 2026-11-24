@@ -4,6 +4,7 @@ pnpm = "12.22.0"
 
 [env]
 CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER = "{{config_root}}/scripts/aarch64-android-linker.sh"
+CC_aarch64_linux_android = "{{config_root}}/scripts/aarch64-android-linker.sh"
 
 [task_config]
 dir = "{{config_root}}"

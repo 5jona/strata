@@ -59,7 +59,7 @@ impl ContainerManager {
         })
     }
 
-    async fn ensure_no_temp_lease(&self, id: &str) -> DaemonResult<()> {
+    pub(crate) async fn ensure_no_temp_lease(&self, id: &str) -> DaemonResult<()> {
         if self.leases.has_temp_mount_lease(id).await {
             return Err(DaemonError::TempLeaseActive(id.to_owned()));
         }
@@ -204,6 +204,7 @@ impl ContainerManager {
         let (id, entry, _) = self.resolve_container(requested).await?;
         let slot = self.get_or_create_slot(&id).await;
         let _guard = slot.lifecycle_lock.lock().await;
+        self.ensure_no_temp_lease(&id).await?;
         let mdir = self.module_dir.clone();
         let cid = id.clone();
 

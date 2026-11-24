@@ -1,13 +1,23 @@
 //! Typed JSON-RPC request parameters and results for daemon, container, and session operations.
 
 pub use crate::generated::config::{
-    AttachLease, ContainerConfigPatchParams, ContainerConfigResult, SessionAcquireParams,
-    SessionMode, SessionReleaseParams, SessionReleaseResult,
+    AttachLease, ContainerConfigPatchParams, ContainerConfigResult, ContainerServiceRuntime,
+    ContainerServiceSpec, ServiceDeleteResult, ServiceLogsParams, ServiceLogsResult,
+    ServiceRestartPolicy, ServiceSelectorParams, ServiceStateChangedPayload, ServiceStatus,
+    ServiceUpsertParams, SessionAcquireParams, SessionMode, SessionReleaseParams,
+    SessionReleaseResult,
 };
 pub use crate::generated::rpc::{
-    ContainerLogsParams, ContainerLogsResult, ContainerSelectorParams, DaemonHealthResult,
-    EventsSubscribeResult, PingResult, SshKeyAddParams, SshKeysResult,
+    ContainerCloneParams, ContainerCloneResult, ContainerCreateParams, ContainerJobCancelResult,
+    ContainerJobKind, ContainerJobProgressPayload, ContainerJobSelectorParams,
+    ContainerJobStartResult, ContainerJobState, ContainerLogsParams, ContainerLogsResult,
+    ContainerResizeParams, ContainerResizeResult, ContainerSelectorParams, DaemonHealthResult,
+    DaemonLogsParams, DaemonLogsResult, DistroCatalogParams, DistroCatalogResult, DistroEntry,
+    DistroMirror, EventsSubscribeResult, KernelCapabilitiesResult, PingResult, SshKeyAddParams,
+    SshKeyRemoveParams, SshKeyRemoveResult, SshKeysResult, WebConfigureParams,
+    WebRotateTokenResult, WebStatusResult,
 };
 pub use crate::generated::state::{
-    BackupParams, BackupResult, CompactResult, FsckResult, StorageCleanupReport, SyncDnsResult,
+    BackupParams, BackupResult, CompactResult, ContainerDeleteParams, ContainerDeleteResult,
+    FsckResult, StorageCleanupReport, SyncDnsResult,
 };

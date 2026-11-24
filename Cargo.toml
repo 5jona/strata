@@ -10,21 +10,29 @@ members = [
 default-members = ["crates/stratad", "crates/strata-ctl"]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 rust-version = "1.89"
 license = "GPL-3.0-only"
 
 [workspace.dependencies]
+axum = { version = "0.8", default-features = false, features = ["http1", "json", "query", "tokio", "ws"] }
+bytes = "1"
 flate2 = "1"
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 libc = "0.2"
+lzma-rs = "0.3"
+reqwest = { version = "0.12", default-features = false, features = ["http2", "json", "rustls-tls-webpki-roots", "stream"] }
+ruzstd = "0.7"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+sha2 = "0.10"
 sideveil-plugin-sdk = { git = "https://github.com/5jona/sideveil.git", tag = "v0.1.0" }
 sideveil-protocol = { git = "https://github.com/5jona/sideveil.git", tag = "v0.1.0" }
 strata-protocol = { path = "crates/strata-protocol" }
 strata-runtime = { path = "crates/strata-runtime" }
 strata-sys = { path = "crates/strata-sys" }
+tar = "0.4"
 thiserror = "2"
 tokio = { version = "1", features = [
     "fs",
@@ -38,6 +46,7 @@ tokio = { version = "1", features = [
     "sync",
     "time",
 ] }
+tokio-util = { version = "0.7", features = ["io", "io-util"] }
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "deny"

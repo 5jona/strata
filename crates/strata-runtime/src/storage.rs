@@ -2,7 +2,7 @@
 
 pub mod maintenance;
 
-use std::fs;
+use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::thread;
@@ -13,7 +13,7 @@ pub use maintenance::{backup_image_gzip, compact_image, fsck_image};
 use strata_protocol::ContainerConfig;
 use strata_protocol::constants::SELINUX_IMAGE_CONTEXT;
 use strata_protocol::rpc::StorageCleanupReport;
-use strata_sys::{cgroup, loopdev, mount, namespace, procfs, selinux};
+use strata_sys::{cgroup, loopdev, mount, namespace, procfs, rootfs_io::RootDir, selinux};
 
 use crate::error::{RuntimeError, RuntimeResult};
 use crate::fs_atomic::ensure_dir_mode;
@@ -70,14 +70,13 @@ pub fn mount_rootfs(
 
     let attachment = loopdev::attach_loop(image_path).map_err(RuntimeError::from_sys)?;
     let dev_path = attachment.device_path.clone();
+    let mount_flags = if cfg.noatime {
+        libc::MS_NOATIME | libc::MS_NODIRATIME
+    } else {
+        libc::MS_RELATIME
+    };
 
-    if let Err(err) = mount::mount(
-        Some(&dev_path),
-        mount_dir,
-        Some("ext4"),
-        libc::MS_RELATIME,
-        None,
-    ) {
+    if let Err(err) = mount::mount(Some(&dev_path), mount_dir, Some("ext4"), mount_flags, None) {
         let _ = loopdev::detach_loop(&dev_path);
         return Err(RuntimeError::from_sys(err));
     }
@@ -191,13 +190,14 @@ fn drain_container_processes(
 }
 
 fn clear_legacy_ruri_markers(mount_dir: &Path) {
-    let rurienv = mount_dir.join(".rurienv");
-    if rurienv.exists() {
-        let _ = mount::clear_immutable_flag(&rurienv);
-        let _ = fs::remove_file(&rurienv);
+    let Ok(root) = RootDir::open(mount_dir) else {
+        return;
+    };
+    let rurienv = Path::new(".rurienv");
+    if let Ok(fd) = root.open_file_ro_nofollow(rurienv) {
+        let _ = mount::clear_immutable_flag_fd(fd.as_raw_fd(), rurienv);
+        drop(fd);
     }
-    let umounted = mount_dir.join(".ruri_umounted");
-    if umounted.exists() {
-        let _ = fs::remove_file(&umounted);
-    }
+    let _ = root.remove_file(rurienv);
+    let _ = root.remove_file(Path::new(".ruri_umounted"));
 }

@@ -6,6 +6,11 @@
     "hubSock": "/data/system/sideveil/run/hub.sock",
     "pluginId": "strata.manager"
   },
+  "web": {
+    "enabled": true,
+    "lanEnabled": false,
+    "port": 7681
+  },
   "containers": {
     "main": {
       "enabled": true,
@@ -28,7 +33,9 @@
       "syncAndroidDns": true,
       "dnsServers": ["223.5.5.5", "1.1.1.1", "8.8.8.8"],
       "fsckOnMount": true,
-      "initCommand": []
+      "noatime": true,
+      "initCommand": [],
+      "services": []
     }
   }
 }

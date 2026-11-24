@@ -1,6 +1,6 @@
 //! Headless streaming command and Python task runner reusable by RPC clients and the SideVeil WebUI.
 
-mod io;
+pub(crate) mod io;
 
 use std::collections::VecDeque;
 use std::os::fd::AsRawFd;
@@ -78,20 +78,30 @@ impl TaskRunner {
             command: params.command.clone(),
             workdir: params.cwd.clone(),
             term: Some("dumb".to_owned()),
+            env: std::collections::BTreeMap::new(),
+            pty_ctty: false,
+            new_session: false,
         };
 
         let spec_fd = spec_pipe::create_spec_pipe(&spec)?;
         let (err_read, err_write) = spec_pipe::create_exec_error_pipe()?;
+        let spec_raw = spec_fd.as_raw_fd();
+        let err_raw = err_write.as_raw_fd();
 
-        let mut child = Command::new(&self.self_exe)
-            .arg("__exec")
+        let mut cmd = Command::new(&self.self_exe);
+        cmd.arg("__exec")
             .arg("--spec-fd")
-            .arg(spec_fd.as_raw_fd().to_string())
+            .arg(spec_raw.to_string())
             .arg("--err-fd")
-            .arg(err_write.as_raw_fd().to_string())
+            .arg(err_raw.to_string())
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
+            .stderr(Stdio::piped());
+        // SAFETY: Clears `FD_CLOEXEC` only on this child's pipe fds via async-signal-safe `fcntl`.
+        unsafe {
+            cmd.pre_exec(move || spec_pipe::clear_cloexec_pre_exec(&[spec_raw, err_raw]));
+        }
+        let mut child = cmd
             .spawn()
             .map_err(|e| DaemonError::Internal(format!("spawn task helper: {e}")))?;
 

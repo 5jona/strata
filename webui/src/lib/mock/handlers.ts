@@ -1,5 +1,6 @@
 import { STRATA_PLUGIN_ID } from '../../manifest.ts';
 import {
+  type ContainerServiceRuntime,
   STRATA_EVENTS,
   STRATA_METHODS,
   STRATA_PATHS,
@@ -69,6 +70,38 @@ function handleTaskRun(
   return { taskId, container: container.id, pid: rec.summary.pid };
 }
 
+function transitionService(
+  state: MockStrataState,
+  emitPlugin: MockEmitPluginFn,
+  serviceId: string,
+  nextStatus: 'running' | 'stopped',
+  bumpRestart = false,
+): ContainerServiceRuntime {
+  const svc = state.services.find((s) => s.id === serviceId);
+  if (!svc) throw new Error(`service not found: ${serviceId}`);
+  const prevStatus = svc.status;
+  svc.status = nextStatus;
+  if (nextStatus === 'running') {
+    svc.pid = 13_000 + Math.floor(Math.random() * 500);
+    svc.uptimeMs = 1000;
+  } else {
+    delete svc.pid;
+    svc.uptimeMs = 0;
+  }
+  if (bumpRestart) svc.restartCount += 1;
+  const line = `[${serviceId}] ${prevStatus} -> ${nextStatus}`;
+  state.serviceLogs[serviceId] = [...(state.serviceLogs[serviceId] ?? []), line];
+  emitPlugin(STRATA_EVENTS.SERVICE_STATE_CHANGED, {
+    container: state.container.id,
+    serviceId,
+    prevStatus,
+    status: nextStatus,
+    ...(svc.pid !== undefined ? { pid: svc.pid } : {}),
+    restartCount: svc.restartCount,
+  });
+  return { ...svc };
+}
+
 /** Dispatches a single Strata plugin RPC method against the mutable mock state. */
 export function handleMockPluginInvoke(
   state: MockStrataState,
@@ -76,7 +109,7 @@ export function handleMockPluginInvoke(
   method: string,
   rawParams: unknown,
 ): unknown {
-  const { defaultId, container, config, sshKeys, dropbearLogs, hud, tasks } = state;
+  const { defaultId, container, config, sshKeys, dropbearLogs, hud, tasks, webStatus } = state;
   const params = toParamsRecord(rawParams);
 
   switch (method) {
@@ -109,8 +142,50 @@ export function handleMockPluginInvoke(
           hubSock: STRATA_PATHS.DEFAULT_SIDEVEIL_HUB_SOCK,
           pluginId: STRATA_PLUGIN_ID,
         },
+        web: {
+          enabled: webStatus.enabled,
+          lanEnabled: webStatus.lanEnabled,
+          port: webStatus.port,
+        },
         containers: { [defaultId]: cloneConfig(config) },
       };
+    case STRATA_METHODS.WEB_STATUS:
+      return { ...webStatus, lanUrls: [...webStatus.lanUrls] };
+    case STRATA_METHODS.WEB_CONFIGURE: {
+      if (typeof params.enabled === 'boolean') webStatus.enabled = params.enabled;
+      if (typeof params.lanEnabled === 'boolean') {
+        webStatus.lanEnabled = params.lanEnabled;
+        webStatus.listenAddr = params.lanEnabled
+          ? STRATA_PROTOCOL.DEFAULT_WEB_LISTEN_LAN
+          : STRATA_PROTOCOL.DEFAULT_WEB_LISTEN_LOCAL;
+      }
+      if (typeof params.port === 'number') webStatus.port = params.port;
+      return { ...webStatus, lanUrls: [...webStatus.lanUrls] };
+    }
+    case STRATA_METHODS.WEB_ROTATE_TOKEN: {
+      state.webToken = `rotated_${Date.now().toString(16)}_${Math.random().toString(16).slice(2, 10)}`;
+      return {
+        token: state.webToken,
+        tokenPath: webStatus.tokenPath,
+        sessionsRevoked: 1,
+      };
+    }
+    case STRATA_METHODS.SERVICE_LIST:
+      return state.services.map((s) => ({ ...s }));
+    case STRATA_METHODS.SERVICE_START:
+      return transitionService(state, emitPlugin, String(params.serviceId ?? ''), 'running');
+    case STRATA_METHODS.SERVICE_STOP:
+      return transitionService(state, emitPlugin, String(params.serviceId ?? ''), 'stopped');
+    case STRATA_METHODS.SERVICE_RESTART:
+      return transitionService(state, emitPlugin, String(params.serviceId ?? ''), 'running', true);
+    case STRATA_METHODS.SERVICE_LOGS: {
+      const sid = String(params.serviceId ?? '');
+      return {
+        container: container.id,
+        serviceId: sid,
+        lines: [...(state.serviceLogs[sid] ?? ['暂无服务日志'])],
+      };
+    }
     case STRATA_METHODS.CONTAINER_LIST:
       return [cloneSnapshot(container)];
     case STRATA_METHODS.CONTAINER_STATUS:

@@ -9,9 +9,15 @@ license.workspace = true
 workspace = true
 
 [dependencies]
+axum = { workspace = true }
+bytes = { workspace = true }
+flate2 = { workspace = true }
+futures-util = { workspace = true }
 libc = { workspace = true }
+reqwest = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+sha2 = { workspace = true }
 sideveil-plugin-sdk = { workspace = true }
 sideveil-protocol = { workspace = true }
 strata-protocol = { workspace = true }
@@ -19,3 +25,4 @@ strata-runtime = { workspace = true }
 strata-sys = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
+tokio-util = { workspace = true }

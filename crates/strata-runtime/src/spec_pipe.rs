@@ -2,7 +2,7 @@
 
 use std::fs::File;
 use std::io::{Read, Write};
-use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
+use std::os::fd::{FromRawFd, OwnedFd, RawFd};
 
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -11,8 +11,8 @@ use crate::error::{RuntimeError, RuntimeResult};
 
 const MAX_INLINE_SPEC_BYTES: usize = 49_152;
 
-/// Creates a pipe whose read end is inheritable across `exec`, writes JSON-encoded `spec`
-/// into the write end, closes the write end, and returns the read `OwnedFd`.
+/// Creates a `O_CLOEXEC` pipe, writes JSON-encoded `spec` into the write end, closes the write end,
+/// and returns the read `OwnedFd`. Callers clear `FD_CLOEXEC` only inside `Command::pre_exec`.
 pub fn create_spec_pipe<T: Serialize>(spec: &T) -> RuntimeResult<OwnedFd> {
     let bytes = serde_json::to_vec(spec)?;
     if bytes.len() > MAX_INLINE_SPEC_BYTES {
@@ -22,7 +22,7 @@ pub fn create_spec_pipe<T: Serialize>(spec: &T) -> RuntimeResult<OwnedFd> {
         )));
     }
 
-    let (read_fd, write_fd) = create_pipe_pair(false, true)?;
+    let (read_fd, write_fd) = create_pipe_pair()?;
     let mut writer = File::from(write_fd);
     writer
         .write_all(&bytes)
@@ -34,10 +34,32 @@ pub fn create_spec_pipe<T: Serialize>(spec: &T) -> RuntimeResult<OwnedFd> {
     Ok(read_fd)
 }
 
-/// Creates a `(parent_read_cloexec, child_write_inheritable)` pipe used to report pre-`execve`
+/// Creates a `(parent_read, child_write)` `O_CLOEXEC` pipe pair used to report pre-`execve`
 /// stage-2 failures immediately and detect successful `execve` via `FD_CLOEXEC` EOF.
+/// Callers clear `FD_CLOEXEC` on `child_write` only inside `Command::pre_exec`.
 pub fn create_exec_error_pipe() -> RuntimeResult<(OwnedFd, OwnedFd)> {
-    create_pipe_pair(true, false)
+    create_pipe_pair()
+}
+
+/// Async-signal-safe helper intended ONLY for `Command::pre_exec` closures: clears `FD_CLOEXEC`
+/// exclusively on the listed descriptors so only the intended child process inherits them.
+///
+/// # Safety
+/// Must be called with valid open descriptors in the post-`fork` / pre-`exec` child context.
+pub unsafe fn clear_cloexec_pre_exec(fds: &[RawFd]) -> std::io::Result<()> {
+    for &fd in fds {
+        // SAFETY: `fcntl(F_GETFD)` / `fcntl(F_SETFD)` are async-signal-safe POSIX syscalls.
+        let flags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
+        if flags < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        // SAFETY: `fcntl(F_SETFD)` clears `FD_CLOEXEC` using an async-signal-safe syscall.
+        let rc = unsafe { libc::fcntl(fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC) };
+        if rc < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+    }
+    Ok(())
 }
 
 /// Reads and deserializes a JSON spec from an inherited pipe descriptor, closing the fd.
@@ -112,7 +134,7 @@ pub fn read_exec_error(read_fd: OwnedFd) -> RuntimeResult<Option<String>> {
     }
 }
 
-fn create_pipe_pair(read_cloexec: bool, write_cloexec: bool) -> RuntimeResult<(OwnedFd, OwnedFd)> {
+fn create_pipe_pair() -> RuntimeResult<(OwnedFd, OwnedFd)> {
     let mut fds = [0 as libc::c_int; 2];
     // SAFETY: `fds` is a writable 2-element array for `pipe2`.
     let rc = unsafe { libc::pipe2(fds.as_mut_ptr(), libc::O_CLOEXEC) };
@@ -122,36 +144,9 @@ fn create_pipe_pair(read_cloexec: bool, write_cloexec: bool) -> RuntimeResult<(O
             source: std::io::Error::last_os_error(),
         });
     }
-    // SAFETY: Both descriptors were newly allocated by `pipe2`.
+    // SAFETY: Both descriptors were newly allocated by `pipe2` with `O_CLOEXEC`.
     let read_fd = unsafe { OwnedFd::from_raw_fd(fds[0]) };
-    // SAFETY: Both descriptors were newly allocated by `pipe2`.
+    // SAFETY: Both descriptors were newly allocated by `pipe2` with `O_CLOEXEC`.
     let write_fd = unsafe { OwnedFd::from_raw_fd(fds[1]) };
-
-    if !read_cloexec {
-        clear_cloexec(read_fd.as_raw_fd())?;
-    }
-    if !write_cloexec {
-        clear_cloexec(write_fd.as_raw_fd())?;
-    }
     Ok((read_fd, write_fd))
-}
-
-fn clear_cloexec(raw_fd: RawFd) -> RuntimeResult<()> {
-    // SAFETY: `raw_fd` is an open pipe descriptor owned by the caller.
-    let flags = unsafe { libc::fcntl(raw_fd, libc::F_GETFD) };
-    if flags < 0 {
-        return Err(RuntimeError::Io {
-            op: "fcntl(F_GETFD)",
-            source: std::io::Error::last_os_error(),
-        });
-    }
-    // SAFETY: Clearing `FD_CLOEXEC` so child helper inherits this pipe end.
-    let rc = unsafe { libc::fcntl(raw_fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC) };
-    if rc < 0 {
-        return Err(RuntimeError::Io {
-            op: "fcntl(F_SETFD)",
-            source: std::io::Error::last_os_error(),
-        });
-    }
-    Ok(())
 }

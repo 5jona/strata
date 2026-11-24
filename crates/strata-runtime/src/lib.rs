@@ -3,6 +3,7 @@
 pub mod enter;
 pub mod error;
 pub mod fs_atomic;
+pub mod provision;
 pub mod spec_pipe;
 pub mod stage2;
 pub mod storage;

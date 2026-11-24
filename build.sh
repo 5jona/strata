@@ -36,7 +36,7 @@ echo "[*] Running Python syntax and unit test checks..."
     python3 -m unittest discover -s tests
 )
 
-echo "[*] Running SideVeil plugin WebUI quality gate and Vite build..."
+echo "[*] Running SideVeil plugin & standalone KernelSU WebUI quality gate and Vite builds..."
 (
     cd "${SCRIPT_DIR}/webui"
     run_in_env pnpm check
@@ -96,6 +96,16 @@ if not os.path.isfile(os.path.join(plugin_root, "manifest.json")):
     raise FileNotFoundError(f"Missing SideVeil plugin manifest under {plugin_root}")
 
 for dirpath, _dirnames, filenames in os.walk(plugin_root):
+    for name in sorted(filenames):
+        full = os.path.join(dirpath, name)
+        rel = os.path.relpath(full, script_dir).replace(os.sep, "/")
+        explicit_files.append((rel, 0o644))
+
+webroot_root = os.path.join(script_dir, "webroot")
+if not os.path.isfile(os.path.join(webroot_root, "index.html")):
+    raise FileNotFoundError(f"Missing standalone KernelSU WebUI under {webroot_root}")
+
+for dirpath, _dirnames, filenames in os.walk(webroot_root):
     for name in sorted(filenames):
         full = os.path.join(dirpath, name)
         rel = os.path.relpath(full, script_dir).replace(os.sep, "/")

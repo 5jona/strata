@@ -59,10 +59,7 @@ impl PluginRpcHandler for StrataPluginHandler {
                     self.ctx.seam.hud().set_dark(is_dark);
                 }
             }
-            HUB_EVENT_PANEL_VISIBILITY_CHANGED => {
-                let visible = payload.get("visible").and_then(Value::as_bool);
-                eprintln!("stratad: SideVeil panel visibility changed (visible={visible:?})");
-            }
+            HUB_EVENT_PANEL_VISIBILITY_CHANGED => {}
             HUB_EVENT_NETWORK_CONTEXT_CHANGED => {
                 eprintln!(
                     "stratad: SideVeil reported network context change; refreshing container DNS"

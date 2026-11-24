@@ -5,12 +5,15 @@ pub mod cgroup;
 pub mod devfs;
 pub mod error;
 pub mod inotify;
+pub mod kernel_caps;
 pub mod loopdev;
 pub mod mount;
 pub mod namespace;
 pub mod net;
 pub mod pidfd;
 pub mod procfs;
+pub mod pty;
+pub mod rootfs_io;
 pub mod selinux;
 
 pub use error::{SysError, SysResult};

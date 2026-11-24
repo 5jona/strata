@@ -5,6 +5,13 @@ import type {
   AttachLease,
   ContainerConfigPatchParams,
   ContainerConfigResult,
+  ContainerServiceRuntime,
+  ServiceDeleteResult,
+  ServiceLogsParams,
+  ServiceLogsResult,
+  ServiceSelectorParams,
+  ServiceStateChangedPayload,
+  ServiceUpsertParams,
   SessionAcquireParams,
   SessionReleaseParams,
   SessionReleaseResult,
@@ -15,20 +22,38 @@ import type {
   BackupResult,
   BackupStartResult,
   CompactResult,
+  ContainerCloneParams,
+  ContainerCloneResult,
+  ContainerCreateParams,
+  ContainerDeleteParams,
+  ContainerDeleteResult,
+  ContainerJobCancelResult,
+  ContainerJobProgressPayload,
+  ContainerJobSelectorParams,
+  ContainerJobStartResult,
   ContainerLogsParams,
   ContainerLogsResult,
+  ContainerResizeParams,
+  ContainerResizeResult,
   ContainerSelectorParams,
   ContainerStateChangedPayload,
   ContainerStatusSnapshot,
   DaemonHealthResult,
+  DaemonLogsParams,
+  DaemonLogsResult,
   DaemonSummarySnapshot,
+  DistroCatalogParams,
+  DistroCatalogResult,
   EventsSubscribeResult,
   FsckResult,
   HudSetParams,
   HudStateResult,
+  KernelCapabilitiesResult,
   MaintenanceDonePayload,
   PingResult,
   SshKeyAddParams,
+  SshKeyRemoveParams,
+  SshKeyRemoveResult,
   SshKeysResult,
   StorageCleanupReport,
   SyncDnsResult,
@@ -41,6 +66,9 @@ import type {
   TaskRunParams,
   TaskRunResult,
   TaskSummary,
+  WebConfigureParams,
+  WebRotateTokenResult,
+  WebStatusResult,
 } from './runtimeTypes.ts';
 
 /** RPC method names. */
@@ -48,12 +76,24 @@ export const STRATA_METHODS = {
   DAEMON_PING: 'daemon.ping',
   DAEMON_STATUS: 'daemon.status',
   DAEMON_HEALTH: 'daemon.health',
+  DAEMON_CAPABILITIES: 'daemon.capabilities',
+  DAEMON_LOGS: 'daemon.logs',
   DAEMON_RELOAD_CONFIG: 'daemon.reloadConfig',
+  WEB_STATUS: 'web.status',
+  WEB_CONFIGURE: 'web.configure',
+  WEB_ROTATE_TOKEN: 'web.rotateToken',
+  DISTRO_CATALOG: 'distro.catalog',
   CONTAINER_LIST: 'container.list',
   CONTAINER_STATUS: 'container.status',
   CONTAINER_START: 'container.start',
   CONTAINER_STOP: 'container.stop',
   CONTAINER_RESTART: 'container.restart',
+  CONTAINER_CREATE: 'container.create',
+  CONTAINER_DELETE: 'container.delete',
+  CONTAINER_RESIZE: 'container.resize',
+  CONTAINER_CLONE: 'container.clone',
+  CONTAINER_JOB_STATUS: 'container.jobStatus',
+  CONTAINER_JOB_CANCEL: 'container.jobCancel',
   CONTAINER_LOGS: 'container.logs',
   CONTAINER_SYNC_DNS: 'container.syncDns',
   CONTAINER_COMPACT: 'container.compact',
@@ -64,12 +104,20 @@ export const STRATA_METHODS = {
   CONTAINER_CONFIG_PATCH: 'container.configPatch',
   CONTAINER_SSH_KEY_LIST: 'container.sshKeyList',
   CONTAINER_SSH_KEY_ADD: 'container.sshKeyAdd',
+  CONTAINER_SSH_KEY_REMOVE: 'container.sshKeyRemove',
   SESSION_ACQUIRE: 'session.acquire',
   SESSION_RELEASE: 'session.release',
   TASK_RUN: 'task.run',
   TASK_CANCEL: 'task.cancel',
   TASK_LIST: 'task.list',
   TASK_LOGS: 'task.logs',
+  SERVICE_LIST: 'service.list',
+  SERVICE_UPSERT: 'service.upsert',
+  SERVICE_DELETE: 'service.delete',
+  SERVICE_START: 'service.start',
+  SERVICE_STOP: 'service.stop',
+  SERVICE_RESTART: 'service.restart',
+  SERVICE_LOGS: 'service.logs',
   HUD_STATE: 'hud.state',
   HUD_SET: 'hud.set',
   EVENTS_SUBSCRIBE: 'events.subscribe',
@@ -89,9 +137,33 @@ export interface StrataRpcMethodMap {
     params: void;
     result: DaemonHealthResult;
   };
+  'daemon.capabilities': {
+    params: void;
+    result: KernelCapabilitiesResult;
+  };
+  'daemon.logs': {
+    params: DaemonLogsParams;
+    result: DaemonLogsResult;
+  };
   'daemon.reloadConfig': {
     params: void;
     result: StrataConfig;
+  };
+  'web.status': {
+    params: void;
+    result: WebStatusResult;
+  };
+  'web.configure': {
+    params: WebConfigureParams;
+    result: WebStatusResult;
+  };
+  'web.rotateToken': {
+    params: void;
+    result: WebRotateTokenResult;
+  };
+  'distro.catalog': {
+    params: DistroCatalogParams;
+    result: DistroCatalogResult;
   };
   'container.list': {
     params: void;
@@ -112,6 +184,30 @@ export interface StrataRpcMethodMap {
   'container.restart': {
     params: ContainerSelectorParams;
     result: ContainerStatusSnapshot;
+  };
+  'container.create': {
+    params: ContainerCreateParams;
+    result: ContainerJobStartResult;
+  };
+  'container.delete': {
+    params: ContainerDeleteParams;
+    result: ContainerDeleteResult;
+  };
+  'container.resize': {
+    params: ContainerResizeParams;
+    result: ContainerResizeResult;
+  };
+  'container.clone': {
+    params: ContainerCloneParams;
+    result: ContainerCloneResult;
+  };
+  'container.jobStatus': {
+    params: ContainerJobSelectorParams;
+    result: ContainerJobProgressPayload;
+  };
+  'container.jobCancel': {
+    params: ContainerJobSelectorParams;
+    result: ContainerJobCancelResult;
   };
   'container.logs': {
     params: ContainerLogsParams;
@@ -153,6 +249,10 @@ export interface StrataRpcMethodMap {
     params: SshKeyAddParams;
     result: SshKeysResult;
   };
+  'container.sshKeyRemove': {
+    params: SshKeyRemoveParams;
+    result: SshKeyRemoveResult;
+  };
   'session.acquire': {
     params: SessionAcquireParams;
     result: AttachLease;
@@ -177,6 +277,34 @@ export interface StrataRpcMethodMap {
     params: TaskLogsParams;
     result: TaskLogsResult;
   };
+  'service.list': {
+    params: ContainerSelectorParams;
+    result: ContainerServiceRuntime[];
+  };
+  'service.upsert': {
+    params: ServiceUpsertParams;
+    result: ContainerServiceRuntime;
+  };
+  'service.delete': {
+    params: ServiceSelectorParams;
+    result: ServiceDeleteResult;
+  };
+  'service.start': {
+    params: ServiceSelectorParams;
+    result: ContainerServiceRuntime;
+  };
+  'service.stop': {
+    params: ServiceSelectorParams;
+    result: ContainerServiceRuntime;
+  };
+  'service.restart': {
+    params: ServiceSelectorParams;
+    result: ContainerServiceRuntime;
+  };
+  'service.logs': {
+    params: ServiceLogsParams;
+    result: ServiceLogsResult;
+  };
   'hud.state': {
     params: void;
     result: HudStateResult;
@@ -195,6 +323,8 @@ export interface StrataRpcMethodMap {
 export const STRATA_EVENTS = {
   CONTAINER_STATE_CHANGED: 'container.stateChanged',
   CONTAINER_MAINTENANCE_DONE: 'container.maintenanceDone',
+  CONTAINER_JOB_PROGRESS: 'container.job.progress',
+  SERVICE_STATE_CHANGED: 'service.stateChanged',
   TASK_OUTPUT: 'task.output',
   TASK_EXIT: 'task.exit',
 } as const;
@@ -203,6 +333,8 @@ export const STRATA_EVENTS = {
 export interface StrataEventPayloadMap {
   'container.stateChanged': ContainerStateChangedPayload;
   'container.maintenanceDone': MaintenanceDonePayload;
+  'container.job.progress': ContainerJobProgressPayload;
+  'service.stateChanged': ServiceStateChangedPayload;
   'task.output': TaskOutputPayload;
   'task.exit': TaskExitPayload;
 }

@@ -1,12 +1,14 @@
 import {
   type BindMount,
   type ContainerConfig,
+  type ContainerServiceRuntime,
   type ContainerStatusSnapshot,
   type HudStateResult,
   STRATA_PATHS,
   STRATA_PROTOCOL,
   type TaskOutputPayload,
   type TaskSummary,
+  type WebStatusResult,
 } from '../../types.ts';
 
 /** In-memory task summary and captured log chunks for the mock preview transport. */
@@ -20,6 +22,10 @@ export interface MockStrataState {
   defaultId: string;
   container: ContainerStatusSnapshot;
   config: ContainerConfig;
+  services: ContainerServiceRuntime[];
+  serviceLogs: Record<string, string[]>;
+  webStatus: WebStatusResult;
+  webToken: string;
   sshKeys: string[];
   dropbearLogs: string[];
   hud: HudStateResult;
@@ -37,7 +43,7 @@ export function toParamsRecord(raw: unknown): Record<string, unknown> {
   return isPlainRecord(raw) ? raw : {};
 }
 
-/** Builds the initial synthetic container, config, SSH key, and HUD state for preview mode. */
+/** Builds the initial synthetic container, services, web pairing, SSH key, and HUD state. */
 export function createInitialMockState(): MockStrataState {
   const defaultId = STRATA_PROTOCOL.DEFAULT_CONTAINER_ID;
   const imagePath = `${STRATA_PATHS.DEFAULT_CONTAINERS_ROOT}/${defaultId}/rootfs.img`;
@@ -97,8 +103,72 @@ export function createInitialMockState(): MockStrataState {
       syncAndroidDns: true,
       dnsServers: ['223.5.5.5', '1.1.1.1', '8.8.8.8'],
       fsckOnMount: true,
+      noatime: true,
       initCommand: [],
+      services: [
+        {
+          id: 'rsshub',
+          name: 'RSSHub 订阅服务',
+          command: ['node', '/opt/rsshub/dist/index.mjs'],
+          workdir: '/opt/rsshub',
+          env: { PORT: '1200' },
+          autoStart: true,
+          restartPolicy: 'on-failure',
+          maxRestarts: 5,
+          backoffMs: 2000,
+        },
+        {
+          id: 'syncthing',
+          name: 'Syncthing 同步',
+          command: ['/usr/bin/syncthing', '--no-browser'],
+          workdir: '/root',
+          env: { HOME: '/root' },
+          autoStart: true,
+          restartPolicy: 'always',
+          maxRestarts: 10,
+          backoffMs: 3000,
+        },
+      ],
     },
+    services: [
+      {
+        id: 'rsshub',
+        name: 'RSSHub 订阅服务',
+        status: 'running',
+        pid: 12810,
+        uptimeMs: 915_000,
+        restartCount: 0,
+        autoStart: true,
+      },
+      {
+        id: 'syncthing',
+        name: 'Syncthing 同步',
+        status: 'stopped',
+        uptimeMs: 0,
+        restartCount: 0,
+        autoStart: true,
+      },
+    ],
+    serviceLogs: {
+      rsshub: [
+        '[rsshub] listening on http://0.0.0.0:1200',
+        '[rsshub] GET /hackernews/best 200 142ms',
+      ],
+      syncthing: ['[syncthing] stopped cleanly'],
+    },
+    webStatus: {
+      enabled: true,
+      running: true,
+      lanEnabled: false,
+      listenAddr: STRATA_PROTOCOL.DEFAULT_WEB_LISTEN_LOCAL,
+      port: STRATA_PROTOCOL.DEFAULT_WEB_PORT,
+      tokenPath: STRATA_PATHS.DEFAULT_WEB_TOKEN_PATH,
+      webrootAvailable: true,
+      activePtySessions: 0,
+      activeJobs: 0,
+      lanUrls: ['http://192.0.2.10:7681'],
+    },
+    webToken: 'demo_preview_bearer_token_0123456789abcdef',
     sshKeys: ['ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMockPreviewKeyStrata dev@workstation'],
     dropbearLogs: [
       '[12549] Not backgrounding',
@@ -125,6 +195,7 @@ export function cloneConfig(cfg: ContainerConfig): ContainerConfig {
     extraMounts: cfg.extraMounts.map((m) => ({ ...m })),
     dnsServers: [...cfg.dnsServers],
     initCommand: [...cfg.initCommand],
+    services: cfg.services.map((s) => ({ ...s, command: [...s.command], env: { ...s.env } })),
   };
 }
 
@@ -156,6 +227,7 @@ export function applyMockConfigPatch(
     config.hostBridge = container.hostBridge = params.hostBridge;
   if (typeof params.hostRuntime === 'boolean')
     config.hostRuntime = container.hostRuntime = params.hostRuntime;
+  if (typeof params.noatime === 'boolean') config.noatime = params.noatime;
   if (Array.isArray(params.extraCharDevs)) config.extraCharDevs = params.extraCharDevs.map(String);
   if (Array.isArray(params.extraMounts)) {
     const parsedMounts: BindMount[] = [];

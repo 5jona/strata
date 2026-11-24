@@ -1,17 +1,20 @@
-//! Secondary CLI subcommand handlers (`ssh-key`, `config`, `task`, `daemon`).
+//! Secondary CLI subcommand handlers (`ssh-key`, `config`, `task`, `daemon`, `web`, `rpc`).
 
 mod config;
+mod web;
 
 use std::fs;
+use std::io::{self, Read};
 
 use serde_json::{Value, json};
 use strata_protocol::DaemonSummarySnapshot;
 use strata_protocol::rpc::{
-    ContainerSelectorParams, SshKeyAddParams, SshKeysResult, TaskCancelParams, TaskLogsParams,
-    TaskLogsResult, TaskRunParams, TaskSummary, methods,
+    ContainerSelectorParams, DaemonLogsParams, SshKeyAddParams, SshKeyRemoveParams, SshKeysResult,
+    TaskCancelParams, TaskLogsParams, TaskLogsResult, TaskRunParams, TaskSummary, methods,
 };
 
 pub(crate) use config::handle_config;
+pub(crate) use web::handle_web;
 
 use crate::client::StrataClient;
 use crate::format;
@@ -48,8 +51,26 @@ pub(crate) fn handle_ssh_key(
             emit_typed::<SshKeysResult>(&val, json_mode, format::print_ssh_keys)?;
             Ok(0)
         }
+        "remove" | "rm" => {
+            let Some(target) = rest.get(1) else {
+                return Err("usage: strata ssh-key remove <key-or-fingerprint>".to_owned());
+            };
+            let params = serde_json::to_value(SshKeyRemoveParams {
+                id: container,
+                fingerprint_or_key: target.clone(),
+            })
+            .ok();
+            let val = rpc_or_err(client.call(methods::CONTAINER_SSH_KEY_REMOVE, params))?;
+            if json_mode {
+                print_json(&val);
+            } else {
+                let removed = val.get("removed").and_then(Value::as_u64).unwrap_or(0);
+                println!("Removed {removed} SSH key(s).");
+            }
+            Ok(0)
+        }
         other => Err(format!(
-            "unknown ssh-key action '{other}' (expected list|add)"
+            "unknown ssh-key action '{other}' (expected list|add|remove)"
         )),
     }
 }
@@ -127,17 +148,43 @@ pub(crate) fn handle_task(
     }
 }
 
-pub(crate) fn handle_raw_rpc(client: &mut StrataClient, rest: &[String]) -> Result<i32, String> {
+pub(crate) fn parse_raw_rpc_args(
+    rest: &[String],
+    stdin_payload: Option<&str>,
+) -> Result<(String, Option<Value>), String> {
     let Some(method) = rest.first() else {
-        return Err("usage: strata rpc <method> [json-params]".to_owned());
+        return Err("usage: strata rpc <method> [json-params | -]".to_owned());
     };
-    let params = match rest.get(1) {
+    let raw_opt = match rest.get(1).map(String::as_str) {
+        Some("-") => stdin_payload.map(str::trim).filter(|s| !s.is_empty()),
+        Some(raw) => Some(raw),
+        None => stdin_payload.map(str::trim).filter(|s| !s.is_empty()),
+    };
+    let params = match raw_opt {
         Some(raw) => Some(
             serde_json::from_str::<Value>(raw).map_err(|e| format!("invalid JSON params: {e}"))?,
         ),
         None => None,
     };
-    let val = rpc_or_err(client.call(method, params))?;
+    Ok((method.clone(), params))
+}
+
+pub(crate) fn raw_rpc_needs_stdin(rest: &[String]) -> bool {
+    matches!(rest.get(1).map(String::as_str), Some("-"))
+}
+
+pub(crate) fn handle_raw_rpc(client: &mut StrataClient, rest: &[String]) -> Result<i32, String> {
+    let stdin_buf = if raw_rpc_needs_stdin(rest) {
+        let mut buf = String::new();
+        io::stdin()
+            .read_to_string(&mut buf)
+            .map_err(|e| format!("read stdin JSON: {e}"))?;
+        Some(buf)
+    } else {
+        None
+    };
+    let (method, params) = parse_raw_rpc_args(rest, stdin_buf.as_deref())?;
+    let val = rpc_or_err(client.call(&method, params))?;
     print_json(&val);
     Ok(0)
 }
@@ -159,13 +206,25 @@ pub(crate) fn handle_daemon(
             print_json(&val);
             Ok(0)
         }
+        "capabilities" | "caps" => {
+            let val = rpc_or_err(client.call(methods::DAEMON_CAPABILITIES, None))?;
+            print_json(&val);
+            Ok(0)
+        }
+        "logs" => {
+            let lines = rest.get(1).and_then(|s| s.parse::<usize>().ok());
+            let params = serde_json::to_value(DaemonLogsParams { lines }).ok();
+            let val = rpc_or_err(client.call(methods::DAEMON_LOGS, params))?;
+            print_json(&val);
+            Ok(0)
+        }
         "status" => {
             let val = rpc_or_err(client.call(methods::DAEMON_STATUS, None))?;
             emit_typed::<DaemonSummarySnapshot>(&val, json_mode, format::print_daemon_status)?;
             Ok(0)
         }
         other => Err(format!(
-            "unknown daemon action '{other}' (expected status|ping|health)"
+            "unknown daemon action '{other}' (expected status|ping|health|capabilities|logs)"
         )),
     }
 }
@@ -191,4 +250,42 @@ pub(crate) fn emit_typed<T: serde::de::DeserializeOwned>(
 
 pub(crate) fn print_json(val: &Value) {
     println!("{}", serde_json::to_string_pretty(val).unwrap_or_default());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_raw_rpc_inline_and_stdin_json() {
+        let (m, p) = parse_raw_rpc_args(&["daemon.ping".to_owned()], None).expect("no params");
+        assert_eq!(m, "daemon.ping");
+        assert!(p.is_none());
+        assert!(!raw_rpc_needs_stdin(&["daemon.ping".to_owned()]));
+        assert!(raw_rpc_needs_stdin(&[
+            "web.configure".to_owned(),
+            "-".to_owned()
+        ]));
+
+        let (m2, p2) = parse_raw_rpc_args(
+            &[
+                "container.status".to_owned(),
+                r#"{"container":"main"}"#.to_owned(),
+            ],
+            None,
+        )
+        .expect("inline json");
+        assert_eq!(m2, "container.status");
+        assert_eq!(p2.expect("params")["container"], "main");
+
+        let (m3, p3) = parse_raw_rpc_args(
+            &["web.configure".to_owned(), "-".to_owned()],
+            Some(r#"{"lanEnabled":true}"#),
+        )
+        .expect("stdin dash");
+        assert_eq!(m3, "web.configure");
+        assert_eq!(p3.expect("params")["lanEnabled"], true);
+
+        assert!(parse_raw_rpc_args(&["x".to_owned(), "{bad".to_owned()], None).is_err());
+    }
 }

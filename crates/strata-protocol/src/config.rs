@@ -5,7 +5,10 @@ pub mod validate;
 use std::collections::BTreeMap;
 
 pub use crate::generated::config::{
-    BindMount, ContainerConfig, SideVeilBridgeConfig, SshConfig, StrataConfig,
+    BindMount, ContainerConfig, ContainerServiceRuntime, ContainerServiceSpec, ServiceDeleteResult,
+    ServiceLogsParams, ServiceLogsResult, ServiceRestartPolicy, ServiceSelectorParams,
+    ServiceStateChangedPayload, ServiceStatus, ServiceUpsertParams, SideVeilBridgeConfig,
+    SshConfig, StrataConfig, WebConsoleConfig,
 };
 pub use validate::{ConfigValidationError, validate_container_id};
 
@@ -14,8 +17,18 @@ use crate::constants::{
     CONFIG_SCHEMA_VERSION, CONTAINER_DROPBEAR_PID_PATH, DEFAULT_CONTAINER_ID,
     DEFAULT_CONTAINERS_ROOT, DEFAULT_DNS_SERVERS, DEFAULT_EXTRA_CHAR_DEVS, DEFAULT_OOM_SCORE_ADJ,
     DEFAULT_SIDEVEIL_HUB_SOCK, DEFAULT_SSH_KEEPALIVE_SECS, DEFAULT_SSH_LISTEN_ADDR,
-    DEFAULT_SSH_PORT, L5_DIAG_MOUNT_PATHS, SIDEVEIL_PLUGIN_ID,
+    DEFAULT_SSH_PORT, DEFAULT_WEB_PORT, L5_DIAG_MOUNT_PATHS, SIDEVEIL_PLUGIN_ID,
 };
+
+impl Default for WebConsoleConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            lan_enabled: false,
+            port: DEFAULT_WEB_PORT,
+        }
+    }
+}
 
 impl Default for SideVeilBridgeConfig {
     fn default() -> Self {
@@ -57,6 +70,7 @@ impl Default for StrataConfig {
             version: CONFIG_SCHEMA_VERSION,
             default_container: DEFAULT_CONTAINER_ID.to_owned(),
             sideveil: SideVeilBridgeConfig::default(),
+            web: WebConsoleConfig::default(),
             containers: default_containers_map(),
         }
     }
@@ -82,7 +96,9 @@ impl ContainerConfig {
             sync_android_dns: true,
             dns_servers: default_dns_list(),
             fsck_on_mount: true,
+            noatime: true,
             init_command: Vec::new(),
+            services: Vec::new(),
         }
     }
 
@@ -227,5 +243,24 @@ mod tests {
             main.effective_init_command(),
             vec!["/usr/bin/env", "sleep", "infinity"]
         );
+    }
+
+    #[test]
+    fn deserializes_legacy_config_without_web_or_noatime() {
+        let legacy = r#"{
+            "version": 1,
+            "defaultContainer": "main",
+            "containers": {
+                "main": {
+                    "imagePath": "/data/local/strata/containers/main/rootfs.img",
+                    "mountDir": "/data/local/strata/containers/main/mnt",
+                    "hostname": "strata-main"
+                }
+            }
+        }"#;
+        let parsed: StrataConfig = serde_json::from_str(legacy).expect("parse legacy config");
+        assert!(parsed.validate().is_ok());
+        assert_eq!(parsed.web, WebConsoleConfig::default());
+        assert!(parsed.containers["main"].noatime);
     }
 }

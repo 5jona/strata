@@ -1,4 +1,6 @@
-//! Transport-agnostic JSON-RPC 2.0 dispatcher shared by `strata.sock` and the SideVeil bridge.
+//! Transport-agnostic JSON-RPC 2.0 dispatcher shared by `strata.sock`, HTTP `/api/rpc`, and SideVeil.
+
+mod extended;
 
 use std::sync::Arc;
 use std::time::Instant;
@@ -13,11 +15,15 @@ use strata_protocol::rpc::{
 };
 use strata_protocol::{DaemonSummarySnapshot, RpcRequest, RpcResponse};
 
+use crate::catalog::CatalogClient;
 use crate::config_store::ConfigStore;
 use crate::error::{DaemonError, DaemonResult};
+use crate::jobs::ProvisionJobManager;
 use crate::manager::ContainerManager;
+use crate::services::ServiceSupervisor;
 use crate::sideveil_seam::SideVeilBridgeSeam;
 use crate::task_runner::TaskRunner;
+use crate::web::WebServerController;
 
 /// Identifies the transport origin of an incoming JSON-RPC request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -26,26 +32,37 @@ pub(crate) enum RpcCaller {
     LocalCtl { conn_id: u64 },
     /// Remote plugin client forwarded over SideVeil `hub.sock`.
     SideVeilBridge,
+    /// Authenticated HTTP/WS client connected over the embedded PC control plane.
+    WebConsole,
 }
 
-/// Central RPC dispatcher decoupled from Unix socket transport.
+/// Central RPC dispatcher decoupled from Unix socket and HTTP transports.
 #[derive(Debug)]
 pub(crate) struct Dispatcher {
     started_at: Instant,
     config_store: Arc<ConfigStore>,
-    manager: Arc<ContainerManager>,
+    pub(super) manager: Arc<ContainerManager>,
     task_runner: Arc<TaskRunner>,
     sideveil: Arc<SideVeilBridgeSeam>,
+    pub(super) web: Arc<WebServerController>,
+    pub(super) catalog: Arc<CatalogClient>,
+    pub(super) jobs: Arc<ProvisionJobManager>,
+    pub(super) services: Arc<ServiceSupervisor>,
 }
 
 impl Dispatcher {
     #[must_use]
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         started_at: Instant,
         config_store: Arc<ConfigStore>,
         manager: Arc<ContainerManager>,
         task_runner: Arc<TaskRunner>,
         sideveil: Arc<SideVeilBridgeSeam>,
+        web: Arc<WebServerController>,
+        catalog: Arc<CatalogClient>,
+        jobs: Arc<ProvisionJobManager>,
+        services: Arc<ServiceSupervisor>,
     ) -> Self {
         Self {
             started_at,
@@ -53,6 +70,10 @@ impl Dispatcher {
             manager,
             task_runner,
             sideveil,
+            web,
+            catalog,
+            jobs,
+            services,
         }
     }
 
@@ -103,6 +124,7 @@ impl Dispatcher {
                 let cfg = self.config_store.reload_from_disk().await?;
                 self.manager.sync_running_containers().await;
                 self.sideveil.notify_config_changed();
+                self.web.notify_config_changed();
                 to_json(cfg)
             }
             methods::CONTAINER_LIST => to_json(self.manager.list_containers().await),
@@ -156,10 +178,12 @@ impl Dispatcher {
             }
             methods::CONTAINER_BACKUP => {
                 let p: BackupParams = parse_required_params(params)?;
+                enforce_backup_path_policy(caller, &p.output_path)?;
                 to_json(self.manager.backup_container(p).await?)
             }
             methods::CONTAINER_BACKUP_START => {
                 let p: BackupParams = parse_required_params(params)?;
+                enforce_backup_path_policy(caller, &p.output_path)?;
                 to_json(self.manager.backup_container_async(p).await?)
             }
             methods::CONTAINER_CONFIG_GET => {
@@ -172,6 +196,12 @@ impl Dispatcher {
             }
             methods::CONTAINER_CONFIG_PATCH => {
                 let p: ContainerConfigPatchParams = parse_required_params(params)?;
+                if !matches!(caller, RpcCaller::LocalCtl { .. }) && p.host_runtime == Some(true) {
+                    return Err(DaemonError::PermissionDenied(
+                        "enabling hostRuntime is restricted to local strata.sock clients"
+                            .to_owned(),
+                    ));
+                }
                 let (container, config) = self.config_store.patch_container(p).await?;
                 to_json(ContainerConfigResult { container, config })
             }
@@ -189,9 +219,11 @@ impl Dispatcher {
                     let p: SessionAcquireParams = parse_optional_params(params)?;
                     to_json(self.manager.acquire_session(conn_id, p).await?)
                 }
-                RpcCaller::SideVeilBridge => Err(DaemonError::PermissionDenied(
-                    "session.acquire is restricted to local strata.sock clients".to_owned(),
-                )),
+                RpcCaller::SideVeilBridge | RpcCaller::WebConsole => {
+                    Err(DaemonError::PermissionDenied(
+                        "session.acquire is restricted to local strata.sock clients".to_owned(),
+                    ))
+                }
             },
             methods::SESSION_RELEASE => match caller {
                 RpcCaller::LocalCtl { .. } => {
@@ -199,9 +231,11 @@ impl Dispatcher {
                     let released = self.manager.release_session(p).await?;
                     to_json(SessionReleaseResult { released })
                 }
-                RpcCaller::SideVeilBridge => Err(DaemonError::PermissionDenied(
-                    "session.release is restricted to local strata.sock clients".to_owned(),
-                )),
+                RpcCaller::SideVeilBridge | RpcCaller::WebConsole => {
+                    Err(DaemonError::PermissionDenied(
+                        "session.release is restricted to local strata.sock clients".to_owned(),
+                    ))
+                }
             },
             methods::TASK_RUN => {
                 let p: TaskRunParams = parse_required_params(params)?;
@@ -223,7 +257,10 @@ impl Dispatcher {
                 to_json(self.sideveil.update_hud(p))
             }
             methods::EVENTS_SUBSCRIBE => to_json(EventsSubscribeResult { subscribed: true }),
-            other => Err(DaemonError::MethodNotFound(other.to_owned())),
+            other => match self.dispatch_extended(other, params).await? {
+                Some(val) => Ok(val),
+                None => Err(DaemonError::MethodNotFound(other.to_owned())),
+            },
         }
     }
 
@@ -232,7 +269,9 @@ impl Dispatcher {
     }
 }
 
-fn parse_optional_params<T: DeserializeOwned + Default>(params: Option<Value>) -> DaemonResult<T> {
+pub(super) fn parse_optional_params<T: DeserializeOwned + Default>(
+    params: Option<Value>,
+) -> DaemonResult<T> {
     match params {
         None | Some(Value::Null) => Ok(T::default()),
         Some(v) => serde_json::from_value(v)
@@ -240,7 +279,7 @@ fn parse_optional_params<T: DeserializeOwned + Default>(params: Option<Value>) -
     }
 }
 
-fn parse_required_params<T: DeserializeOwned>(params: Option<Value>) -> DaemonResult<T> {
+pub(super) fn parse_required_params<T: DeserializeOwned>(params: Option<Value>) -> DaemonResult<T> {
     let Some(v) = params else {
         return Err(DaemonError::InvalidParams(
             "missing required params object".to_owned(),
@@ -250,8 +289,28 @@ fn parse_required_params<T: DeserializeOwned>(params: Option<Value>) -> DaemonRe
         .map_err(|e| DaemonError::InvalidParams(format!("invalid params: {e}")))
 }
 
-fn to_json<T: serde::Serialize>(value: T) -> DaemonResult<Value> {
+pub(super) fn to_json<T: serde::Serialize>(value: T) -> DaemonResult<Value> {
     serde_json::to_value(value).map_err(|e| DaemonError::Internal(format!("serialize result: {e}")))
+}
+
+const REMOTE_BACKUP_JAIL: &str = "/data/local/strata/backups";
+
+fn enforce_backup_path_policy(caller: RpcCaller, output_path: &str) -> DaemonResult<()> {
+    if matches!(caller, RpcCaller::LocalCtl { .. }) {
+        return Ok(());
+    }
+    let path = std::path::Path::new(output_path.trim());
+    let jail = std::path::Path::new(REMOTE_BACKUP_JAIL);
+    strata_runtime::provision::ensure_within_jail(jail, path)
+        .map_err(|e| DaemonError::PermissionDenied(format!("remote backup path rejected: {e}")))?;
+    if let Ok(meta) = std::fs::symlink_metadata(path)
+        && meta.file_type().is_symlink()
+    {
+        return Err(DaemonError::PermissionDenied(
+            "remote backup target must not be a symlink".to_owned(),
+        ));
+    }
+    Ok(())
 }
 
 fn current_uid() -> u32 {

@@ -11,8 +11,12 @@ workspace = true
 [dependencies]
 flate2 = { workspace = true }
 libc = { workspace = true }
+lzma-rs = { workspace = true }
+ruzstd = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+sha2 = { workspace = true }
 strata-protocol = { workspace = true }
 strata-sys = { workspace = true }
+tar = { workspace = true }
 thiserror = { workspace = true }

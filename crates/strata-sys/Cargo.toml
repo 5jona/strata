@@ -9,6 +9,7 @@ license.workspace = true
 workspace = true
 
 [dependencies]
+flate2 = { workspace = true }
 libc = { workspace = true }
 strata-protocol = { workspace = true }
 thiserror = { workspace = true }

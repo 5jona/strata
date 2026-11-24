@@ -89,6 +89,7 @@ MODULE_FILES=(
     container/host-exec container/setup-container.sh container/strata-debug
     scripts/sync-sideveil-plugin.sh
     plugins/strata.manager
+    webroot
 )
 
 if [ "$SKIP_BUILD" -eq 0 ]; then
@@ -140,6 +141,10 @@ fi
 
 if [ -d "${STAGE_DIR}/plugins/strata.manager" ]; then
     swap_dir_atomic "${STAGE_DIR}/plugins/strata.manager" "${REMOTE_MOD_DIR}/plugins/strata.manager"
+fi
+
+if [ -d "${STAGE_DIR}/webroot" ]; then
+    swap_dir_atomic "${STAGE_DIR}/webroot" "${REMOTE_MOD_DIR}/webroot"
 fi
 
 if [ "${RESET_CONFIG}" -eq 1 ] || [ ! -f /data/adb/${MODULE_ID}/config.json ]; then

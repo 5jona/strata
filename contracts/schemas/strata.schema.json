@@ -4,6 +4,56 @@
   "title": "Strata Protocol Wire Schema",
   "description": "Single source of truth for Strata JSON-RPC 2.0 constants, methods, events, error codes, and wire DTOs.",
   "$defs": {
+    "ServiceRestartPolicy": {
+      "type": "string",
+      "enum": [
+        "on-failure",
+        "always",
+        "never"
+      ],
+      "description": "Automatic restart policy for a managed container background service."
+    },
+    "ServiceStatus": {
+      "type": "string",
+      "enum": [
+        "stopped",
+        "running",
+        "crashed",
+        "circuit-open"
+      ],
+      "description": "Runtime lifecycle status of a managed container background service."
+    },
+    "DistroMirror": {
+      "type": "string",
+      "enum": [
+        "tuna",
+        "official",
+        "custom"
+      ],
+      "description": "Online Simplestreams ARM64 distro catalog mirror selection."
+    },
+    "ContainerJobKind": {
+      "type": "string",
+      "enum": [
+        "create",
+        "import",
+        "clone",
+        "resize",
+        "export"
+      ],
+      "description": "Kind of asynchronous container provisioning or storage job."
+    },
+    "ContainerJobState": {
+      "type": "string",
+      "enum": [
+        "pending",
+        "running",
+        "completed",
+        "failed",
+        "cancelled"
+      ],
+      "description": "Execution state of an asynchronous container provisioning job."
+    },
     "CapProfile": {
       "type": "string",
       "enum": [
@@ -40,6 +90,29 @@
         "stderr"
       ],
       "description": "Output stream label for task.output events."
+    },
+    "WebConsoleConfig": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "lanEnabled": {
+          "type": "boolean"
+        },
+        "port": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 65535
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "enabled",
+        "lanEnabled",
+        "port"
+      ],
+      "description": "Embedded HTTP/WebSocket PC Console control-plane settings."
     },
     "SideVeilBridgeConfig": {
       "type": "object",
@@ -90,6 +163,66 @@
         "keepaliveSecs"
       ],
       "description": "Dropbear SSH listener settings for a container."
+    },
+    "ContainerServiceSpec": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "command": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "workdir": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "env": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "autoStart": {
+          "type": "boolean"
+        },
+        "restartPolicy": {
+          "$ref": "#/$defs/ServiceRestartPolicy"
+        },
+        "maxRestarts": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "backoffMs": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "name",
+        "command",
+        "env",
+        "autoStart",
+        "restartPolicy",
+        "maxRestarts",
+        "backoffMs"
+      ],
+      "description": "Declarative configuration for a supervised background service inside a container."
     },
     "BindMount": {
       "type": "object",
@@ -178,10 +311,19 @@
         "fsckOnMount": {
           "type": "boolean"
         },
+        "noatime": {
+          "type": "boolean"
+        },
         "initCommand": {
           "type": "array",
           "items": {
             "type": "string"
+          }
+        },
+        "services": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ContainerServiceSpec"
           }
         }
       },
@@ -201,7 +343,9 @@
         "syncAndroidDns",
         "dnsServers",
         "fsckOnMount",
-        "initCommand"
+        "noatime",
+        "initCommand",
+        "services"
       ],
       "description": "Per-container runtime, storage, isolation, and networking specification."
     },
@@ -219,6 +363,9 @@
         "sideveil": {
           "$ref": "#/$defs/SideVeilBridgeConfig"
         },
+        "web": {
+          "$ref": "#/$defs/WebConsoleConfig"
+        },
         "containers": {
           "type": "object",
           "additionalProperties": {
@@ -231,6 +378,7 @@
         "version",
         "defaultContainer",
         "sideveil",
+        "web",
         "containers"
       ],
       "description": "Top-level multi-container Strata configuration."
@@ -321,6 +469,16 @@
           ]
         },
         "hostRuntime": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "noatime": {
           "anyOf": [
             {
               "type": "boolean"
@@ -1490,6 +1648,1054 @@
         "subscribed"
       ],
       "description": "Result returned by events.subscribe."
+    },
+    "KernelCapabilitiesResult": {
+      "type": "object",
+      "properties": {
+        "kernelRelease": {
+          "type": "string"
+        },
+        "pidNs": {
+          "type": "boolean"
+        },
+        "ipcNs": {
+          "type": "boolean"
+        },
+        "sysvIpc": {
+          "type": "boolean"
+        },
+        "userNs": {
+          "type": "boolean"
+        },
+        "netNs": {
+          "type": "boolean"
+        },
+        "overlayFs": {
+          "type": "boolean"
+        },
+        "fuseFs": {
+          "type": "boolean"
+        },
+        "cgroupV2": {
+          "type": "boolean"
+        },
+        "cgroupPids": {
+          "type": "boolean"
+        },
+        "cgroupBpf": {
+          "type": "boolean"
+        },
+        "ioUring": {
+          "type": "boolean"
+        },
+        "kvm": {
+          "type": "boolean"
+        },
+        "devtmpfs": {
+          "type": "boolean"
+        },
+        "systemdReady": {
+          "type": "boolean"
+        },
+        "dockerReady": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "kernelRelease",
+        "pidNs",
+        "ipcNs",
+        "sysvIpc",
+        "userNs",
+        "netNs",
+        "overlayFs",
+        "fuseFs",
+        "cgroupV2",
+        "cgroupPids",
+        "cgroupBpf",
+        "ioUring",
+        "kvm",
+        "devtmpfs",
+        "systemdReady",
+        "dockerReady"
+      ],
+      "description": "Live kernel container capability probe returned by daemon.capabilities."
+    },
+    "DaemonLogsParams": {
+      "type": "object",
+      "properties": {
+        "lines": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "description": "Parameters for daemon.logs."
+    },
+    "DaemonLogsResult": {
+      "type": "object",
+      "properties": {
+        "logPath": {
+          "type": "string"
+        },
+        "lines": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "logPath",
+        "lines"
+      ],
+      "description": "Result returned by daemon.logs."
+    },
+    "WebStatusResult": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "running": {
+          "type": "boolean"
+        },
+        "lanEnabled": {
+          "type": "boolean"
+        },
+        "listenAddr": {
+          "type": "string"
+        },
+        "port": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 65535
+        },
+        "tokenPath": {
+          "type": "string"
+        },
+        "webrootAvailable": {
+          "type": "boolean"
+        },
+        "activePtySessions": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "activeJobs": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "lanUrls": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "enabled",
+        "running",
+        "lanEnabled",
+        "listenAddr",
+        "port",
+        "tokenPath",
+        "webrootAvailable",
+        "activePtySessions",
+        "activeJobs",
+        "lanUrls"
+      ],
+      "description": "Runtime status of the embedded HTTP/WebSocket PC Console server."
+    },
+    "WebConfigureParams": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "lanEnabled": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "port": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 65535
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "description": "Parameters for web.configure."
+    },
+    "WebRotateTokenResult": {
+      "type": "object",
+      "properties": {
+        "token": {
+          "type": "string"
+        },
+        "tokenPath": {
+          "type": "string"
+        },
+        "sessionsRevoked": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "token",
+        "tokenPath",
+        "sessionsRevoked"
+      ],
+      "description": "Result returned by web.rotateToken."
+    },
+    "DistroCatalogParams": {
+      "type": "object",
+      "properties": {
+        "mirror": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DistroMirror"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "customUrl": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "refresh": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "refresh"
+      ],
+      "description": "Parameters for distro.catalog."
+    },
+    "DistroEntry": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "os": {
+          "type": "string"
+        },
+        "release": {
+          "type": "string"
+        },
+        "releaseTitle": {
+          "type": "string"
+        },
+        "arch": {
+          "type": "string"
+        },
+        "variant": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        },
+        "sizeBytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "sha256": {
+          "type": "string"
+        },
+        "downloadUrl": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "os",
+        "release",
+        "releaseTitle",
+        "arch",
+        "variant",
+        "version",
+        "sizeBytes",
+        "sha256",
+        "downloadUrl"
+      ],
+      "description": "Single ARM64 rootfs image entry from a Simplestreams catalog."
+    },
+    "DistroCatalogResult": {
+      "type": "object",
+      "properties": {
+        "mirror": {
+          "$ref": "#/$defs/DistroMirror"
+        },
+        "baseUrl": {
+          "type": "string"
+        },
+        "cached": {
+          "type": "boolean"
+        },
+        "fetchedAtMs": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "entries": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/DistroEntry"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "mirror",
+        "baseUrl",
+        "cached",
+        "fetchedAtMs",
+        "entries"
+      ],
+      "description": "Result returned by distro.catalog."
+    },
+    "ContainerCreateParams": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "distroId": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "mirror": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DistroMirror"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "customUrl": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "sourceUrl": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "expectedSha256": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "sizeMb": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "hostname": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "sshPort": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 65535
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "sshPublicKeys": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "autoStart": {
+          "type": "boolean"
+        },
+        "hostBridge": {
+          "type": "boolean"
+        },
+        "noatime": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "sizeMb",
+        "sshPublicKeys",
+        "autoStart",
+        "hostBridge",
+        "noatime"
+      ],
+      "description": "Parameters for container.create."
+    },
+    "ContainerJobStartResult": {
+      "type": "object",
+      "properties": {
+        "jobId": {
+          "type": "string"
+        },
+        "container": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/ContainerJobKind"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "jobId",
+        "container",
+        "kind"
+      ],
+      "description": "Result returned immediately when an async container provisioning job is accepted."
+    },
+    "ContainerJobProgressPayload": {
+      "type": "object",
+      "properties": {
+        "jobId": {
+          "type": "string"
+        },
+        "container": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/ContainerJobKind"
+        },
+        "state": {
+          "$ref": "#/$defs/ContainerJobState"
+        },
+        "stage": {
+          "type": "string"
+        },
+        "bytesDone": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "bytesTotal": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "percent": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 255
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "message": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "error": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "startedAtMs": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "updatedAtMs": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "jobId",
+        "container",
+        "kind",
+        "state",
+        "stage",
+        "bytesDone",
+        "startedAtMs",
+        "updatedAtMs"
+      ],
+      "description": "Progress snapshot emitted with container.job.progress and returned by container.jobStatus."
+    },
+    "ContainerJobSelectorParams": {
+      "type": "object",
+      "properties": {
+        "jobId": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "jobId"
+      ],
+      "description": "Parameters for container.jobStatus and container.jobCancel."
+    },
+    "ContainerJobCancelResult": {
+      "type": "object",
+      "properties": {
+        "jobId": {
+          "type": "string"
+        },
+        "cancelled": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "jobId",
+        "cancelled"
+      ],
+      "description": "Result returned by container.jobCancel."
+    },
+    "ContainerDeleteParams": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "deleteImage": {
+          "type": "boolean"
+        },
+        "force": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "deleteImage",
+        "force"
+      ],
+      "description": "Parameters for container.delete."
+    },
+    "ContainerDeleteResult": {
+      "type": "object",
+      "properties": {
+        "container": {
+          "type": "string"
+        },
+        "imageDeleted": {
+          "type": "boolean"
+        },
+        "cleanup": {
+          "$ref": "#/$defs/StorageCleanupReport"
+        },
+        "newDefaultContainer": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "container",
+        "imageDeleted",
+        "cleanup"
+      ],
+      "description": "Result returned by container.delete."
+    },
+    "ContainerResizeParams": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "sizeMb": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "sizeMb"
+      ],
+      "description": "Parameters for container.resize."
+    },
+    "ContainerResizeResult": {
+      "type": "object",
+      "properties": {
+        "container": {
+          "type": "string"
+        },
+        "previousBytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "newBytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "restarted": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "container",
+        "previousBytes",
+        "newBytes",
+        "restarted"
+      ],
+      "description": "Result returned by container.resize."
+    },
+    "ContainerCloneParams": {
+      "type": "object",
+      "properties": {
+        "sourceId": {
+          "type": "string"
+        },
+        "targetId": {
+          "type": "string"
+        },
+        "sshPort": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 65535
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "hostname": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "sourceId",
+        "targetId"
+      ],
+      "description": "Parameters for container.clone."
+    },
+    "ContainerCloneResult": {
+      "type": "object",
+      "properties": {
+        "sourceId": {
+          "type": "string"
+        },
+        "targetId": {
+          "type": "string"
+        },
+        "imagePath": {
+          "type": "string"
+        },
+        "copiedBytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "virtualBytes": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "sourceId",
+        "targetId",
+        "imagePath",
+        "copiedBytes",
+        "virtualBytes"
+      ],
+      "description": "Result returned by container.clone."
+    },
+    "SshKeyRemoveParams": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "fingerprintOrKey": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "fingerprintOrKey"
+      ],
+      "description": "Parameters for container.sshKeyRemove."
+    },
+    "SshKeyRemoveResult": {
+      "type": "object",
+      "properties": {
+        "container": {
+          "type": "string"
+        },
+        "removed": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "keys": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "container",
+        "removed",
+        "keys"
+      ],
+      "description": "Result returned by container.sshKeyRemove."
+    },
+    "ContainerServiceRuntime": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/ServiceStatus"
+        },
+        "pid": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 4294967295
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "uptimeMs": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "restartCount": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "lastError": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "autoStart": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "name",
+        "status",
+        "uptimeMs",
+        "restartCount",
+        "autoStart"
+      ],
+      "description": "Live runtime status for a supervised background service inside a container."
+    },
+    "ServiceUpsertParams": {
+      "type": "object",
+      "properties": {
+        "container": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "spec": {
+          "$ref": "#/$defs/ContainerServiceSpec"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "spec"
+      ],
+      "description": "Parameters for service.upsert."
+    },
+    "ServiceSelectorParams": {
+      "type": "object",
+      "properties": {
+        "container": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "serviceId": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "serviceId"
+      ],
+      "description": "Parameters selecting one supervised service inside a container."
+    },
+    "ServiceLogsParams": {
+      "type": "object",
+      "properties": {
+        "container": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "serviceId": {
+          "type": "string"
+        },
+        "limit": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "serviceId"
+      ],
+      "description": "Parameters for service.logs."
+    },
+    "ServiceLogsResult": {
+      "type": "object",
+      "properties": {
+        "container": {
+          "type": "string"
+        },
+        "serviceId": {
+          "type": "string"
+        },
+        "lines": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "container",
+        "serviceId",
+        "lines"
+      ],
+      "description": "Result returned by service.logs."
+    },
+    "ServiceDeleteResult": {
+      "type": "object",
+      "properties": {
+        "container": {
+          "type": "string"
+        },
+        "serviceId": {
+          "type": "string"
+        },
+        "deleted": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "container",
+        "serviceId",
+        "deleted"
+      ],
+      "description": "Result returned by service.delete."
+    },
+    "ServiceStateChangedPayload": {
+      "type": "object",
+      "properties": {
+        "container": {
+          "type": "string"
+        },
+        "serviceId": {
+          "type": "string"
+        },
+        "prevStatus": {
+          "$ref": "#/$defs/ServiceStatus"
+        },
+        "status": {
+          "$ref": "#/$defs/ServiceStatus"
+        },
+        "pid": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 4294967295
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "restartCount": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "lastError": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "container",
+        "serviceId",
+        "prevStatus",
+        "status",
+        "restartCount"
+      ],
+      "description": "Event payload emitted on service.stateChanged transitions."
     }
   }
 }

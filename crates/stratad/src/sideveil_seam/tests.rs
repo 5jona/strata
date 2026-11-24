@@ -12,11 +12,16 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixListener;
 use tokio::sync::watch;
 
+use crate::catalog::CatalogClient;
 use crate::config_store::ConfigStore;
 use crate::dispatcher::{Dispatcher, RpcCaller};
+use crate::jobs::ProvisionJobManager;
 use crate::manager::ContainerManager;
+use crate::services::ServiceSupervisor;
 use crate::sideveil_seam::{EventHub, PluginEventSink, SideVeilBridgeSeam};
 use crate::task_runner::TaskRunner;
+use crate::wakelock::WakeLockManager;
+use crate::web::WebServerController;
 
 struct TestStack {
     config_store: Arc<ConfigStore>,
@@ -43,12 +48,40 @@ fn build_test_stack(base: &std::path::Path, cfg_path: PathBuf) -> TestStack {
         Arc::clone(&event_hub),
         PathBuf::from("/bin/true"),
     ));
+    let wakelock = Arc::new(WakeLockManager::new());
+    let catalog = Arc::new(CatalogClient::new().expect("catalog client"));
+    let jobs = Arc::new(ProvisionJobManager::new(
+        Arc::clone(&config_store),
+        Arc::clone(&manager),
+        Arc::clone(&catalog),
+        Arc::clone(&event_hub),
+        Arc::clone(&wakelock),
+    ));
+    let services = Arc::new(ServiceSupervisor::new(
+        Arc::clone(&config_store),
+        Arc::clone(&manager),
+        Arc::clone(&event_hub),
+        PathBuf::from("/bin/true"),
+    ));
+    let web = Arc::new(
+        WebServerController::new(
+            base.join("web.token"),
+            Arc::clone(&config_store),
+            Arc::clone(&jobs),
+            Arc::clone(&wakelock),
+        )
+        .expect("web controller"),
+    );
     let dispatcher = Arc::new(Dispatcher::new(
         Instant::now(),
         Arc::clone(&config_store),
         Arc::clone(&manager),
         Arc::clone(&task_runner),
         Arc::clone(&sideveil),
+        web,
+        catalog,
+        jobs,
+        services,
     ));
     TestStack {
         config_store,

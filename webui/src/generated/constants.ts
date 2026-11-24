@@ -22,6 +22,16 @@ export const STRATA_PROTOCOL = {
   DEFAULT_LOG_MAX_BYTES: 262144,
   /** Default character device exposed to primary container. */
   DEFAULT_EXTRA_CHAR_DEV: 'uinput',
+  /** Default embedded Web/PC console HTTP+WS port. */
+  DEFAULT_WEB_PORT: 7681,
+  /** Default loopback-only Web console bind address. */
+  DEFAULT_WEB_LISTEN_LOCAL: '127.0.0.1',
+  /** LAN-mode Web console bind address (restricted to RFC1918 peers). */
+  DEFAULT_WEB_LISTEN_LAN: '0.0.0.0',
+  /** Primary China-accessible Simplestreams ARM64 rootfs mirror. */
+  DEFAULT_DISTRO_MIRROR_TUNA: 'https://mirrors.tuna.tsinghua.edu.cn/lxc-images',
+  /** Official LinuxContainers Simplestreams fallback mirror. */
+  DEFAULT_DISTRO_MIRROR_OFFICIAL: 'https://images.linuxcontainers.org',
 } as const;
 
 /** Canonical Android host and in-container runtime paths. */
@@ -31,6 +41,8 @@ export const STRATA_PATHS = {
   DEFAULT_RUN_DIR: '/data/adb/strata/run',
   DEFAULT_SOCKET_PATH: '/data/adb/strata/run/strata.sock',
   DEFAULT_LOGS_DIR: '/data/adb/strata/run/logs',
+  DEFAULT_DAEMON_LOG_PATH: '/data/adb/strata/run/logs/stratad.log',
+  DEFAULT_WEB_TOKEN_PATH: '/data/adb/strata/run/web.token',
   DEFAULT_CONTAINERS_ROOT: '/data/local/strata/containers',
   CONTAINER_RUN_DIR: '/run/strata',
   CONTAINER_HOST_ENV_PATH: '/run/strata/host.env',
@@ -54,6 +66,7 @@ export const STRATA_ERROR_CODES = {
   METHOD_NOT_FOUND: -32601,
   INVALID_PARAMS: -32602,
   INTERNAL_ERROR: -32000,
+  UNAUTHORIZED: -32001,
   PERMISSION_DENIED: -32003,
   IMAGE_BUSY: -32020,
   CONTAINER_NOT_FOUND: -32021,
@@ -61,4 +74,7 @@ export const STRATA_ERROR_CODES = {
   CONTAINER_NOT_RUNNING: -32023,
   INVALID_STATE: -32024,
   TASK_NOT_FOUND: -32025,
+  CONTAINER_ALREADY_EXISTS: -32026,
+  JOB_NOT_FOUND: -32027,
+  SERVICE_NOT_FOUND: -32028,
 } as const;

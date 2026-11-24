@@ -1,5 +1,7 @@
 //! Authoritative configuration store with atomic persistence and zero-polling `inotify` watching.
 
+mod mutations;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -14,13 +16,14 @@ use tokio::sync::{Mutex, RwLock, watch};
 use crate::error::{DaemonError, DaemonResult};
 use crate::manager::ContainerManager;
 use crate::sideveil_seam::SideVeilBridgeSeam;
+use crate::web::WebServerController;
 
 /// Shared authoritative configuration holder backed by `/data/adb/strata/config.json`.
 #[derive(Debug)]
 pub(crate) struct ConfigStore {
-    path: PathBuf,
-    write_lock: Mutex<()>,
-    inner: RwLock<StrataConfig>,
+    pub(super) path: PathBuf,
+    pub(super) write_lock: Mutex<()>,
+    pub(super) inner: RwLock<StrataConfig>,
 }
 
 impl ConfigStore {
@@ -122,6 +125,9 @@ impl ConfigStore {
         if let Some(v) = params.host_runtime {
             entry.host_runtime = v;
         }
+        if let Some(v) = params.noatime {
+            entry.noatime = v;
+        }
         if let Some(v) = params.extra_char_devs {
             entry.extra_char_devs = v;
         }
@@ -153,6 +159,7 @@ impl ConfigStore {
         self: &Arc<Self>,
         manager: Arc<ContainerManager>,
         sideveil: Arc<SideVeilBridgeSeam>,
+        web: Arc<WebServerController>,
         mut shutdown: watch::Receiver<bool>,
     ) -> Option<tokio::task::JoinHandle<()>> {
         let parent_dir = self.path.parent()?.to_path_buf();
@@ -188,13 +195,14 @@ impl ConfigStore {
                 if matched && let Ok((_, true)) = store.reload_from_disk_inner().await {
                     manager.sync_running_containers().await;
                     sideveil.notify_config_changed();
+                    web.notify_config_changed();
                 }
             }
         }))
     }
 }
 
-fn persist_config(path: &Path, cfg: &StrataConfig) -> Result<(), String> {
+pub(super) fn persist_config(path: &Path, cfg: &StrataConfig) -> Result<(), String> {
     let mut rendered =
         serde_json::to_string_pretty(cfg).map_err(|e| format!("serialize config: {e}"))?;
     rendered.push('\n');

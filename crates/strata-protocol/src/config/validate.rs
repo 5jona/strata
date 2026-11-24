@@ -4,8 +4,10 @@ use std::collections::BTreeSet;
 
 use thiserror::Error;
 
-use crate::config::{ContainerConfig, StrataConfig};
-use crate::constants::CONFIG_SCHEMA_VERSION;
+use crate::config::{BindMount, ContainerConfig, StrataConfig};
+use crate::constants::{CONFIG_SCHEMA_VERSION, L5_DIAG_MOUNT_PATHS};
+
+const MAX_SERVICE_SPEC_BYTES: usize = 32_768;
 
 /// Errors returned when validating a `StrataConfig`.
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -30,6 +32,14 @@ pub enum ConfigValidationError {
     InvalidOomScoreAdj { container: String, value: i32 },
     #[error("container '{container}' has invalid ssh port {port}")]
     InvalidSshPort { container: String, port: u16 },
+    #[error("web console has invalid port {0}")]
+    InvalidWebPort(u16),
+    #[error("container '{container}' has invalid service '{service_id}': {reason}")]
+    InvalidService {
+        container: String,
+        service_id: String,
+        reason: &'static str,
+    },
     #[error("container '{container}' has disallowed character device '{dev}'")]
     InvalidCharDev { container: String, dev: String },
     #[error("duplicate imagePath '{0}' across multiple containers")]
@@ -67,6 +77,9 @@ pub fn validate_container_id(id: &str) -> Result<(), ConfigValidationError> {
 pub fn validate_strata_config(cfg: &StrataConfig) -> Result<(), ConfigValidationError> {
     if cfg.version != CONFIG_SCHEMA_VERSION {
         return Err(ConfigValidationError::InvalidSchemaVersion(cfg.version));
+    }
+    if cfg.web.enabled && cfg.web.port == 0 {
+        return Err(ConfigValidationError::InvalidWebPort(cfg.web.port));
     }
     validate_container_id(&cfg.default_container)?;
     if !cfg.containers.contains_key(&cfg.default_container) {
@@ -140,14 +153,14 @@ fn validate_container_config(id: &str, cfg: &ContainerConfig) -> Result<(), Conf
     for bm in &cfg.extra_mounts {
         validate_abs_path(id, &bm.host_path)?;
         validate_abs_path(id, &bm.container_path)?;
-        if is_disallowed_mount_host_path(&bm.host_path) {
+        if is_disallowed_mount_host_path(bm) {
             return Err(ConfigValidationError::InvalidPath {
                 container: id.to_owned(),
                 path: bm.host_path.clone(),
-                reason: "must not bind-mount /dev/block paths",
+                reason: "disallowed sensitive host mount path (/dev, /proc, /sys, /data/adb)",
             });
         }
-        if bm.container_path == "/" {
+        if normalize_abs_slashes(&bm.container_path) == "/" {
             return Err(ConfigValidationError::InvalidPath {
                 container: id.to_owned(),
                 path: bm.container_path.clone(),
@@ -155,30 +168,127 @@ fn validate_container_config(id: &str, cfg: &ContainerConfig) -> Result<(), Conf
             });
         }
     }
+    let mut seen_services = BTreeSet::new();
+    for svc in &cfg.services {
+        validate_service_spec(id, svc)?;
+        if !seen_services.insert(svc.id.as_str()) {
+            return Err(ConfigValidationError::InvalidService {
+                container: id.to_owned(),
+                service_id: svc.id.clone(),
+                reason: "duplicate service id",
+            });
+        }
+    }
+    Ok(())
+}
+
+/// Validates a single managed container background service specification.
+pub fn validate_service_spec(
+    container: &str,
+    svc: &crate::config::ContainerServiceSpec,
+) -> Result<(), ConfigValidationError> {
+    if validate_container_id(&svc.id).is_err() {
+        return Err(ConfigValidationError::InvalidService {
+            container: container.to_owned(),
+            service_id: svc.id.clone(),
+            reason: "service id must be 2..=32 ASCII [a-z0-9-] chars starting with letter",
+        });
+    }
+    if svc.name.trim().is_empty() || svc.name.len() > 64 {
+        return Err(ConfigValidationError::InvalidService {
+            container: container.to_owned(),
+            service_id: svc.id.clone(),
+            reason: "service name must be 1..=64 characters",
+        });
+    }
+    if svc.command.is_empty() || svc.command[0].trim().is_empty() {
+        return Err(ConfigValidationError::InvalidService {
+            container: container.to_owned(),
+            service_id: svc.id.clone(),
+            reason: "service command must not be empty",
+        });
+    }
+    for arg in &svc.command {
+        if arg.contains('\0') {
+            return Err(ConfigValidationError::InvalidService {
+                container: container.to_owned(),
+                service_id: svc.id.clone(),
+                reason: "service command must not contain NUL bytes",
+            });
+        }
+    }
+    if let Some(wd) = &svc.workdir {
+        validate_abs_path(container, wd)?;
+    }
+    for (k, v) in &svc.env {
+        if k.is_empty() || k.contains('=') || k.contains('\0') || v.contains('\0') {
+            return Err(ConfigValidationError::InvalidService {
+                container: container.to_owned(),
+                service_id: svc.id.clone(),
+                reason: "invalid environment variable key or value",
+            });
+        }
+    }
+    let spec_bytes: usize = svc.command.iter().map(String::len).sum::<usize>()
+        + svc.workdir.as_ref().map_or(0, String::len)
+        + svc
+            .env
+            .iter()
+            .map(|(k, v)| k.len() + v.len())
+            .sum::<usize>();
+    if spec_bytes > MAX_SERVICE_SPEC_BYTES {
+        return Err(ConfigValidationError::InvalidService {
+            container: container.to_owned(),
+            service_id: svc.id.clone(),
+            reason: "service command and env exceed 32 KiB limit",
+        });
+    }
     Ok(())
 }
 
 fn validate_abs_path(container: &str, path: &str) -> Result<(), ConfigValidationError> {
-    if !path.starts_with('/') || path.len() < 2 {
+    if !path.starts_with('/') || path.len() < 2 || normalize_abs_slashes(path) == "/" {
         return Err(ConfigValidationError::InvalidPath {
             container: container.to_owned(),
             path: path.to_owned(),
             reason: "must be a non-root absolute path",
         });
     }
-    if path.contains('\0') || path.split('/').any(|seg| seg == "..") {
+    if path.contains('\0') || path.split('/').any(|seg| seg == ".." || seg == ".") {
         return Err(ConfigValidationError::InvalidPath {
             container: container.to_owned(),
             path: path.to_owned(),
-            reason: "must not contain NUL bytes or '..' traversal",
+            reason: "must not contain NUL bytes or '.'/'..' traversal",
         });
     }
     Ok(())
 }
 
-fn is_disallowed_mount_host_path(path: &str) -> bool {
-    let trimmed = path.trim_end_matches('/');
-    trimmed == "/dev/block" || trimmed.starts_with("/dev/block/")
+fn normalize_abs_slashes(path: &str) -> String {
+    let segs: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
+    if segs.is_empty() {
+        "/".to_owned()
+    } else {
+        format!("/{}", segs.join("/"))
+    }
+}
+
+fn is_disallowed_mount_host_path(bm: &BindMount) -> bool {
+    let norm = normalize_abs_slashes(&bm.host_path);
+    if bm.read_only && L5_DIAG_MOUNT_PATHS.contains(&norm.as_str()) {
+        return false;
+    }
+    matches_prefix(&norm, "/dev")
+        || matches_prefix(&norm, "/proc")
+        || matches_prefix(&norm, "/sys")
+        || matches_prefix(&norm, "/data/adb")
+}
+
+fn matches_prefix(norm_path: &str, prefix: &str) -> bool {
+    norm_path == prefix
+        || norm_path
+            .strip_prefix(prefix)
+            .is_some_and(|rest| rest.starts_with('/'))
 }
 
 fn is_valid_hostname(name: &str) -> bool {
@@ -264,8 +374,13 @@ mod tests {
         assert!(cfg.validate().is_ok());
 
         for (host, dst) in [
+            ("/dev", "/mnt/d"),
             ("/dev/block", "/mnt/b"),
             ("/dev/block/sda", "/mnt/b"),
+            ("/proc", "/mnt/p"),
+            ("/sys", "/mnt/s"),
+            ("/data/adb", "/mnt/adb"),
+            ("/data/adb/strata/run", "/mnt/run"),
             ("/data/local/tmp", "/"),
             ("/data/local/tmp", "/mnt/../escape"),
         ] {

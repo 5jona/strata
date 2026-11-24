@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2026-11-25
+
+### Added
+
+- **Cross-Platform Desktop Manager (`desktop/`) & Standalone KernelSU WebUI (`webroot/`)**:
+  - Tauri v2 desktop companion (`Strata Desktop`) with USB ADB forwarding, LAN pairing, interactive xterm.js PTY shell, and host-side `strata-desktop-core` probe/discovery crate.
+  - Standalone KernelSU WebUI (`webroot/`) and authenticated `stratad` HTTP/WebSocket control plane with CORS middleware and `http://tauri.localhost` origin allowlisting.
+- **Version Parity Gate**: Added cross-stack version and `versionCode` (`MAJOR * 10000 + MINOR * 100 + PATCH`) alignment assertions in `webui/test/contracts.test.mjs`.
+
+### Fixed
+
+- Fixed `HttpWsTransport` detached `window.fetch` invocation (`Illegal invocation`) and numeric JSON-RPC `id` serialization (`HTTP 422`) in Strata Desktop, plus CSP3 `connect-src` permissions for WebView2.
+- Fixed PTY WebSocket reconnect loop (`HTTP 429` / `1006`) by stabilizing `TerminalPane` callbacks, deduplicating session binding in `App.tsx`, and evicting the oldest detached PTY session in `stratad`.
+- Reduced `stratad` SideVeil visibility log noise and rebuilt WebUI bundles with `@gojona/ui` tab-swipe and `@gojona/bridge` `WebMessageListener` fixes.
+
 ## [0.1.0] - 2026-11-24
 
 ### Added
@@ -26,4 +41,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - GitHub Actions CI workflow (`.github/workflows/ci.yml`) covering contract/WebUI, Rust, and Python quality gates, plus automated tagged release builds (`.github/workflows/release.yml`) publishing `strata-<tag>.zip` and `SHA256SUMS.txt`.
   - Licensed under GNU General Public License v3.0 only (`GPL-3.0-only`).
 
+[0.2.0]: https://github.com/5jona/strata/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/5jona/strata/releases/tag/v0.1.0

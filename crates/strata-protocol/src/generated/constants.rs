@@ -23,6 +23,16 @@ pub mod protocol {
     pub const DEFAULT_LOG_MAX_BYTES: u64 = 262144;
     /// Default character device exposed to primary container.
     pub const DEFAULT_EXTRA_CHAR_DEV: &str = "uinput";
+    /// Default embedded Web/PC console HTTP+WS port.
+    pub const DEFAULT_WEB_PORT: u16 = 7681;
+    /// Default loopback-only Web console bind address.
+    pub const DEFAULT_WEB_LISTEN_LOCAL: &str = "127.0.0.1";
+    /// LAN-mode Web console bind address (restricted to RFC1918 peers).
+    pub const DEFAULT_WEB_LISTEN_LAN: &str = "0.0.0.0";
+    /// Primary China-accessible Simplestreams ARM64 rootfs mirror.
+    pub const DEFAULT_DISTRO_MIRROR_TUNA: &str = "https://mirrors.tuna.tsinghua.edu.cn/lxc-images";
+    /// Official LinuxContainers Simplestreams fallback mirror.
+    pub const DEFAULT_DISTRO_MIRROR_OFFICIAL: &str = "https://images.linuxcontainers.org";
 }
 
 /// Canonical Android host and in-container runtime paths.
@@ -32,6 +42,8 @@ pub mod paths {
     pub const DEFAULT_RUN_DIR: &str = "/data/adb/strata/run";
     pub const DEFAULT_SOCKET_PATH: &str = "/data/adb/strata/run/strata.sock";
     pub const DEFAULT_LOGS_DIR: &str = "/data/adb/strata/run/logs";
+    pub const DEFAULT_DAEMON_LOG_PATH: &str = "/data/adb/strata/run/logs/stratad.log";
+    pub const DEFAULT_WEB_TOKEN_PATH: &str = "/data/adb/strata/run/web.token";
     pub const DEFAULT_CONTAINERS_ROOT: &str = "/data/local/strata/containers";
     pub const CONTAINER_RUN_DIR: &str = "/run/strata";
     pub const CONTAINER_HOST_ENV_PATH: &str = "/run/strata/host.env";
@@ -55,6 +67,7 @@ pub mod error_codes {
     pub const METHOD_NOT_FOUND: i32 = -32601;
     pub const INVALID_PARAMS: i32 = -32602;
     pub const INTERNAL_ERROR: i32 = -32000;
+    pub const UNAUTHORIZED: i32 = -32001;
     pub const PERMISSION_DENIED: i32 = -32003;
     pub const IMAGE_BUSY: i32 = -32020;
     pub const CONTAINER_NOT_FOUND: i32 = -32021;
@@ -62,6 +75,9 @@ pub mod error_codes {
     pub const CONTAINER_NOT_RUNNING: i32 = -32023;
     pub const INVALID_STATE: i32 = -32024;
     pub const TASK_NOT_FOUND: i32 = -32025;
+    pub const CONTAINER_ALREADY_EXISTS: i32 = -32026;
+    pub const JOB_NOT_FOUND: i32 = -32027;
+    pub const SERVICE_NOT_FOUND: i32 = -32028;
 }
 
 /// RPC method constants.
@@ -69,12 +85,24 @@ pub mod methods {
     pub const DAEMON_PING: &str = "daemon.ping";
     pub const DAEMON_STATUS: &str = "daemon.status";
     pub const DAEMON_HEALTH: &str = "daemon.health";
+    pub const DAEMON_CAPABILITIES: &str = "daemon.capabilities";
+    pub const DAEMON_LOGS: &str = "daemon.logs";
     pub const DAEMON_RELOAD_CONFIG: &str = "daemon.reloadConfig";
+    pub const WEB_STATUS: &str = "web.status";
+    pub const WEB_CONFIGURE: &str = "web.configure";
+    pub const WEB_ROTATE_TOKEN: &str = "web.rotateToken";
+    pub const DISTRO_CATALOG: &str = "distro.catalog";
     pub const CONTAINER_LIST: &str = "container.list";
     pub const CONTAINER_STATUS: &str = "container.status";
     pub const CONTAINER_START: &str = "container.start";
     pub const CONTAINER_STOP: &str = "container.stop";
     pub const CONTAINER_RESTART: &str = "container.restart";
+    pub const CONTAINER_CREATE: &str = "container.create";
+    pub const CONTAINER_DELETE: &str = "container.delete";
+    pub const CONTAINER_RESIZE: &str = "container.resize";
+    pub const CONTAINER_CLONE: &str = "container.clone";
+    pub const CONTAINER_JOB_STATUS: &str = "container.jobStatus";
+    pub const CONTAINER_JOB_CANCEL: &str = "container.jobCancel";
     pub const CONTAINER_LOGS: &str = "container.logs";
     pub const CONTAINER_SYNC_DNS: &str = "container.syncDns";
     pub const CONTAINER_COMPACT: &str = "container.compact";
@@ -85,12 +113,20 @@ pub mod methods {
     pub const CONTAINER_CONFIG_PATCH: &str = "container.configPatch";
     pub const CONTAINER_SSH_KEY_LIST: &str = "container.sshKeyList";
     pub const CONTAINER_SSH_KEY_ADD: &str = "container.sshKeyAdd";
+    pub const CONTAINER_SSH_KEY_REMOVE: &str = "container.sshKeyRemove";
     pub const SESSION_ACQUIRE: &str = "session.acquire";
     pub const SESSION_RELEASE: &str = "session.release";
     pub const TASK_RUN: &str = "task.run";
     pub const TASK_CANCEL: &str = "task.cancel";
     pub const TASK_LIST: &str = "task.list";
     pub const TASK_LOGS: &str = "task.logs";
+    pub const SERVICE_LIST: &str = "service.list";
+    pub const SERVICE_UPSERT: &str = "service.upsert";
+    pub const SERVICE_DELETE: &str = "service.delete";
+    pub const SERVICE_START: &str = "service.start";
+    pub const SERVICE_STOP: &str = "service.stop";
+    pub const SERVICE_RESTART: &str = "service.restart";
+    pub const SERVICE_LOGS: &str = "service.logs";
     pub const HUD_STATE: &str = "hud.state";
     pub const HUD_SET: &str = "hud.set";
     pub const EVENTS_SUBSCRIBE: &str = "events.subscribe";
@@ -100,6 +136,8 @@ pub mod methods {
 pub mod events {
     pub const CONTAINER_STATE_CHANGED: &str = "container.stateChanged";
     pub const CONTAINER_MAINTENANCE_DONE: &str = "container.maintenanceDone";
+    pub const CONTAINER_JOB_PROGRESS: &str = "container.job.progress";
+    pub const SERVICE_STATE_CHANGED: &str = "service.stateChanged";
     pub const TASK_OUTPUT: &str = "task.output";
     pub const TASK_EXIT: &str = "task.exit";
 }

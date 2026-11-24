@@ -1,31 +1,37 @@
 //! Synchronization of container DNS, Android `host.env`, bridge scripts, SSH keys, and log tails.
 
 mod debug_tools;
+mod ssh_keys;
 
 use std::fs;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
 
 use strata_protocol::ContainerConfig;
-use strata_sys::{net, procfs};
+use strata_sys::{net, procfs, rootfs_io::RootDir};
 
 use crate::error::{RuntimeError, RuntimeResult};
-use crate::fs_atomic::{ensure_dir_mode, sync_bytes_if_changed, write_atomic};
 use debug_tools::sync_strata_debug_package;
+pub use ssh_keys::{add_ssh_keys, list_ssh_keys, remove_ssh_keys};
 
 const MAX_LOG_TAIL_READ_BYTES: u64 = 256 * 1024;
 
 /// Synchronizes `/etc/resolv.conf`, `/run/strata/host.env`, and POSIX/Python host bridge scripts
-/// inside a mounted container rootfs.
+/// inside a mounted container rootfs without following container symlinks onto the host.
 pub fn sync_container_runtime_files(
     mount_dir: &Path,
     cfg: &ContainerConfig,
     module_dir: Option<&Path>,
 ) -> RuntimeResult<()> {
-    ensure_dir_mode(&mount_dir.join("etc"), 0o755)?;
-    ensure_dir_mode(&mount_dir.join("run/strata"), 0o755)?;
-    ensure_dir_mode(&mount_dir.join("run/sshd"), 0o755)?;
-    ensure_dir_mode(&mount_dir.join("usr/local/bin"), 0o755)?;
+    let root = RootDir::open(mount_dir).map_err(RuntimeError::from_sys)?;
+    root.ensure_dir(Path::new("etc"), 0o755)
+        .map_err(RuntimeError::from_sys)?;
+    root.ensure_dir(Path::new("run/strata"), 0o755)
+        .map_err(RuntimeError::from_sys)?;
+    root.ensure_dir(Path::new("run/sshd"), 0o755)
+        .map_err(RuntimeError::from_sys)?;
+    root.ensure_dir(Path::new("usr/local/bin"), 0o755)
+        .map_err(RuntimeError::from_sys)?;
 
     let android_dns = if cfg.sync_android_dns {
         net::read_android_dns_servers()
@@ -33,26 +39,22 @@ pub fn sync_container_runtime_files(
         Vec::new()
     };
     let resolv = render_resolv_conf(&android_dns, &cfg.dns_servers);
-    sync_bytes_if_changed(resolv.as_bytes(), &mount_dir.join("etc/resolv.conf"), 0o644)?;
+    root.sync_bytes_if_changed(resolv.as_bytes(), Path::new("etc/resolv.conf"), 0o644)
+        .map_err(RuntimeError::from_sys)?;
 
     let classpath = procfs::read_android_classpath_env();
     let host_env = render_host_env(&classpath);
-    sync_bytes_if_changed(
-        host_env.as_bytes(),
-        &mount_dir.join("run/strata/host.env"),
-        0o644,
-    )?;
+    root.sync_bytes_if_changed(host_env.as_bytes(), Path::new("run/strata/host.env"), 0o644)
+        .map_err(RuntimeError::from_sys)?;
 
     if let Some(mod_root) = module_dir {
         let host_exec_src = mod_root.join("container/host-exec");
         if let Ok(bytes) = fs::read(&host_exec_src) {
-            sync_bytes_if_changed(&bytes, &mount_dir.join("usr/local/bin/host-exec"), 0o755)?;
+            root.sync_bytes_if_changed(&bytes, Path::new("usr/local/bin/host-exec"), 0o755)
+                .map_err(RuntimeError::from_sys)?;
         }
-        let legacy_adb = mount_dir.join("usr/local/bin/adb");
-        if legacy_adb.exists() {
-            let _ = fs::remove_file(&legacy_adb);
-        }
-        sync_strata_debug_package(mod_root, mount_dir)?;
+        let _ = root.remove_file(Path::new("usr/local/bin/adb"));
+        sync_strata_debug_package(mod_root, mount_dir, &root)?;
     }
 
     Ok(())
@@ -60,14 +62,17 @@ pub fn sync_container_runtime_files(
 
 /// Synchronizes only `/etc/resolv.conf` inside a mounted container rootfs when DNS changes.
 pub fn sync_container_dns(mount_dir: &Path, cfg: &ContainerConfig) -> RuntimeResult<bool> {
-    ensure_dir_mode(&mount_dir.join("etc"), 0o755)?;
+    let root = RootDir::open(mount_dir).map_err(RuntimeError::from_sys)?;
+    root.ensure_dir(Path::new("etc"), 0o755)
+        .map_err(RuntimeError::from_sys)?;
     let android_dns = if cfg.sync_android_dns {
         net::read_android_dns_servers()
     } else {
         Vec::new()
     };
     let resolv = render_resolv_conf(&android_dns, &cfg.dns_servers);
-    sync_bytes_if_changed(resolv.as_bytes(), &mount_dir.join("etc/resolv.conf"), 0o644)
+    root.sync_bytes_if_changed(resolv.as_bytes(), Path::new("etc/resolv.conf"), 0o644)
+        .map_err(RuntimeError::from_sys)
 }
 
 /// Renders deduplicated `/etc/resolv.conf` prioritizing active Android DNS resolvers.
@@ -139,46 +144,6 @@ pub fn render_host_env(classpath_pairs: &[(String, String)]) -> String {
     out
 }
 
-/// Reads authorized SSH public keys from `<mount_dir>/root/.ssh/authorized_keys`.
-pub fn list_ssh_keys(mount_dir: &Path) -> RuntimeResult<Vec<String>> {
-    let path = mount_dir.join("root/.ssh/authorized_keys");
-    if !path.exists() {
-        return Ok(Vec::new());
-    }
-    let content = fs::read_to_string(&path).map_err(|source| RuntimeError::Io {
-        op: "read authorized_keys",
-        source,
-    })?;
-    Ok(parse_ssh_keys(&content))
-}
-
-/// Appends one or more newline-separated SSH public keys deduplicated and persisted atomically.
-pub fn add_ssh_keys(mount_dir: &Path, input: &str) -> RuntimeResult<(Vec<String>, usize)> {
-    let ssh_dir = mount_dir.join("root/.ssh");
-    ensure_dir_mode(&ssh_dir, 0o700)?;
-    let key_file = ssh_dir.join("authorized_keys");
-
-    let mut keys = list_ssh_keys(mount_dir)?;
-    let mut added = 0;
-    for raw_line in input.lines() {
-        let trimmed = raw_line.trim();
-        if trimmed.is_empty() || trimmed.starts_with('#') {
-            continue;
-        }
-        if !keys.iter().any(|k| k == trimmed) {
-            keys.push(trimmed.to_owned());
-            added += 1;
-        }
-    }
-
-    let mut rendered = keys.join("\n");
-    if !rendered.is_empty() {
-        rendered.push('\n');
-    }
-    write_atomic(&key_file, rendered.as_bytes(), 0o600)?;
-    Ok((keys, added))
-}
-
 /// Returns the last `max_lines` lines of `log_path` without loading unbounded memory.
 #[must_use]
 pub fn read_log_tail(log_path: &Path, max_lines: usize) -> Vec<String> {
@@ -216,15 +181,6 @@ pub fn read_log_tail(log_path: &Path, max_lines: usize) -> Vec<String> {
     let all: Vec<&str> = slice.lines().collect();
     let start = all.len().saturating_sub(max_lines);
     all[start..].iter().map(|s| (*s).to_owned()).collect()
-}
-
-fn parse_ssh_keys(content: &str) -> Vec<String> {
-    content
-        .lines()
-        .map(str::trim)
-        .filter(|l| !l.is_empty() && !l.starts_with('#'))
-        .map(ToOwned::to_owned)
-        .collect()
 }
 
 #[cfg(test)]

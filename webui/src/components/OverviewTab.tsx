@@ -21,28 +21,39 @@ import {
   PHASE_META,
   splitBytes,
 } from '../lib/strataFormat.ts';
-import type { ContainerStatusSnapshot, HudStateResult } from '../types.ts';
+import type { ContainerStatusSnapshot, HudStateResult, WebStatusResult } from '../types.ts';
+import { PcPairingCard } from './PcPairingCard.tsx';
 
 /** Props accepted by `OverviewTab`. */
 export interface OverviewTabProps {
   container: ContainerStatusSnapshot;
   hudState: HudStateResult;
+  webStatus: WebStatusResult | null;
+  pairingToken: string | null;
   busyAction: string | null;
   onLifecycle: (action: 'start' | 'stop' | 'restart') => Promise<void>;
   onMaintenance: (op: 'dns' | 'compact' | 'fsck' | 'backup') => Promise<void>;
   onUpdateHud: (patch: { enabled?: boolean; clickThrough?: boolean }) => Promise<void>;
+  onToggleWebLan: (lanEnabled: boolean) => Promise<void>;
+  onRotateWebToken: () => Promise<void>;
   onCopySsh: (sshCommand: string) => Promise<void>;
+  onCopyText: (text: string, label: string) => Promise<void>;
 }
 
-/** Primary overview tab displaying container status, lifecycle controls, SSH copy, HUD, and maintenance actions. */
+/** Primary overview tab displaying container status, lifecycle controls, SSH copy, PC pairing, HUD, and maintenance actions. */
 export function OverviewTab({
   container,
   hudState,
+  webStatus,
+  pairingToken,
   busyAction,
   onLifecycle,
   onMaintenance,
   onUpdateHud,
+  onToggleWebLan,
+  onRotateWebToken,
   onCopySsh,
+  onCopyText,
 }: OverviewTabProps) {
   const [copied, setCopied] = useState(false);
   const copyTimerRef = useRef<number | null>(null);
@@ -190,6 +201,15 @@ export function OverviewTab({
           {sshCommand}
         </div>
       </Card>
+
+      <PcPairingCard
+        webStatus={webStatus}
+        pairingToken={pairingToken}
+        busy={busy}
+        onToggleLan={onToggleWebLan}
+        onRotateToken={onRotateWebToken}
+        onCopyText={onCopyText}
+      />
 
       <Card className="flex flex-col gap-2.5 p-3">
         <SettingRow

@@ -4,6 +4,7 @@
 /bin/stratad
 /bin/strata
 /plugins/strata.manager/web/
+/webroot/
 /webui/node_modules/
 __pycache__/
 *.pyc

@@ -46,16 +46,24 @@ pub(super) fn spawn_stage2_init(
 
     let spec_fd = spec_pipe::create_spec_pipe(spec).map_err(|e| e.to_string())?;
     let (err_read, err_write) = spec_pipe::create_exec_error_pipe().map_err(|e| e.to_string())?;
+    let spec_raw = spec_fd.as_raw_fd();
+    let err_raw = err_write.as_raw_fd();
 
-    let mut child = Command::new(self_exe)
-        .arg("__init")
+    use std::os::unix::process::CommandExt;
+    let mut cmd = Command::new(self_exe);
+    cmd.arg("__init")
         .arg("--spec-fd")
-        .arg(spec_fd.as_raw_fd().to_string())
+        .arg(spec_raw.to_string())
         .arg("--err-fd")
-        .arg(err_write.as_raw_fd().to_string())
+        .arg(err_raw.to_string())
         .stdin(Stdio::null())
         .stdout(Stdio::from(log_out))
-        .stderr(Stdio::from(log_err))
+        .stderr(Stdio::from(log_err));
+    // SAFETY: Clears `FD_CLOEXEC` exclusively on this child's pipe fds using async-signal-safe `fcntl`.
+    unsafe {
+        cmd.pre_exec(move || spec_pipe::clear_cloexec_pre_exec(&[spec_raw, err_raw]));
+    }
+    let mut child = cmd
         .spawn()
         .map_err(|e| format!("spawn stage2 helper: {e}"))?;
 

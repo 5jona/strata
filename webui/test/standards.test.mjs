@@ -18,7 +18,8 @@ function walkFiles(dir, extensions, out = []) {
       entry.name === 'target' ||
       entry.name === 'out' ||
       entry.name === 'dist' ||
-      entry.name === 'assets'
+      entry.name === 'assets' ||
+      entry.name === 'generated'
     ) {
       continue;
     }
@@ -60,6 +61,9 @@ test('compiled SideVeil plugin package matches manifest.ts and Vite + Pochita bu
   const manifestPath = path.join(pluginDir, 'manifest.json');
   const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
 
+  assert.equal(manifest.schemaVersion, 1);
+  assert.equal(manifest.apiVersion, 1);
+  assert.equal('runtimeMode' in manifest, false, 'v1 manifest must not contain legacy runtimeMode');
   assert.equal(manifest.id, STRATA_MANIFEST.id);
   assert.equal(manifest.name, STRATA_MANIFEST.name);
   assert.equal(manifest.entry, STRATA_MANIFEST.entry);
@@ -73,24 +77,40 @@ test('compiled SideVeil plugin package matches manifest.ts and Vite + Pochita bu
   assert.ok(fs.existsSync(htmlPath), `Missing compiled bundle: ${htmlPath}`);
   assert.ok(fs.existsSync(iconPath), `Missing compiled icon: ${iconPath}`);
 
-  const html = fs.readFileSync(htmlPath, 'utf8');
-  assert.match(html, /<meta\s+name="color-scheme"\s+content="light dark"/i);
-  assert.ok(html.includes('pochita:color-scheme'), `${htmlPath} missing theme bootstrap script`);
-  assert.match(
-    html,
-    /<script\s+type="module"\s+crossorigin\s+src="\.\/assets\/[^"]+\.js"><\/script>/,
-    `${htmlPath} must reference compiled Vite module JS asset`,
-  );
-  assert.match(
-    html,
-    /<link\s+rel="stylesheet"\s+crossorigin\s+href="\.\/assets\/[^"]+\.css">/,
-    `${htmlPath} must reference compiled Vite CSS asset`,
-  );
+  for (const targetHtml of [htmlPath, path.join(REPO_ROOT, 'webroot/index.html')]) {
+    assert.ok(fs.existsSync(targetHtml), `Missing compiled bundle: ${targetHtml}`);
+    const html = fs.readFileSync(targetHtml, 'utf8');
+    assert.match(html, /<meta\s+name="color-scheme"\s+content="light dark"/i);
+    assert.ok(
+      html.includes('pochita:color-scheme'),
+      `${targetHtml} missing theme bootstrap script`,
+    );
+    assert.match(
+      html,
+      /<script\s+type="module"\s+crossorigin\s+src="\.\/assets\/[^"]+\.js"><\/script>/,
+      `${targetHtml} must reference compiled Vite module JS asset`,
+    );
+    assert.match(
+      html,
+      /<link\s+rel="stylesheet"\s+crossorigin\s+href="\.\/assets\/[^"]+\.css">/,
+      `${targetHtml} must reference compiled Vite CSS asset`,
+    );
 
-  const inlineScripts = [...html.matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/gi)].filter(
-    (match) => !/\bsrc=/i.test(match[0]) && match[1].trim().length > 0,
-  );
-  assert.equal(inlineScripts.length, 1, `${htmlPath} must only contain theme bootstrap script`);
+    const inlineScripts = [...html.matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/gi)].filter(
+      (match) => !/\bsrc=/i.test(match[0]) && match[1].trim().length > 0,
+    );
+    assert.equal(inlineScripts.length, 1, `${targetHtml} must only contain theme bootstrap script`);
+
+    const assetsDir = path.join(path.dirname(targetHtml), 'assets');
+    for (const assetName of fs.readdirSync(assetsDir)) {
+      const content = fs.readFileSync(path.join(assetsDir, assetName), 'utf8');
+      assert.equal(
+        /\bxterm\b/i.test(content),
+        false,
+        `${path.relative(REPO_ROOT, path.join(assetsDir, assetName))} must stay ultra-lean with zero xterm.js`,
+      );
+    }
+  }
 });
 
 test('all managed source and test files stay within the 400-line hard limit', () => {

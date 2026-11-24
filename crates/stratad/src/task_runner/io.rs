@@ -1,4 +1,4 @@
-//! Stream readers, timeout-enforcing child waiter, and timestamp helpers for `TaskRunner`.
+//! Bounded-memory stream readers, timeout-enforcing child waiter, and timestamp helpers for `TaskRunner`.
 
 use std::collections::VecDeque;
 use std::os::unix::process::ExitStatusExt;
@@ -9,7 +9,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use strata_protocol::EventEnvelope;
 use strata_protocol::rpc::{TaskExitPayload, TaskOutputPayload, TaskStream, events};
 use strata_sys::pidfd::PidFd;
-use tokio::io::{AsyncBufReadExt, AsyncRead, BufReader};
+use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncRead, BufReader};
 use tokio::process::Child;
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
@@ -18,6 +18,61 @@ use crate::sideveil_seam::{EventHub, PluginEventSink};
 use crate::task_runner::{MAX_TASK_OUTPUT_LINES, TrackedTask};
 
 const STREAM_DRAIN_TIMEOUT: Duration = Duration::from_secs(5);
+pub(crate) const MAX_STREAM_LINE_BYTES: usize = 4096;
+
+/// Reads a single `\n`-delimited line while capping RAM allocation at `max_bytes`.
+/// Any excess bytes beyond `max_bytes` up to the next `\n` (or EOF) are drained without buffering.
+pub(crate) async fn read_bounded_line<R: AsyncBufRead + Unpin>(
+    reader: &mut R,
+    max_bytes: usize,
+) -> std::io::Result<Option<String>> {
+    let mut kept = Vec::new();
+    let mut saw_any = false;
+    let mut truncated = false;
+
+    loop {
+        let avail = reader.fill_buf().await?;
+        if avail.is_empty() {
+            break;
+        }
+        saw_any = true;
+        let (consume, found_nl) = match avail.iter().position(|&b| b == b'\n') {
+            Some(pos) => (pos + 1, true),
+            None => (avail.len(), false),
+        };
+        let payload = if found_nl {
+            &avail[..consume - 1]
+        } else {
+            &avail[..consume]
+        };
+        if kept.len() < max_bytes {
+            let room = max_bytes - kept.len();
+            let take = payload.len().min(room);
+            kept.extend_from_slice(&payload[..take]);
+            if take < payload.len() {
+                truncated = true;
+            }
+        } else if !payload.is_empty() {
+            truncated = true;
+        }
+        reader.consume(consume);
+        if found_nl {
+            break;
+        }
+    }
+
+    if !saw_any {
+        return Ok(None);
+    }
+    if kept.last() == Some(&b'\r') {
+        kept.pop();
+    }
+    let mut text = String::from_utf8_lossy(&kept).into_owned();
+    if truncated {
+        text.push_str("...");
+    }
+    Ok(Some(text))
+}
 
 pub(super) fn spawn_stream_reader<R: AsyncRead + Unpin + Send + 'static>(
     reader: R,
@@ -29,8 +84,8 @@ pub(super) fn spawn_stream_reader<R: AsyncRead + Unpin + Send + 'static>(
     event_hub: Arc<EventHub>,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
-        let mut lines = BufReader::new(reader).lines();
-        while let Ok(Some(line)) = lines.next_line().await {
+        let mut buf_reader = BufReader::new(reader);
+        while let Ok(Some(line)) = read_bounded_line(&mut buf_reader, MAX_STREAM_LINE_BYTES).await {
             let next_seq = seq.fetch_add(1, Ordering::Relaxed);
             let item = TaskOutputPayload {
                 task_id: task_id.clone(),
@@ -87,13 +142,20 @@ pub(super) fn spawn_task_waiter(
             child.wait().await.ok()
         };
 
-        // Drain stdout/stderr reader tasks before emitting `task.exit` so final output lines
-        // are always buffered and delivered ahead of the exit notification.
-        if let Some(handle) = stdout_task {
-            let _ = tokio::time::timeout(STREAM_DRAIN_TIMEOUT, handle).await;
+        // Drain stdout/stderr reader tasks with timeout and abort if an orphan holds the pipe open.
+        if let Some(mut handle) = stdout_task
+            && tokio::time::timeout(STREAM_DRAIN_TIMEOUT, &mut handle)
+                .await
+                .is_err()
+        {
+            handle.abort();
         }
-        if let Some(handle) = stderr_task {
-            let _ = tokio::time::timeout(STREAM_DRAIN_TIMEOUT, handle).await;
+        if let Some(mut handle) = stderr_task
+            && tokio::time::timeout(STREAM_DRAIN_TIMEOUT, &mut handle)
+                .await
+                .is_err()
+        {
+            handle.abort();
         }
 
         let exit_code = status.and_then(|s| s.code()).unwrap_or(-1);
@@ -129,9 +191,42 @@ pub(super) fn now_unix_ms() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Cursor;
     use std::process::Stdio;
     use strata_protocol::rpc::TaskSummary;
     use tokio::process::Command;
+
+    #[tokio::test]
+    async fn bounded_line_reader_caps_unterminated_megabyte_stream_without_oom() {
+        let mut huge = vec![b'A'; 128 * 1024];
+        huge.extend_from_slice(b"\nsecond-line\r\n");
+        let mut reader = BufReader::new(Cursor::new(huge));
+
+        let first = read_bounded_line(&mut reader, 64)
+            .await
+            .expect("read first")
+            .expect("first line");
+        assert_eq!(first.len(), 64 + 3);
+        assert!(first.ends_with("..."));
+
+        let second = read_bounded_line(&mut reader, 64)
+            .await
+            .expect("read second")
+            .expect("second line");
+        assert_eq!(second, "second-line");
+
+        assert_eq!(read_bounded_line(&mut reader, 64).await.expect("eof"), None);
+
+        // Also test stream with NO newline at all.
+        let no_nl = vec![b'Z'; 32 * 1024];
+        let mut reader2 = BufReader::new(Cursor::new(no_nl));
+        let capped = read_bounded_line(&mut reader2, 128)
+            .await
+            .expect("read no_nl")
+            .expect("line");
+        assert_eq!(capped.len(), 128 + 3);
+        assert!(capped.ends_with("..."));
+    }
 
     #[tokio::test]
     async fn joins_stream_readers_before_emitting_task_exit() {

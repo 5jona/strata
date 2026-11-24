@@ -19,10 +19,11 @@ import {
   ToastProvider,
   useToast,
 } from '@gojona/ui';
-import { Layers, Settings2, Terminal } from 'lucide-react';
+import { Layers, ServerCog, Settings2, Terminal } from 'lucide-react';
 import { useCallback, useMemo, useState } from 'react';
 import { ConfigTab } from './components/ConfigTab.tsx';
 import { OverviewTab } from './components/OverviewTab.tsx';
+import { ServicesPanel } from './components/ServicesPanel.tsx';
 import { StrataHeaderActions } from './components/StrataHeaderActions.tsx';
 import { TasksTab } from './components/TasksTab.tsx';
 import { useStrataPluginTheme } from './hooks/useStrataPluginTheme.ts';
@@ -30,13 +31,13 @@ import { useStrataRuntime } from './hooks/useStrataRuntime.ts';
 import { createMockStrataTransport } from './lib/mockStrataBridge.ts';
 import { STRATA_MANIFEST, STRATA_PLUGIN_ID } from './manifest.ts';
 
-const STRATA_TAB_ORDER = ['overview', 'tasks', 'config'] as const;
+const STRATA_TAB_ORDER = ['overview', 'services', 'tasks', 'config'] as const;
 type StrataTab = (typeof STRATA_TAB_ORDER)[number];
 
 const PINNED_DEFAULT_BOUNDS = { widthDp: 344, heightDp: 520 };
 
 function isStrataTab(value: string): value is StrataTab {
-  return value === 'overview' || value === 'tasks' || value === 'config';
+  return value === 'overview' || value === 'services' || value === 'tasks' || value === 'config';
 }
 
 function StrataWorkbench() {
@@ -82,12 +83,21 @@ function StrataWorkbench() {
     [copyText, pushToast],
   );
 
+  const handleCopyText = useCallback(
+    async (text: string, label: string) => {
+      const ok = await copyText(text);
+      pushToast(ok ? `已复制 ${label}` : `复制 ${label} 失败`, ok ? 'success' : 'danger');
+    },
+    [copyText, pushToast],
+  );
+
+  const { setSelectedId, refreshConfigAndLogs } = runtime;
   const handleSelectContainer = useCallback(
     (containerId: string) => {
-      runtime.setSelectedId(containerId);
-      void runtime.refreshConfigAndLogs(containerId);
+      setSelectedId(containerId);
+      void refreshConfigAndLogs(containerId);
     },
-    [runtime],
+    [setSelectedId, refreshConfigAndLogs],
   );
 
   return (
@@ -104,6 +114,7 @@ function StrataWorkbench() {
       <AppShell
         variant="drawer"
         title="Strata 容器"
+        bodyClassName="flex flex-col"
         className={
           isNativeHost
             ? 'h-full min-h-0 flex-1'
@@ -130,9 +141,9 @@ function StrataWorkbench() {
           />
         }
       >
-        <div className="flex flex-col gap-2.5">
+        <div className="flex w-full grow shrink-0 flex-col gap-2.5">
           {runtime.containers.length > 1 ? (
-            <div className="flex items-center gap-1.5 overflow-x-auto pb-0.5">
+            <div className="flex shrink-0 items-center gap-1.5 overflow-x-auto pb-0.5">
               {runtime.containers.map((item) => (
                 <Button
                   key={item.id}
@@ -175,14 +186,19 @@ function StrataWorkbench() {
             </Card>
           ) : runtime.activeContainer ? (
             <Tabs
+              className="flex flex-1 shrink-0 flex-col"
               value={tab}
               onValueChange={(v) => isStrataTab(v) && setTab(v)}
               tabOrder={STRATA_TAB_ORDER}
             >
-              <TabsList aria-label="Strata 管理视图切换">
+              <TabsList className="shrink-0" aria-label="Strata 管理视图切换">
                 <TabsTrigger value="overview">
                   <Layers className="size-3.5" />
                   总览
+                </TabsTrigger>
+                <TabsTrigger value="services">
+                  <ServerCog className="size-3.5" />
+                  服务
                 </TabsTrigger>
                 <TabsTrigger value="tasks">
                   <Terminal className="size-3.5" />
@@ -190,23 +206,42 @@ function StrataWorkbench() {
                 </TabsTrigger>
                 <TabsTrigger value="config">
                   <Settings2 className="size-3.5" />
-                  日志配置
+                  配置
                 </TabsTrigger>
               </TabsList>
 
-              <TabsContent value="overview">
+              <TabsContent value="overview" className="flex-1 shrink-0">
                 <OverviewTab
                   container={runtime.activeContainer}
                   hudState={runtime.hudState}
+                  webStatus={runtime.webStatus}
+                  pairingToken={runtime.pairingToken}
                   busyAction={runtime.busyAction}
                   onLifecycle={runtime.runLifecycle}
                   onMaintenance={runtime.runMaintenance}
                   onUpdateHud={runtime.updateHud}
+                  onToggleWebLan={runtime.toggleWebLan}
+                  onRotateWebToken={runtime.rotateWebToken}
                   onCopySsh={handleCopySsh}
+                  onCopyText={handleCopyText}
                 />
               </TabsContent>
 
-              <TabsContent value="tasks">
+              <TabsContent value="services" className="flex-1 shrink-0">
+                <ServicesPanel
+                  containerId={runtime.activeContainer.id}
+                  containerRunning={runtime.activeContainer.phase === 'running'}
+                  services={runtime.services}
+                  serviceLogs={runtime.serviceLogs}
+                  busyKey={runtime.busyAction}
+                  onRefresh={() => runtime.refreshServicesAndWeb(runtime.activeContainer?.id)}
+                  onAction={runtime.controlService}
+                  onLoadLogs={runtime.loadServiceLogs}
+                  onCopyText={handleCopyText}
+                />
+              </TabsContent>
+
+              <TabsContent value="tasks" className="flex-1 shrink-0">
                 <TasksTab
                   containerRunning={runtime.activeContainer.phase === 'running'}
                   tasks={runtime.tasks}
@@ -222,7 +257,7 @@ function StrataWorkbench() {
                 />
               </TabsContent>
 
-              <TabsContent value="config">
+              <TabsContent value="config" className="flex-1 shrink-0">
                 <ConfigTab
                   config={runtime.containerConfig}
                   dropbearLogs={runtime.dropbearLogs}

@@ -3,6 +3,40 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Online Simplestreams ARM64 distro catalog mirror selection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DistroMirror {
+    /// Tsinghua TUNA lxc-images mirror (China primary).
+    Tuna,
+    /// Official LinuxContainers images.linuxcontainers.org mirror.
+    Official,
+    /// User-supplied Simplestreams base URL.
+    Custom,
+}
+
+/// Kind of asynchronous container provisioning or storage job.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ContainerJobKind {
+    Create,
+    Import,
+    Clone,
+    Resize,
+    Export,
+}
+
+/// Execution state of an asynchronous container provisioning job.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ContainerJobState {
+    Pending,
+    Running,
+    Completed,
+    Failed,
+    Cancelled,
+}
+
 /// Output stream label for task.output events.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -194,4 +228,272 @@ pub struct HudStateResult {
 #[serde(rename_all = "camelCase")]
 pub struct EventsSubscribeResult {
     pub subscribed: bool,
+}
+
+/// Live kernel container capability probe returned by daemon.capabilities.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct KernelCapabilitiesResult {
+    pub kernel_release: String,
+    pub pid_ns: bool,
+    pub ipc_ns: bool,
+    pub sysv_ipc: bool,
+    pub user_ns: bool,
+    pub net_ns: bool,
+    pub overlay_fs: bool,
+    pub fuse_fs: bool,
+    pub cgroup_v2: bool,
+    pub cgroup_pids: bool,
+    pub cgroup_bpf: bool,
+    pub io_uring: bool,
+    pub kvm: bool,
+    pub devtmpfs: bool,
+    pub systemd_ready: bool,
+    pub docker_ready: bool,
+}
+
+/// Parameters for daemon.logs.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DaemonLogsParams {
+    #[serde(default)]
+    pub lines: Option<usize>,
+}
+
+/// Result returned by daemon.logs.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DaemonLogsResult {
+    pub log_path: String,
+    pub lines: Vec<String>,
+}
+
+/// Runtime status of the embedded HTTP/WebSocket PC Console server.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WebStatusResult {
+    pub enabled: bool,
+    pub running: bool,
+    pub lan_enabled: bool,
+    pub listen_addr: String,
+    pub port: u16,
+    pub token_path: String,
+    pub webroot_available: bool,
+    pub active_pty_sessions: usize,
+    pub active_jobs: usize,
+    #[serde(default)]
+    pub lan_urls: Vec<String>,
+}
+
+/// Parameters for web.configure.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WebConfigureParams {
+    #[serde(default)]
+    pub enabled: Option<bool>,
+    #[serde(default)]
+    pub lan_enabled: Option<bool>,
+    #[serde(default)]
+    pub port: Option<u16>,
+}
+
+/// Result returned by web.rotateToken.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WebRotateTokenResult {
+    pub token: String,
+    pub token_path: String,
+    pub sessions_revoked: usize,
+}
+
+/// Parameters for distro.catalog.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DistroCatalogParams {
+    #[serde(default)]
+    pub mirror: Option<DistroMirror>,
+    #[serde(default)]
+    pub custom_url: Option<String>,
+    #[serde(default)]
+    pub refresh: bool,
+}
+
+/// Single ARM64 rootfs image entry from a Simplestreams catalog.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DistroEntry {
+    pub id: String,
+    pub os: String,
+    pub release: String,
+    pub release_title: String,
+    pub arch: String,
+    pub variant: String,
+    pub version: String,
+    pub size_bytes: u64,
+    pub sha256: String,
+    pub download_url: String,
+}
+
+/// Result returned by distro.catalog.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DistroCatalogResult {
+    pub mirror: DistroMirror,
+    pub base_url: String,
+    pub cached: bool,
+    pub fetched_at_ms: u64,
+    pub entries: Vec<DistroEntry>,
+}
+
+/// Parameters for container.create.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContainerCreateParams {
+    pub id: String,
+    #[serde(default)]
+    pub distro_id: Option<String>,
+    #[serde(default)]
+    pub mirror: Option<DistroMirror>,
+    #[serde(default)]
+    pub custom_url: Option<String>,
+    #[serde(default)]
+    pub source_url: Option<String>,
+    #[serde(default)]
+    pub expected_sha256: Option<String>,
+    #[serde(default = "default_container_create_params_size_mb")]
+    pub size_mb: u64,
+    #[serde(default)]
+    pub hostname: Option<String>,
+    #[serde(default)]
+    pub ssh_port: Option<u16>,
+    #[serde(default)]
+    pub ssh_public_keys: Vec<String>,
+    #[serde(default)]
+    pub auto_start: bool,
+    #[serde(default = "default_container_create_params_host_bridge")]
+    pub host_bridge: bool,
+    #[serde(default = "default_container_create_params_noatime")]
+    pub noatime: bool,
+}
+
+/// Result returned immediately when an async container provisioning job is accepted.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContainerJobStartResult {
+    pub job_id: String,
+    pub container: String,
+    pub kind: ContainerJobKind,
+}
+
+/// Progress snapshot emitted with container.job.progress and returned by container.jobStatus.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContainerJobProgressPayload {
+    pub job_id: String,
+    pub container: String,
+    pub kind: ContainerJobKind,
+    pub state: ContainerJobState,
+    pub stage: String,
+    pub bytes_done: u64,
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bytes_total: Option<u64>,
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub percent: Option<u8>,
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    pub started_at_ms: u64,
+    pub updated_at_ms: u64,
+}
+
+/// Parameters for container.jobStatus and container.jobCancel.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContainerJobSelectorParams {
+    pub job_id: String,
+}
+
+/// Result returned by container.jobCancel.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContainerJobCancelResult {
+    pub job_id: String,
+    pub cancelled: bool,
+}
+
+/// Parameters for container.resize.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContainerResizeParams {
+    #[serde(default)]
+    pub id: Option<String>,
+    pub size_mb: u64,
+}
+
+/// Result returned by container.resize.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContainerResizeResult {
+    pub container: String,
+    pub previous_bytes: u64,
+    pub new_bytes: u64,
+    pub restarted: bool,
+}
+
+/// Parameters for container.clone.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContainerCloneParams {
+    pub source_id: String,
+    pub target_id: String,
+    #[serde(default)]
+    pub ssh_port: Option<u16>,
+    #[serde(default)]
+    pub hostname: Option<String>,
+}
+
+/// Result returned by container.clone.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContainerCloneResult {
+    pub source_id: String,
+    pub target_id: String,
+    pub image_path: String,
+    pub copied_bytes: u64,
+    pub virtual_bytes: u64,
+}
+
+/// Parameters for container.sshKeyRemove.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SshKeyRemoveParams {
+    #[serde(default)]
+    pub id: Option<String>,
+    pub fingerprint_or_key: String,
+}
+
+/// Result returned by container.sshKeyRemove.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SshKeyRemoveResult {
+    pub container: String,
+    pub removed: usize,
+    pub keys: Vec<String>,
+}
+
+fn default_container_create_params_size_mb() -> u64 {
+    8192
+}
+
+fn default_container_create_params_host_bridge() -> bool {
+    true
+}
+
+fn default_container_create_params_noatime() -> bool {
+    true
 }

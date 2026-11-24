@@ -4,6 +4,12 @@ import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { collectFixtureFiles, validateFixtureFile, validateValue } from '@gojona/contracts-gen';
+import {
+  buildStrataRpcShellCommand,
+  createMockKsuStrataTransport,
+  invokeStrataKsuRpc,
+  readStrataKsuWebToken,
+} from '../src/ksu/ksuStrataClient.ts';
 import { createMockStrataTransport } from '../src/lib/mockStrataBridge.ts';
 import { hasL5DiagMounts, isL5DiagMount, toggleL5DiagMounts } from '../src/lib/passthrough.ts';
 import { STRATA_MANIFEST } from '../src/manifest.ts';
@@ -176,6 +182,52 @@ test('mockStrataBridge RPC responses and pushed events conform to generated JSON
     'EventsSubscribeResult',
     'events.subscribe',
   );
+  assertMatchesDef(
+    await transport.invokePlugin(STRATA_METHODS.WEB_STATUS),
+    'WebStatusResult',
+    'web.status',
+  );
+  assertMatchesDef(
+    await transport.invokePlugin(STRATA_METHODS.WEB_CONFIGURE, { lanEnabled: true }),
+    'WebStatusResult',
+    'web.configure',
+  );
+  assertMatchesDef(
+    await transport.invokePlugin(STRATA_METHODS.WEB_ROTATE_TOKEN),
+    'WebRotateTokenResult',
+    'web.rotateToken',
+  );
+
+  const services = await transport.invokePlugin(STRATA_METHODS.SERVICE_LIST, { container: 'main' });
+  assert.equal(Array.isArray(services), true);
+  assert.ok(services.length >= 1);
+  for (const svc of services) {
+    assertMatchesDef(svc, 'ContainerServiceRuntime', 'service.list[]');
+  }
+  assertMatchesDef(
+    await transport.invokePlugin(STRATA_METHODS.SERVICE_START, {
+      container: 'main',
+      serviceId: 'syncthing',
+    }),
+    'ContainerServiceRuntime',
+    'service.start',
+  );
+  assertMatchesDef(
+    await transport.invokePlugin(STRATA_METHODS.SERVICE_STOP, {
+      container: 'main',
+      serviceId: 'syncthing',
+    }),
+    'ContainerServiceRuntime',
+    'service.stop',
+  );
+  assertMatchesDef(
+    await transport.invokePlugin(STRATA_METHODS.SERVICE_LOGS, {
+      container: 'main',
+      serviceId: 'rsshub',
+    }),
+    'ServiceLogsResult',
+    'service.logs',
+  );
 
   const backupStart = await transport.invokePlugin(STRATA_METHODS.CONTAINER_BACKUP_START, {
     container: 'main',
@@ -212,6 +264,7 @@ test('mockStrataBridge RPC responses and pushed events conform to generated JSON
   const eventDefs = {
     [STRATA_EVENTS.CONTAINER_STATE_CHANGED]: 'ContainerStateChangedPayload',
     [STRATA_EVENTS.CONTAINER_MAINTENANCE_DONE]: 'MaintenanceDonePayload',
+    [STRATA_EVENTS.SERVICE_STATE_CHANGED]: 'ServiceStateChangedPayload',
     [STRATA_EVENTS.TASK_OUTPUT]: 'TaskOutputPayload',
     [STRATA_EVENTS.TASK_EXIT]: 'TaskExitPayload',
   };
@@ -257,4 +310,76 @@ test('L5_DIAG_MOUNTS passthrough matching aligns between passthrough.ts and Rust
 
   const disabled = toggleL5DiagMounts(enabled, false);
   assert.deepEqual(disabled, [custom]);
+});
+
+test('standalone KSU strata rpc client quotes shell args safely and decodes typed results', async () => {
+  const cmd = buildStrataRpcShellCommand('service.start', {
+    container: 'main',
+    serviceId: 'rsshub',
+  });
+  assert.match(cmd, /^'\/data\/adb\/modules\/strata\/bin\/strata' rpc 'service\.start' '/);
+
+  const mockTransport = createMockKsuStrataTransport();
+  const bridge = { exec: (c, opts) => mockTransport.exec(c, opts) };
+  assertMatchesDef(
+    await invokeStrataKsuRpc(bridge, STRATA_METHODS.DAEMON_STATUS),
+    'DaemonSummarySnapshot',
+    'ksu daemon.status',
+  );
+  assertMatchesDef(
+    await invokeStrataKsuRpc(bridge, STRATA_METHODS.WEB_STATUS),
+    'WebStatusResult',
+    'ksu web.status',
+  );
+  const tokenRes = await readStrataKsuWebToken(bridge);
+  assert.ok(tokenRes.token.length >= 16);
+});
+
+test('version and versionCode stay aligned across module.prop, Rust, Python, WebUI, plugin, and Desktop', () => {
+  const moduleProp = fs.readFileSync(path.join(REPO_ROOT, 'module.prop'), 'utf8');
+  const versionMatch = moduleProp.match(/^version=v([0-9]+)\.([0-9]+)\.([0-9]+)$/m);
+  const codeMatch = moduleProp.match(/^versionCode=([0-9]+)$/m);
+  assert.ok(versionMatch, 'module.prop must declare version=vMAJOR.MINOR.PATCH');
+  assert.ok(codeMatch, 'module.prop must declare numeric versionCode');
+
+  const expectedVersion = `${versionMatch[1]}.${versionMatch[2]}.${versionMatch[3]}`;
+  const expectedCode =
+    Number(versionMatch[1]) * 10000 + Number(versionMatch[2]) * 100 + Number(versionMatch[3]);
+  assert.equal(Number(codeMatch[1]), expectedCode);
+
+  const rootCargo = fs.readFileSync(path.join(REPO_ROOT, 'Cargo.toml'), 'utf8');
+  const rootCargoMatch = rootCargo.match(/\[workspace\.package\][\s\S]*?^version\s*=\s*"([^"]+)"/m);
+  assert.ok(rootCargoMatch, 'Cargo.toml must declare workspace.package.version');
+  assert.equal(rootCargoMatch[1], expectedVersion);
+
+  const webuiPkg = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, 'webui/package.json'), 'utf8'));
+  const pluginManifest = JSON.parse(
+    fs.readFileSync(path.join(REPO_ROOT, 'plugins/strata.manager/manifest.json'), 'utf8'),
+  );
+  assert.equal(webuiPkg.version, expectedVersion);
+  assert.equal(pluginManifest.version, expectedVersion);
+  assert.equal(STRATA_MANIFEST.version, expectedVersion);
+
+  const debugInit = fs.readFileSync(
+    path.join(REPO_ROOT, 'container/strata-debug/__init__.py'),
+    'utf8',
+  );
+  const debugMatch = debugInit.match(/^__version__\s*=\s*"([^"]+)"/m);
+  assert.ok(debugMatch, 'container/strata-debug/__init__.py must declare __version__');
+  assert.equal(debugMatch[1], expectedVersion);
+
+  const desktopPkg = JSON.parse(
+    fs.readFileSync(path.join(REPO_ROOT, 'desktop/package.json'), 'utf8'),
+  );
+  const desktopCargo = fs.readFileSync(path.join(REPO_ROOT, 'desktop/Cargo.toml'), 'utf8');
+  const desktopCargoMatch = desktopCargo.match(
+    /\[workspace\.package\][\s\S]*?^version\s*=\s*"([^"]+)"/m,
+  );
+  const tauriConf = JSON.parse(
+    fs.readFileSync(path.join(REPO_ROOT, 'desktop/src-tauri/tauri.conf.json'), 'utf8'),
+  );
+  assert.ok(desktopCargoMatch, 'desktop/Cargo.toml must declare workspace.package.version');
+  assert.equal(desktopPkg.version, expectedVersion);
+  assert.equal(desktopCargoMatch[1], expectedVersion);
+  assert.equal(tauriConf.version, expectedVersion);
 });

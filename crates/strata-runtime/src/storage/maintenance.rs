@@ -79,10 +79,18 @@ pub fn fsck_image(container_id: &str, cfg: &ContainerConfig) -> RuntimeResult<Fs
         }
         combined.push_str(&stderr);
     }
+    let detail = combined.trim().to_owned();
+    if code != 0 && code != 1 {
+        return Err(RuntimeError::FsckFailed {
+            path: image_path.to_path_buf(),
+            code,
+            detail,
+        });
+    }
     Ok(FsckResult {
         container: container_id.to_owned(),
         exit_code: code,
-        output: combined.trim().to_owned(),
+        output: detail,
     })
 }
 

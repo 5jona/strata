@@ -188,17 +188,30 @@ pub fn pivot_root_in_place() -> SysResult<()> {
     Ok(())
 }
 
-/// Clears the ext4 `FS_IMMUTABLE_FL` attribute (for example on stale `.rurienv` files).
+/// Clears the ext4 `FS_IMMUTABLE_FL` attribute without following symlinks (e.g. stale `.rurienv`).
 pub fn clear_immutable_flag(path: &Path) -> SysResult<()> {
-    if !path.exists() {
+    let Ok(meta) = std::fs::symlink_metadata(path) else {
+        return Ok(());
+    };
+    if !meta.is_file() {
         return Ok(());
     }
-    let file = File::open(path).map_err(|e| SysError::path_io("open for getflags", path, e))?;
+    use std::os::unix::fs::OpenOptionsExt;
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(path)
+        .map_err(|e| SysError::path_io("open for getflags", path, e))?;
+    clear_immutable_flag_fd(file.as_raw_fd(), path)
+}
+
+/// Clears `FS_IMMUTABLE_FL` directly on an already-opened non-symlink regular file descriptor.
+pub fn clear_immutable_flag_fd(raw_fd: std::os::fd::RawFd, path: &Path) -> SysResult<()> {
     let mut flags: libc::c_long = 0;
-    // SAFETY: `file` is a valid fd and `flags` is writable storage for `FS_IOC_GETFLAGS`.
+    // SAFETY: `raw_fd` is a valid fd and `flags` is writable storage for `FS_IOC_GETFLAGS`.
     let rc = unsafe {
         libc::ioctl(
-            file.as_raw_fd(),
+            raw_fd,
             FS_IOC_GETFLAGS as libc::Ioctl,
             &mut flags as *mut libc::c_long,
         )
@@ -208,10 +221,10 @@ pub fn clear_immutable_flag(path: &Path) -> SysResult<()> {
     }
     if (flags & FS_IMMUTABLE_FL) != 0 {
         flags &= !FS_IMMUTABLE_FL;
-        // SAFETY: `file` is a valid fd and `flags` points to updated flags for `FS_IOC_SETFLAGS`.
+        // SAFETY: `raw_fd` is a valid fd and `flags` points to updated flags for `FS_IOC_SETFLAGS`.
         let set_rc = unsafe {
             libc::ioctl(
-                file.as_raw_fd(),
+                raw_fd,
                 FS_IOC_SETFLAGS as libc::Ioctl,
                 &flags as *const libc::c_long,
             )

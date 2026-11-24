@@ -1,14 +1,17 @@
 import { useSideVeilPlugin } from '@gojona/sideveil-sdk';
 import { type LogEntry, useToast } from '@gojona/ui';
 import { useCallback, useRef, useState } from 'react';
+import type { ServiceControlAction } from '../components/ServicesPanel.tsx';
 import {
   type ContainerConfig,
   type ContainerConfigPatchParams,
+  type ContainerServiceRuntime,
   type ContainerStatusSnapshot,
   type DaemonSummarySnapshot,
   type HudStateResult,
   STRATA_PROTOCOL,
   type TaskSummary,
+  type WebStatusResult,
 } from '../types.ts';
 import {
   type ContainerLifecycleAction,
@@ -17,6 +20,7 @@ import {
 } from './useStrataActions.ts';
 import { useStrataConfig } from './useStrataConfig.ts';
 import { type StrataNotifyFn, useStrataContainers } from './useStrataContainers.ts';
+import { useStrataServicesAndWeb } from './useStrataServicesAndWeb.ts';
 import { useStrataTasks } from './useStrataTasks.ts';
 
 /** Unified runtime state and command surface consumed by `StrataManagerApp`. */
@@ -36,11 +40,20 @@ export interface StrataRuntimeApi {
   dropbearLogs: LogEntry[];
   containerConfig: ContainerConfig | null;
   sshKeys: string[];
+  services: ContainerServiceRuntime[];
+  serviceLogs: Record<string, string[]>;
+  webStatus: WebStatusResult | null;
+  pairingToken: string | null;
   refreshAll: () => Promise<void>;
   refreshConfigAndLogs: (containerId?: string) => Promise<void>;
+  refreshServicesAndWeb: (containerId?: string) => Promise<void>;
   runLifecycle: (action: ContainerLifecycleAction) => Promise<void>;
   runMaintenance: (op: ContainerMaintenanceOp) => Promise<void>;
   updateHud: (patch: { enabled?: boolean; clickThrough?: boolean }) => Promise<void>;
+  controlService: (serviceId: string, action: ServiceControlAction) => Promise<void>;
+  loadServiceLogs: (serviceId: string) => Promise<void>;
+  toggleWebLan: (lanEnabled: boolean) => Promise<void>;
+  rotateWebToken: () => Promise<void>;
   runTask: (command: string[]) => Promise<void>;
   cancelTask: (taskId: string) => Promise<void>;
   selectTask: (taskId: string) => Promise<void>;
@@ -90,6 +103,20 @@ export function useStrataRuntime(isOnline: boolean, isDark: boolean): StrataRunt
     notify,
     refreshAll: stableRefreshAll,
   });
+  const svcWebCtrl = useStrataServicesAndWeb({
+    isOnline,
+    selectedIdRef,
+    setBusyAction,
+    notify,
+  });
+  const { refreshConfigAndLogs } = configCtrl;
+  const { refreshServicesAndWeb } = svcWebCtrl;
+  const handleRefreshPerContainer = useCallback(
+    async (containerId?: string) => {
+      await Promise.all([refreshConfigAndLogs(containerId), refreshServicesAndWeb(containerId)]);
+    },
+    [refreshConfigAndLogs, refreshServicesAndWeb],
+  );
   const containerCtrl = useStrataContainers({
     isOnline,
     isDark,
@@ -98,7 +125,7 @@ export function useStrataRuntime(isOnline: boolean, isDark: boolean): StrataRunt
     selectedIdRef,
     notify,
     onTasksLoaded: taskCtrl.replaceTasks,
-    onRefreshConfigAndLogs: configCtrl.refreshConfigAndLogs,
+    onRefreshConfigAndLogs: handleRefreshPerContainer,
   });
   refreshAllRef.current = containerCtrl.refreshAll;
 
@@ -125,11 +152,20 @@ export function useStrataRuntime(isOnline: boolean, isDark: boolean): StrataRunt
     dropbearLogs: configCtrl.dropbearLogs,
     containerConfig: configCtrl.containerConfig,
     sshKeys: configCtrl.sshKeys,
+    services: svcWebCtrl.services,
+    serviceLogs: svcWebCtrl.serviceLogs,
+    webStatus: svcWebCtrl.webStatus,
+    pairingToken: svcWebCtrl.pairingToken,
     refreshAll: containerCtrl.refreshAll,
-    refreshConfigAndLogs: configCtrl.refreshConfigAndLogs,
+    refreshConfigAndLogs: handleRefreshPerContainer,
+    refreshServicesAndWeb: svcWebCtrl.refreshServicesAndWeb,
     runLifecycle: actionCtrl.runLifecycle,
     runMaintenance: actionCtrl.runMaintenance,
     updateHud: containerCtrl.updateHud,
+    controlService: svcWebCtrl.controlService,
+    loadServiceLogs: svcWebCtrl.loadServiceLogs,
+    toggleWebLan: svcWebCtrl.toggleWebLan,
+    rotateWebToken: svcWebCtrl.rotateWebToken,
     runTask: taskCtrl.runTask,
     cancelTask: taskCtrl.cancelTask,
     selectTask: taskCtrl.selectTask,

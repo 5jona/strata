@@ -27,8 +27,14 @@ pub(crate) enum DaemonError {
     ContainerNotRunning(String),
     #[error("container '{0}' has active temporary session leases")]
     TempLeaseActive(String),
+    #[error("container '{0}' already exists")]
+    ContainerAlreadyExists(String),
     #[error("task '{0}' not found")]
     TaskNotFound(String),
+    #[error("job '{0}' not found")]
+    JobNotFound(String),
+    #[error("service '{0}' not found")]
+    ServiceNotFound(String),
     #[error(transparent)]
     Runtime(#[from] RuntimeError),
     #[error("{0}")]
@@ -61,7 +67,10 @@ impl DaemonError {
             Self::ContainerAlreadyRunning(_) => error_codes::CONTAINER_ALREADY_RUNNING,
             Self::ContainerNotRunning(_) => error_codes::CONTAINER_NOT_RUNNING,
             Self::TempLeaseActive(_) => error_codes::IMAGE_BUSY,
+            Self::ContainerAlreadyExists(_) => error_codes::CONTAINER_ALREADY_EXISTS,
             Self::TaskNotFound(_) => error_codes::TASK_NOT_FOUND,
+            Self::JobNotFound(_) => error_codes::JOB_NOT_FOUND,
+            Self::ServiceNotFound(_) => error_codes::SERVICE_NOT_FOUND,
             Self::Runtime(err) => err.rpc_code(),
             Self::Internal(_) => error_codes::INTERNAL_ERROR,
         }
