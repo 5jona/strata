@@ -217,7 +217,7 @@ jobs:
 
       - name: Build Tauri v2 Desktop bundles
         working-directory: desktop
-        run: pnpm dlx @tauri-apps/cli@2 build
+        run: pnpm dlx @tauri-apps/cli@~2.11.0 build
 
       - name: Collect Desktop installer bundles
         shell: bash
