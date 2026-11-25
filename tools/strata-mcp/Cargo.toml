@@ -1,0 +1,64 @@
+[workspace]
+
+[package]
+name = "strata-mcp"
+version = "0.2.0"
+edition = "2024"
+rust-version = "1.89"
+license = "GPL-3.0-only"
+description = "PC-side async Rust MCP server for Strata Android device debugging"
+
+[[bin]]
+name = "strata-mcp"
+path = "src/main.rs"
+
+[dependencies]
+regex = "1.11"
+rmcp = { version = "3.11", features = ["macros", "schemars", "server", "transport-io"] }
+schemars = "1.2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = [
+    "fs",
+    "io-std",
+    "io-util",
+    "macros",
+    "net",
+    "process",
+    "rt",
+    "rt-multi-thread",
+    "signal",
+    "sync",
+    "time",
+] }
+
+[lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+unreachable_pub = "warn"
+missing_debug_implementations = "warn"
+rust_2018_idioms = { level = "warn", priority = -1 }
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+mod_module_files = "warn"
+undocumented_unsafe_blocks = "warn"
+semicolon_if_nothing_returned = "warn"
+uninlined_format_args = "warn"
+manual_let_else = "warn"
+explicit_iter_loop = "warn"
+redundant_closure_for_method_calls = "warn"
+cloned_instead_of_copied = "warn"
+dbg_macro = "warn"
+todo = "warn"
+unimplemented = "warn"
+unwrap_used = "warn"
+expect_used = "warn"
+await_holding_lock = "warn"
+redundant_clone = "warn"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
+panic = "abort"
+opt-level = 3
