@@ -176,11 +176,11 @@ importers:
   .:
     dependencies:
       '@gojona/config':
-        specifier: ^0.1.0
-        version: 0.1.0(@tailwindcss/vite@4.3.5(vite@8.3.8(jiti@2.7.0)))(@vitejs/plugin-react@6.3.0(vite@8.3.8(jiti@2.7.0)))(tailwindcss@4.3.5)(vite@8.3.8(jiti@2.7.0))
+        specifier: ^0.2.0
+        version: 0.2.0(@tailwindcss/vite@4.3.5(vite@8.3.8(jiti@2.7.0)))(@vitejs/plugin-react@6.3.0(vite@8.3.8(jiti@2.7.0)))(tailwindcss@4.3.5)(vite@8.3.8(jiti@2.7.0))
       '@gojona/ui':
-        specifier: ^0.1.0
-        version: 0.1.0(@tailwindcss/vite@4.3.5(vite@8.3.8(jiti@2.7.0)))(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(@vitejs/plugin-react@6.3.0(vite@8.3.8(jiti@2.7.0)))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(tailwindcss@4.3.5)(vite@8.3.8(jiti@2.7.0))
+        specifier: ^0.2.0
+        version: 0.2.0(@tailwindcss/vite@4.3.5(vite@8.3.8(jiti@2.7.0)))(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(@vitejs/plugin-react@6.3.0(vite@8.3.8(jiti@2.7.0)))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(tailwindcss@4.3.5)(vite@8.3.8(jiti@2.7.0))
       '@tauri-apps/api':
         specifier: ^2.5.0
         version: 2.12.5
@@ -317,8 +317,8 @@ packages:
   '@emnapi/wasi-threads@2.2.0':
     resolution: {integrity: sha512-JP7OYH38Q7+pyTAe14raZHLQIK7BDKbdwji+Xi3pcd/6QkJYQH3SX4wu6EplGrGJWRepoNzedfm0G3B9Z4e9Rw==}
 
-  '@gojona/config@0.1.0':
-    resolution: {integrity: sha512-p4eZ6uKS8uzk3i9sR5SEf4BJFoQdFZD4CRl435q6xZ4FadABeZEaoVIGs0RwGTziY9gTFLfxLLvVenCqBObjuw==}
+  '@gojona/config@0.2.0':
+    resolution: {integrity: sha512-lddVQdl41sxj64igC2ogyZio6tdojUax5EvfbRkdy6q7SkXDu2sTzT2ipU0d7pwpkgquAlmV4BrHKMR63a3e2Q==}
     peerDependencies:
       '@tailwindcss/vite': ^4.0.0
       '@vitejs/plugin-react': ^6.0.0
@@ -334,8 +334,8 @@ packages:
       vite:
         optional: true
 
-  '@gojona/ui@0.1.0':
-    resolution: {integrity: sha512-9zzkUdU3zAeXkKPXuP2wWx8dBkthe8AgQtDmtbS40sRYa4lSlCI72M1JxmA+YHaXBMMJkETOLPyySatoa2Prhw==}
+  '@gojona/ui@0.2.0':
+    resolution: {integrity: sha512-uunCWK44c5G+6B6gfm3aSVAViww0YR/rBag7Gdie2kHHj7hY53R5c9KIOnhiYjLHdZDIeaSN3Zt0sX35JPL4yg==}
     peerDependencies:
       react: ^19.0.0
       react-dom: ^19.0.0
@@ -1215,16 +1215,16 @@ snapshots:
       tslib: 2.9.1
     optional: true
 
-  '@gojona/config@0.1.0(@tailwindcss/vite@4.3.5(vite@8.3.8(jiti@2.7.0)))(@vitejs/plugin-react@6.3.0(vite@8.3.8(jiti@2.7.0)))(tailwindcss@4.3.5)(vite@8.3.8(jiti@2.7.0))':
+  '@gojona/config@0.2.0(@tailwindcss/vite@4.3.5(vite@8.3.8(jiti@2.7.0)))(@vitejs/plugin-react@6.3.0(vite@8.3.8(jiti@2.7.0)))(tailwindcss@4.3.5)(vite@8.3.8(jiti@2.7.0))':
     optionalDependencies:
       '@tailwindcss/vite': 4.3.5(vite@8.3.8(jiti@2.7.0))
       '@vitejs/plugin-react': 6.3.0(vite@8.3.8(jiti@2.7.0))
       tailwindcss: 4.3.5
       vite: 8.3.8(jiti@2.7.0)
 
-  '@gojona/ui@0.1.0(@tailwindcss/vite@4.3.5(vite@8.3.8(jiti@2.7.0)))(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(@vitejs/plugin-react@6.3.0(vite@8.3.8(jiti@2.7.0)))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(tailwindcss@4.3.5)(vite@8.3.8(jiti@2.7.0))':
+  '@gojona/ui@0.2.0(@tailwindcss/vite@4.3.5(vite@8.3.8(jiti@2.7.0)))(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(@vitejs/plugin-react@6.3.0(vite@8.3.8(jiti@2.7.0)))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(tailwindcss@4.3.5)(vite@8.3.8(jiti@2.7.0))':
     dependencies:
-      '@gojona/config': 0.1.0(@tailwindcss/vite@4.3.5(vite@8.3.8(jiti@2.7.0)))(@vitejs/plugin-react@6.3.0(vite@8.3.8(jiti@2.7.0)))(tailwindcss@4.3.5)(vite@8.3.8(jiti@2.7.0))
+      '@gojona/config': 0.2.0(@tailwindcss/vite@4.3.5(vite@8.3.8(jiti@2.7.0)))(@vitejs/plugin-react@6.3.0(vite@8.3.8(jiti@2.7.0)))(tailwindcss@4.3.5)(vite@8.3.8(jiti@2.7.0))
       '@radix-ui/react-slider': 1.6.1(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
       '@radix-ui/react-switch': 1.4.1(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
       '@radix-ui/react-tabs': 1.2.1(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
