@@ -6,6 +6,7 @@ import {
   Code2,
   Copy,
   Download,
+  Globe,
   HardDrive,
   Maximize2,
   Play,
@@ -38,6 +39,7 @@ export interface ContainerCardProps {
   onResize: () => void;
   onClone: () => void;
   onExport: (format: 'tar.gz' | 'img.gz') => void;
+  onSyncDns: () => void;
   onConfig: () => void;
   onDelete: () => void;
 }
@@ -64,6 +66,7 @@ export function ContainerCard({
   onResize,
   onClone,
   onExport,
+  onSyncDns,
   onConfig,
   onDelete,
 }: ContainerCardProps) {
@@ -220,6 +223,10 @@ export function ContainerCard({
             <Button size="sm" variant="ghost" disabled={busy} onClick={() => onExport('img.gz')}>
               <Download className="size-3.5" />
               导出 .img.gz
+            </Button>
+            <Button size="sm" variant="ghost" disabled={busy || !running} onClick={onSyncDns}>
+              <Globe className="size-3.5" />
+              同步 DNS
             </Button>
             <Button size="sm" variant="ghost" disabled={busy} onClick={onConfig}>
               <Settings className="size-3.5" />

@@ -1,6 +1,10 @@
-import type { ContainerConfig, ContainerJobProgressPayload } from '../types/protocol.ts';
 import {
-  STRATA_EVENTS,
+  type ContainerJobProgressPayload,
+  STRATA_PATHS,
+  STRATA_PROTOCOL,
+} from '../types/protocol.ts';
+import {
+  type RpcInvokeArgs,
   STRATA_METHODS,
   type StrataDesktopEventMap,
   type StrataDesktopEventName,
@@ -16,24 +20,13 @@ import type {
   PtySessionHandle,
   StrataTransport,
 } from './httpWsTransport.ts';
-import {
-  createMockDatasetForDevice,
-  MOCK_DISTRO_CATALOG,
-  type MockDeviceDataset,
-} from './mockData.ts';
-import {
-  cloneMockContainer,
-  deleteMockContainer,
-  type MockRuntimeContext,
-  patchMockContainerConfig,
-  registerNewMockContainer,
-  requireMockContainer,
-  setMockContainerPhase,
-  setMockServiceStatus,
-  startMockCreateJob,
-  upsertMockService,
-} from './mockHandlers.ts';
+import { MOCK_DISTRO_CATALOG } from './mockCatalogData.ts';
+import { dispatchMockContainerAndServiceRpc } from './mockCoreDispatch.ts';
+import { createMockDatasetForDevice, type MockDeviceDataset } from './mockData.ts';
+import { type MockRuntimeContext, registerNewMockContainer } from './mockHandlers.ts';
 import { createMockPtySession } from './mockPty.ts';
+import { handleMockTaskRpc, type MockTaskRecord } from './mockTaskHandlers.ts';
+import { handleMockToolsRpc } from './mockToolsHandlers.ts';
 
 /**
  * Full stateful in-memory Strata transport for browser preview and unit tests.
@@ -44,6 +37,7 @@ export class MockStrataTransport implements StrataTransport {
   private readonly dataset: MockDeviceDataset;
   private readonly listeners = new Set<EventListener>();
   private readonly jobs = new Map<string, ContainerJobProgressPayload>();
+  private readonly tasks = new Map<string, MockTaskRecord>();
   private readonly timers = new Set<ReturnType<typeof setTimeout>>();
 
   constructor(deviceId = 'mock-tablet') {
@@ -78,15 +72,22 @@ export class MockStrataTransport implements StrataTransport {
 
   async invoke<M extends StrataDesktopMethod>(
     method: M,
-    params?: StrataDesktopRpcMap[M]['params'],
+    ...args: RpcInvokeArgs<StrataDesktopRpcMap[M]['params']>
   ): Promise<StrataDesktopRpcMap[M]['result']> {
-    const res = this.dispatch(method, params);
+    const res = this.dispatch(method, args[0]);
     return structuredClone(res) as StrataDesktopRpcMap[M]['result'];
   }
 
   private dispatch(method: StrataDesktopMethod, rawParams: unknown): unknown {
     const p = (rawParams ?? {}) as Record<string, unknown>;
     const ctx = this.ctx();
+
+    if (method.startsWith('tools.')) return handleMockToolsRpc(ctx, this.tasks, method, rawParams);
+    if (method.startsWith('task.')) return handleMockTaskRpc(ctx, this.tasks, method, rawParams);
+    if (method.startsWith('container.') || method.startsWith('service.')) {
+      return dispatchMockContainerAndServiceRpc(ctx, method, p);
+    }
+
     switch (method) {
       case STRATA_METHODS.DAEMON_PING:
         return { pong: true, pid: 1420, uptimeMs: 18_400_000 };
@@ -99,18 +100,39 @@ export class MockStrataTransport implements StrataTransport {
           defaultContainer: list.find((c) => c.snapshot.isDefault)?.snapshot.id ?? 'main',
           totalContainers: list.length,
           runningContainers: list.filter((c) => c.snapshot.phase === 'running').length,
-          activeTasks: 0,
+          activeTasks: Array.from(this.tasks.values()).filter((t) => t.summary.running).length,
           sideveilConnected: true,
         };
       }
+      case STRATA_METHODS.DAEMON_HEALTH:
+        return {
+          ok: true,
+          daemon: {
+            pid: 1420,
+            uid: 0,
+            uptimeMs: 18_400_000,
+            defaultContainer: 'main',
+            totalContainers: 2,
+            runningContainers: 1,
+            activeTasks: 0,
+            sideveilConnected: true,
+          },
+          containers: Object.values(this.dataset.containers).map((c) => c.snapshot),
+          capabilities: this.dataset.capabilities,
+        };
       case STRATA_METHODS.DAEMON_CAPABILITIES:
         return this.dataset.capabilities;
       case STRATA_METHODS.DAEMON_LOGS:
-        return { logPath: '/data/adb/strata/run/logs/stratad.log', lines: this.dataset.daemonLogs };
+        return { logPath: STRATA_PATHS.DEFAULT_DAEMON_LOG_PATH, lines: this.dataset.daemonLogs };
       case STRATA_METHODS.DAEMON_RELOAD_CONFIG:
         return {
           version: 1,
           defaultContainer: 'main',
+          sideveil: {
+            enabled: false,
+            hubSock: STRATA_PATHS.DEFAULT_SIDEVEIL_HUB_SOCK,
+            pluginId: STRATA_PROTOCOL.SIDEVEIL_PLUGIN_ID,
+          },
           web: {
             enabled: this.dataset.webStatus.enabled,
             lanEnabled: this.dataset.webStatus.lanEnabled,
@@ -140,181 +162,20 @@ export class MockStrataTransport implements StrataTransport {
       case STRATA_METHODS.DISTRO_CATALOG:
         return {
           mirror: (p.mirror as 'tuna' | 'official' | 'custom') ?? 'tuna',
-          baseUrl: 'https://mirrors.tuna.tsinghua.edu.cn/lxc-images',
+          baseUrl: STRATA_PROTOCOL.DEFAULT_DISTRO_MIRROR_TUNA,
           cached: false,
           fetchedAtMs: Date.now(),
           entries: MOCK_DISTRO_CATALOG,
         };
-      case STRATA_METHODS.CONTAINER_LIST:
-        return Object.values(this.dataset.containers).map((c) => c.snapshot);
-      case STRATA_METHODS.CONTAINER_STATUS:
-        return requireMockContainer(this.dataset, p.container as string | undefined).snapshot;
-      case STRATA_METHODS.CONTAINER_START:
-      case STRATA_METHODS.CONTAINER_RESTART:
-        return setMockContainerPhase(ctx, p.container as string | undefined, 'running');
-      case STRATA_METHODS.CONTAINER_STOP:
-        setMockContainerPhase(ctx, p.container as string | undefined, 'stopped');
-        return {
-          drainedPids: 6,
-          unmountedPaths: 5,
-          detachedLoops: 1,
-          residualMounts: 0,
-          residualLoops: 0,
-        };
-      case STRATA_METHODS.CONTAINER_COMPACT: {
-        const rec = requireMockContainer(this.dataset, p.container as string | undefined);
-        const before = rec.snapshot.disk.imageAllocatedBytes;
-        const trimmed = Math.min(before, 280 * 1024 * 1024);
-        rec.snapshot.disk.imageAllocatedBytes = Math.max(0, before - trimmed);
-        return {
-          container: rec.snapshot.id,
-          beforeBytes: before,
-          afterBytes: rec.snapshot.disk.imageAllocatedBytes,
-          trimmedBytes: trimmed,
-        };
-      }
-      case STRATA_METHODS.CONTAINER_FSCK: {
-        const rec = requireMockContainer(this.dataset, p.container as string | undefined);
-        return { container: rec.snapshot.id, exitCode: 0, output: 'e2fsck 1.47.1: clean' };
-      }
-      case STRATA_METHODS.CONTAINER_SYNC_DNS:
-        return {
-          container: requireMockContainer(this.dataset, p.container as string | undefined).snapshot
-            .id,
-          synced: true,
-        };
-      case STRATA_METHODS.CONTAINER_LOGS: {
-        const rec = requireMockContainer(this.dataset, p.container as string | undefined);
-        return {
-          container: rec.snapshot.id,
-          logPath: `/data/adb/strata/run/logs/${rec.snapshot.id}.log`,
-          lines: rec.logs,
-        };
-      }
-      case STRATA_METHODS.CONTAINER_CONFIG_GET: {
-        const rec = requireMockContainer(this.dataset, p.container as string | undefined);
-        return { container: rec.snapshot.id, config: rec.config };
-      }
-      case STRATA_METHODS.CONTAINER_CONFIG_PATCH:
-        return patchMockContainerConfig(this.dataset, p);
-      case STRATA_METHODS.CONTAINER_SSH_KEY_LIST: {
-        const rec = requireMockContainer(this.dataset, p.container as string | undefined);
-        return { container: rec.snapshot.id, keys: rec.sshKeys, added: 0 };
-      }
-      case STRATA_METHODS.CONTAINER_SSH_KEY_ADD: {
-        const rec = requireMockContainer(this.dataset, p.container as string | undefined);
-        const key = String(p.publicKey ?? '').trim();
-        if (key && !rec.sshKeys.includes(key)) rec.sshKeys.push(key);
-        return { container: rec.snapshot.id, keys: rec.sshKeys, added: 1 };
-      }
-      case STRATA_METHODS.CONTAINER_SSH_KEY_REMOVE: {
-        const rec = requireMockContainer(this.dataset, p.id as string | undefined);
-        const needle = String(p.fingerprintOrKey ?? '');
-        const before = rec.sshKeys.length;
-        rec.sshKeys = rec.sshKeys.filter((k) => k !== needle);
-        return {
-          container: rec.snapshot.id,
-          removed: before - rec.sshKeys.length,
-          keys: rec.sshKeys,
-        };
-      }
-      case STRATA_METHODS.CONTAINER_RESIZE: {
-        const rec = requireMockContainer(this.dataset, p.id as string | undefined);
-        const prev = rec.snapshot.disk.imageVirtualBytes;
-        const next = Number(p.sizeMb) * 1024 * 1024;
-        rec.snapshot.disk.imageVirtualBytes = next;
-        return {
-          container: rec.snapshot.id,
-          previousBytes: prev,
-          newBytes: next,
-          restarted: rec.snapshot.phase === 'running',
-        };
-      }
-      case STRATA_METHODS.CONTAINER_CLONE:
-        return cloneMockContainer(
-          ctx,
-          String(p.sourceId),
-          String(p.targetId),
-          p.sshPort as number | undefined,
-          p.hostname as string | undefined,
-        );
-      case STRATA_METHODS.CONTAINER_DELETE:
-        return deleteMockContainer(this.dataset, String(p.id), Boolean(p.deleteImage));
-      case STRATA_METHODS.CONTAINER_CREATE:
-        return startMockCreateJob(ctx, p);
-      case STRATA_METHODS.CONTAINER_JOB_STATUS: {
-        const job = this.jobs.get(String(p.jobId));
-        if (!job) throw new StrataRpcError(-32027, '任务不存在');
-        return job;
-      }
-      case STRATA_METHODS.CONTAINER_JOB_CANCEL: {
-        const job = this.jobs.get(String(p.jobId));
-        if (job && job.state === 'running') {
-          job.state = 'cancelled';
-          this.emit(STRATA_EVENTS.CONTAINER_JOB_PROGRESS, { ...job });
-          return { jobId: job.jobId, cancelled: true };
-        }
-        return { jobId: String(p.jobId), cancelled: false };
-      }
-      case STRATA_METHODS.SERVICE_LIST:
-        return requireMockContainer(this.dataset, p.container as string | undefined).services;
-      case STRATA_METHODS.SERVICE_UPSERT:
-        return upsertMockService(
-          ctx,
-          p.container as string | undefined,
-          p.spec as ContainerConfig['services'][number],
-        );
-      case STRATA_METHODS.SERVICE_DELETE: {
-        const rec = requireMockContainer(this.dataset, p.container as string | undefined);
-        const sid = String(p.serviceId);
-        rec.config.services = rec.config.services.filter((s) => s.id !== sid);
-        const before = rec.services.length;
-        rec.services = rec.services.filter((s) => s.id !== sid);
-        delete rec.serviceLogs[sid];
-        return {
-          container: rec.snapshot.id,
-          serviceId: sid,
-          deleted: before !== rec.services.length,
-        };
-      }
-      case STRATA_METHODS.SERVICE_START:
-        return setMockServiceStatus(
-          ctx,
-          p.container as string | undefined,
-          String(p.serviceId),
-          'running',
-        );
-      case STRATA_METHODS.SERVICE_STOP:
-        return setMockServiceStatus(
-          ctx,
-          p.container as string | undefined,
-          String(p.serviceId),
-          'stopped',
-        );
-      case STRATA_METHODS.SERVICE_RESTART:
-        return setMockServiceStatus(
-          ctx,
-          p.container as string | undefined,
-          String(p.serviceId),
-          'running',
-          true,
-        );
-      case STRATA_METHODS.SERVICE_LOGS: {
-        const rec = requireMockContainer(this.dataset, p.container as string | undefined);
-        const sid = String(p.serviceId);
-        return {
-          container: rec.snapshot.id,
-          serviceId: sid,
-          lines: rec.serviceLogs[sid] ?? ['[service] 暂无日志输出'],
-        };
-      }
-      case STRATA_METHODS.CONTAINER_BACKUP:
-        return {
-          container: String(p.container ?? 'main'),
-          outputPath: String(p.outputPath),
-          bytesWritten: 1_200_000_000,
-          restarted: false,
-        };
+      case STRATA_METHODS.EVENTS_SUBSCRIBE:
+        return { subscribed: true };
+      case STRATA_METHODS.HUD_STATE:
+      case STRATA_METHODS.HUD_SET:
+        return { enabled: false, clickThrough: false, isDark: true, sideveilConnected: false };
+      case STRATA_METHODS.SESSION_RELEASE:
+        return { released: true };
+      case STRATA_METHODS.SESSION_ACQUIRE:
+        throw new StrataRpcError(-32601, 'mock mode does not acquire host CLI attach leases');
     }
   }
 

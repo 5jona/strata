@@ -1,3 +1,3 @@
 minimumReleaseAgeExclude:
-  - "@gojona/config@0.1.0"
-  - "@gojona/ui@0.1.0"
+  - "@gojona/*"
+  - lucide-react@1.75.0

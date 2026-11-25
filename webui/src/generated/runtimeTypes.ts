@@ -37,6 +37,42 @@ export type TaskStream = 'stdout' | 'stderr';
 
 export const TASK_STREAM_VALUES = ['stdout', 'stderr'] as const;
 
+/** Package or runtime manager backend inside a Strata container. */
+export type ToolManagerKind = 'mise' | 'apt' | 'uv' | 'bundle' | 'system';
+
+export const TOOL_MANAGER_KIND_VALUES = ['mise', 'apt', 'uv', 'bundle', 'system'] as const;
+
+/** Logical category of container tools. */
+export type ToolGroupKind =
+  | 'core-bridge'
+  | 'mise-runtimes'
+  | 'cli-dev'
+  | 'debug-l3-l5'
+  | 'python-uv';
+
+export const TOOL_GROUP_KIND_VALUES = [
+  'core-bridge',
+  'mise-runtimes',
+  'cli-dev',
+  'debug-l3-l5',
+  'python-uv',
+] as const;
+
+/** Mirror configuration preset for mise, apt, uv, npm, and cargo. */
+export type ToolMirrorPreset = 'tuna' | 'official' | 'custom';
+
+export const TOOL_MIRROR_PRESET_VALUES = ['tuna', 'official', 'custom'] as const;
+
+/** Health check severity for container layout and tool diagnostics. */
+export type ToolDiagnosticStatus = 'ok' | 'warn' | 'error';
+
+export const TOOL_DIAGNOSTIC_STATUS_VALUES = ['ok', 'warn', 'error'] as const;
+
+/** Bootstrap preset profile for container toolchain initialization. */
+export type ToolsBootstrapProfile = 'minimal' | 'dev' | 'debug';
+
+export const TOOLS_BOOTSTRAP_PROFILE_VALUES = ['minimal', 'dev', 'debug'] as const;
+
 /** Disk allocation and rootfs utilization snapshot. */
 export interface ContainerDiskStats {
   imageExists: boolean;
@@ -128,7 +164,7 @@ export interface FsckResult {
 /** Parameters for container.backup and container.backupStart. */
 export interface BackupParams {
   container?: string;
-  outputPath: string;
+  outputPath?: string;
 }
 
 /** Result for container.backup. */
@@ -484,4 +520,229 @@ export interface SshKeyRemoveResult {
   container: string;
   removed: number;
   keys: string[];
+}
+
+/** Parameters for tools.status. */
+export interface ToolsStatusParams {
+  container?: string;
+}
+
+/** Availability and version summary for a container tool manager or bridge binary. */
+export interface ToolManagerHealth {
+  installed: boolean;
+  version?: string;
+  binPath?: string;
+}
+
+/** Fast local-only snapshot of container layout compliance, tool managers, and caches. */
+export interface ToolsStatusResult {
+  container: string;
+  layoutSchemaVersion?: number;
+  layoutCompliant: boolean;
+  workspaceDir: string;
+  miseConfigPath: string;
+  mise: ToolManagerHealth;
+  uv: ToolManagerHealth;
+  apt: ToolManagerHealth;
+  hostExec: ToolManagerHealth;
+  strataDebug: ToolManagerHealth;
+  installedToolCount: number;
+  outdatedToolCount?: number;
+  mirrorPreset: ToolMirrorPreset;
+  hasGithubToken: boolean;
+  cacheBytes: number;
+  installsBytes: number;
+}
+
+/** Parameters for tools.list. */
+export interface ToolsListParams {
+  container?: string;
+  group?: ToolGroupKind;
+  checkOutdated: boolean;
+}
+
+/** Single installed or configured tool entry reported by tools.list. */
+export interface InstalledToolItem {
+  id: string;
+  name: string;
+  manager: ToolManagerKind;
+  group: ToolGroupKind;
+  version: string;
+  requestedVersion?: string;
+  latestVersion?: string;
+  outdated: boolean;
+  backend?: string;
+  installPath?: string;
+  sourcePath?: string;
+  active: boolean;
+  installed: boolean;
+  broken: boolean;
+}
+
+/** Grouped inventory of mise runtimes, uv tools, apt packages, and core bridge binaries. */
+export interface ToolsListResult {
+  container: string;
+  miseAvailable: boolean;
+  uvAvailable: boolean;
+  items: InstalledToolItem[];
+  outdatedWarning?: string;
+}
+
+/** Parameters for tools.catalog. */
+export interface ToolsCatalogParams {
+  container?: string;
+  group?: ToolGroupKind;
+  query?: string;
+}
+
+/** Curated ARM64/GKI-safe tool entry available for installation. */
+export interface ToolCatalogEntry {
+  id: string;
+  name: string;
+  summary: string;
+  manager: ToolManagerKind;
+  group: ToolGroupKind;
+  defaultVersion: string;
+  backendHint: string;
+  arm64Verified: boolean;
+  estimatedMb: number;
+  recommended: boolean;
+  tags: string[];
+}
+
+/** Curated multi-tool installation preset bundle. */
+export interface ToolBundleSpec {
+  id: string;
+  name: string;
+  summary: string;
+  tools: string[];
+}
+
+/** Result returned by tools.catalog. */
+export interface ToolsCatalogResult {
+  container: string;
+  entries: ToolCatalogEntry[];
+  bundles: ToolBundleSpec[];
+}
+
+/** Parameters for tools.configGet. */
+export interface ToolsConfigGetParams {
+  container?: string;
+}
+
+/** Sanitized tool manager mirror, proxy, and mise configuration (never exposes raw secrets). */
+export interface ToolsConfigResult {
+  container: string;
+  mirrorPreset: ToolMirrorPreset;
+  aptMirrorUrl?: string;
+  nodeMirrorUrl?: string;
+  pypiIndexUrl?: string;
+  npmRegistryUrl?: string;
+  rustupDistServer?: string;
+  goproxy?: string;
+  httpProxy?: string;
+  httpsProxy?: string;
+  noProxy?: string;
+  urlReplacements: Record<string, string>;
+  jobs: number;
+  minimumReleaseAge?: string;
+  hasGithubToken: boolean;
+  githubTokenMasked?: string;
+  miseConfigToml: string;
+}
+
+/** Parameters for tools.configSet. */
+export interface ToolsConfigSetParams {
+  container?: string;
+  mirrorPreset?: ToolMirrorPreset;
+  aptMirrorUrl?: string;
+  nodeMirrorUrl?: string;
+  pypiIndexUrl?: string;
+  npmRegistryUrl?: string;
+  rustupDistServer?: string;
+  goproxy?: string;
+  httpProxy?: string;
+  httpsProxy?: string;
+  noProxy?: string;
+  urlReplacements?: Record<string, string>;
+  jobs?: number;
+  minimumReleaseAge?: string;
+  githubToken?: string;
+  miseConfigToml?: string;
+}
+
+/** Parameters for tools.bootstrap. */
+export interface ToolsBootstrapParams {
+  container?: string;
+  profile?: ToolsBootstrapProfile;
+  mirrorPreset?: ToolMirrorPreset;
+}
+
+/** Parameters for tools.install. */
+export interface ToolsInstallParams {
+  container?: string;
+  manager: ToolManagerKind;
+  packages: string[];
+  pin: boolean;
+}
+
+/** Parameters for tools.uninstall. */
+export interface ToolsUninstallParams {
+  container?: string;
+  manager: ToolManagerKind;
+  packages: string[];
+}
+
+/** Parameters for tools.upgrade. */
+export interface ToolsUpgradeParams {
+  container?: string;
+  manager?: ToolManagerKind;
+  packages: string[];
+  bump: boolean;
+}
+
+/** Parameters for tools.doctor. */
+export interface ToolsDoctorParams {
+  container?: string;
+}
+
+/** Single structured health diagnostic check for container layout or tool manager. */
+export interface ToolDiagnosticItem {
+  id: string;
+  category: string;
+  status: ToolDiagnosticStatus;
+  summary: string;
+  remediation?: string;
+}
+
+/** Result returned by tools.doctor. */
+export interface ToolsDoctorResult {
+  container: string;
+  ok: boolean;
+  items: ToolDiagnosticItem[];
+  miseDoctorJson?: string;
+}
+
+/** Parameters for tools.cacheClean. */
+export interface ToolsCacheCleanParams {
+  container?: string;
+  cleanMise: boolean;
+  cleanUv: boolean;
+  cleanApt: boolean;
+  pruneUnused: boolean;
+}
+
+/** Result returned by tools.cacheClean. */
+export interface ToolsCacheCleanResult {
+  container: string;
+  beforeBytes: number;
+  afterBytes: number;
+  freedBytes: number;
+}
+
+/** Event payload emitted when a container tools mutation task completes. */
+export interface ToolsStateChangedPayload {
+  container: string;
+  reason: string;
+  taskId?: string;
 }

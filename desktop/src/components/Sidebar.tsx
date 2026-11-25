@@ -14,6 +14,7 @@ import {
   Terminal,
   Trash2,
   Wifi,
+  Wrench,
 } from 'lucide-react';
 import type { ConnectionPhase } from '../hooks/useDesktopDevices.ts';
 import type { DeviceProfile, NavViewId } from '../types/device.ts';
@@ -41,10 +42,11 @@ const NAV_ITEMS: Array<{
   icon: typeof Box;
 }> = [
   { id: 'containers', label: '容器', icon: Box },
+  { id: 'tools', label: '工具环境', icon: Wrench },
   { id: 'services', label: '服务', icon: ServerCog },
   { id: 'terminal', label: '终端', icon: Terminal },
   { id: 'install', label: '安装与导入', icon: Download },
-  { id: 'network', label: '网络与 SSH', icon: Network },
+  { id: 'network', label: '网络与端口', icon: Network },
   { id: 'logs', label: '日志与内核', icon: Cpu },
 ];
 
@@ -65,7 +67,7 @@ function connectionMeta(phase: ConnectionPhase): {
 }
 
 /**
- * Collapsible desktop sidebar featuring multi-device switcher and 6 navigation views.
+ * Collapsible desktop sidebar featuring multi-device switcher and 7 navigation views.
  */
 export function Sidebar({
   collapsed,

@@ -1,22 +1,14 @@
-import {
-  Badge,
-  Button,
-  Card,
-  copyTextWithFallback,
-  Input,
-  SettingRow,
-  StatusBanner,
-  Switch,
-  useToast,
-} from '@gojona/ui';
-import { Code2, Copy, KeyRound, Plus, RefreshCw, ShieldAlert, Trash2, Wifi } from 'lucide-react';
+import { Badge, Button, Card, copyTextWithFallback, Input, useToast } from '@gojona/ui';
+import { Code2, Copy, ExternalLink, KeyRound, Plus, Trash2 } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
 import { formatSshConfigSnippet, formatVsCodeRemoteUri, summarizeSshKey } from '../lib/format.ts';
+import { buildPreviewSshTarget, resolveLaunchSshTarget } from '../lib/sshTarget.ts';
 import type { StrataTransport } from '../transport/httpWsTransport.ts';
 import { tauriDeviceBridge } from '../transport/tauriBridge.ts';
 import type { DeviceProfile } from '../types/device.ts';
 import type { ContainerStatusSnapshot, WebStatusResult } from '../types/protocol.ts';
 import { STRATA_METHODS } from '../types/rpc.ts';
+import { PortForwardAndApiCard } from './PortForwardAndApiCard.tsx';
 
 export interface NetworkSshViewProps {
   device: DeviceProfile | null;
@@ -28,8 +20,8 @@ export interface NetworkSshViewProps {
 }
 
 /**
- * Network, SSH key management, `~/.ssh/config` generator, VS Code Remote-SSH launcher,
- * ADB forward helper, and LAN Bearer-token security controls.
+ * Network, SSH key management, `~/.ssh/config` generator, VS Code / external terminal SSH launcher,
+ * ADB port forwarding table, and LAN Bearer-token security controls.
  */
 export function NetworkSshView({
   device,
@@ -43,7 +35,6 @@ export function NetworkSshView({
   const [selectedContainer, setSelectedContainer] = useState(containers[0]?.id ?? 'main');
   const [sshKeys, setSshKeys] = useState<string[]>([]);
   const [newKey, setNewKey] = useState('');
-  const [rotatedToken, setRotatedToken] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   const activeContainer =
@@ -65,20 +56,9 @@ export function NetworkSshView({
     void loadKeys();
   }, [loadKeys]);
 
-  const sshTarget = {
-    user: device?.sshUser || 'root',
-    host:
-      activeContainer?.primaryIpv4 && activeContainer.primaryIpv4 !== '0.0.0.0'
-        ? activeContainer.primaryIpv4
-        : (device?.host ?? '127.0.0.1'),
-    port: activeContainer?.sshPort ?? 2222,
-    remotePath: '/root',
-    alias: `strata-${activeContainer?.id ?? 'main'}`,
-  };
-
+  const sshTarget = buildPreviewSshTarget(device, activeContainer);
   const sshConfigText = formatSshConfigSnippet(sshTarget);
   const vscodeUri = formatVsCodeRemoteUri(sshTarget);
-  const adbForwardCmd = `adb forward tcp:${webStatus?.port ?? 7681} tcp:${webStatus?.port ?? 7681} && adb forward tcp:${sshTarget.port} tcp:${sshTarget.port}`;
 
   const copyText = (text: string, label: string) => {
     void copyTextWithFallback(text).then((ok) =>
@@ -86,13 +66,37 @@ export function NetworkSshView({
     );
   };
 
+  const handleLaunchIde = (mode: 'vscode' | 'terminal') => {
+    if (!activeContainer) return;
+    void runAction(mode === 'vscode' ? '拉起 VS Code Remote-SSH' : '启动外部终端 SSH', async () => {
+      const { target, forwardedLocalPort } = await resolveLaunchSshTarget(device, activeContainer);
+      if (mode === 'vscode') {
+        await tauriDeviceBridge.openVsCodeRemote(target);
+        pushToast(
+          forwardedLocalPort
+            ? `已自动转发 SSH (127.0.0.1:${forwardedLocalPort}) 并拉起 VS Code`
+            : '已拉起 VS Code Remote-SSH',
+          'info',
+        );
+      } else {
+        const prog = await tauriDeviceBridge.openNativeTerminal(target);
+        pushToast(
+          forwardedLocalPort
+            ? `已自动转发 SSH (127.0.0.1:${forwardedLocalPort}) 并启动 ${prog}`
+            : `已启动外部终端: ${prog}`,
+          'info',
+        );
+      }
+    });
+  };
+
   return (
     <div className="flex h-full flex-col gap-4 overflow-y-auto p-5 strata-scroll">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="text-lg font-semibold text-[var(--text-primary)]">网络与 SSH 配置</h1>
+          <h1 className="text-lg font-semibold text-[var(--text-primary)]">网络与端口转发</h1>
           <p className="text-xs text-[var(--text-secondary)]">
-            管理 Dropbear 公钥授权、VS Code Remote-SSH 一键连接、ADB 隧道与局域网 API 鉴权
+            管理 Dropbear 公钥授权、VS Code / 外部终端 SSH 一键直连、USB ADB 端口转发与 API 鉴权
           </p>
         </div>
         <div className="flex items-center gap-1 rounded-lg border border-[var(--border-hairline)] bg-[var(--surface-elevated)] p-1">
@@ -223,126 +227,55 @@ export function NetworkSshView({
 
         <Card className="flex flex-col gap-3 p-4">
           <span className="text-sm font-semibold text-[var(--text-primary)]">
-            VS Code Remote-SSH 与 ADB 端口转发
+            一键连 IDE 与外部终端
           </span>
           <div className="flex items-center gap-2">
             <Input mono readOnly value={vscodeUri} />
             <Button
               size="sm"
               variant="primary"
-              onClick={() =>
-                void tauriDeviceBridge
-                  .openVsCodeRemote(sshTarget)
-                  .then(() => pushToast('已拉起 VS Code Remote-SSH', 'info'))
-                  .catch((e) => pushToast(String(e), 'danger'))
-              }
+              disabled={!activeContainer}
+              onClick={() => handleLaunchIde('vscode')}
             >
               <Code2 className="size-3.5" />
-              打开
+              VS Code
             </Button>
           </div>
-          <div className="flex flex-col gap-1">
-            <span className="text-xs text-[var(--text-secondary)]">USB 无 Wi-Fi 转发命令</span>
-            <div className="flex items-center gap-2">
-              <Input mono readOnly value={adbForwardCmd} />
-              <Button
-                size="sm"
-                variant="secondary"
-                onClick={() => copyText(adbForwardCmd, 'ADB 转发命令')}
-              >
-                <Copy className="size-3.5" />
-                复制
-              </Button>
-            </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              size="sm"
+              variant="secondary"
+              disabled={!activeContainer}
+              onClick={() => handleLaunchIde('terminal')}
+            >
+              <ExternalLink className="size-3.5" />
+              外部终端 SSH
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() =>
+                copyText(`ssh -p ${sshTarget.port} ${sshTarget.user}@${sshTarget.host}`, 'SSH 命令')
+              }
+            >
+              <Copy className="size-3.5" />
+              复制 SSH 命令
+            </Button>
           </div>
         </Card>
       </div>
 
-      {/* Embedded API & LAN Access Security */}
-      <Card className="flex flex-col gap-3 p-4">
-        <div className="flex items-center justify-between gap-2">
-          <div className="flex items-center gap-2">
-            <Wifi className="size-4 text-[var(--accent)]" />
-            <span className="text-sm font-semibold text-[var(--text-primary)]">
-              设备端控制面 API 与 Bearer Token
-            </span>
-          </div>
-          {webStatus && (
-            <Badge variant={webStatus.lanEnabled ? 'warning' : 'success'}>
-              {webStatus.listenAddr}:{webStatus.port}
-            </Badge>
-          )}
-        </div>
-
-        <SettingRow
-          variant="plain"
-          title="允许局域网 (RFC1918) 访问"
-          description="关闭时仅监听 127.0.0.1（通过 ADB 隧道访问）；开启后允许内网 IP 携带 Bearer Token 直连"
-          control={
-            <Switch
-              checked={Boolean(webStatus?.lanEnabled)}
-              disabled={busy || !transport}
-              onCheckedChange={async (checked) => {
-                if (!transport) return;
-                setBusy(true);
-                await runAction('更新局域网访问策略', () =>
-                  transport.invoke(STRATA_METHODS.WEB_CONFIGURE, { lanEnabled: checked }),
-                );
-                await onRefresh();
-                pushToast(checked ? '已开启 RFC1918 局域网访问' : '已切换为仅本机回环监听', 'info');
-                setBusy(false);
-              }}
-            />
-          }
-        />
-
-        <div className="flex flex-wrap items-center justify-between gap-2 border-t border-[var(--border-hairline)] pt-3">
-          <div className="text-xs text-[var(--text-secondary)]">
-            Token 文件路径：
-            <span className="font-mono">
-              {webStatus?.tokenPath ?? '/data/adb/strata/run/web.token'}
-            </span>
-          </div>
-          <Button
-            size="sm"
-            variant="danger"
-            disabled={busy || !transport}
-            onClick={async () => {
-              if (!transport) return;
-              setBusy(true);
-              const res = await runAction('轮换 Bearer Token', () =>
-                transport.invoke(STRATA_METHODS.WEB_ROTATE_TOKEN),
-              );
-              if (res) {
-                setRotatedToken(res.token);
-                pushToast('Token 已轮换，旧会话已吊销，请及时保存新 Token', 'warning');
-              }
-              setBusy(false);
-            }}
-          >
-            <RefreshCw className="size-3.5" />
-            轮换 Bearer Token
-          </Button>
-        </div>
-
-        {rotatedToken && (
-          <StatusBanner
-            tone="warning"
-            title="新生成的 Bearer Token（仅显示一次）"
-            description={rotatedToken}
-            action={
-              <Button
-                size="sm"
-                variant="secondary"
-                onClick={() => copyText(rotatedToken, '新 Bearer Token')}
-              >
-                <ShieldAlert className="size-3.5" />
-                复制 Token
-              </Button>
-            }
-          />
-        )}
-      </Card>
+      <PortForwardAndApiCard
+        device={device}
+        transport={transport}
+        activeContainerSshPort={activeContainer?.sshPort ?? 2222}
+        webStatus={webStatus}
+        busy={busy}
+        setBusy={setBusy}
+        onRefresh={onRefresh}
+        onCopyText={copyText}
+        runAction={runAction}
+      />
     </div>
   );
 }

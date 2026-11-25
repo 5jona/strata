@@ -66,6 +66,24 @@ import type {
   TaskRunParams,
   TaskRunResult,
   TaskSummary,
+  ToolsBootstrapParams,
+  ToolsCacheCleanParams,
+  ToolsCacheCleanResult,
+  ToolsCatalogParams,
+  ToolsCatalogResult,
+  ToolsConfigGetParams,
+  ToolsConfigResult,
+  ToolsConfigSetParams,
+  ToolsDoctorParams,
+  ToolsDoctorResult,
+  ToolsInstallParams,
+  ToolsListParams,
+  ToolsListResult,
+  ToolsStateChangedPayload,
+  ToolsStatusParams,
+  ToolsStatusResult,
+  ToolsUninstallParams,
+  ToolsUpgradeParams,
   WebConfigureParams,
   WebRotateTokenResult,
   WebStatusResult,
@@ -121,6 +139,17 @@ export const STRATA_METHODS = {
   HUD_STATE: 'hud.state',
   HUD_SET: 'hud.set',
   EVENTS_SUBSCRIBE: 'events.subscribe',
+  TOOLS_STATUS: 'tools.status',
+  TOOLS_LIST: 'tools.list',
+  TOOLS_CATALOG: 'tools.catalog',
+  TOOLS_CONFIG_GET: 'tools.configGet',
+  TOOLS_CONFIG_SET: 'tools.configSet',
+  TOOLS_BOOTSTRAP: 'tools.bootstrap',
+  TOOLS_INSTALL: 'tools.install',
+  TOOLS_UNINSTALL: 'tools.uninstall',
+  TOOLS_UPGRADE: 'tools.upgrade',
+  TOOLS_DOCTOR: 'tools.doctor',
+  TOOLS_CACHE_CLEAN: 'tools.cacheClean',
 } as const;
 
 /** Typed RPC method parameter and result map. */
@@ -317,6 +346,50 @@ export interface StrataRpcMethodMap {
     params: void;
     result: EventsSubscribeResult;
   };
+  'tools.status': {
+    params: ToolsStatusParams;
+    result: ToolsStatusResult;
+  };
+  'tools.list': {
+    params: ToolsListParams;
+    result: ToolsListResult;
+  };
+  'tools.catalog': {
+    params: ToolsCatalogParams;
+    result: ToolsCatalogResult;
+  };
+  'tools.configGet': {
+    params: ToolsConfigGetParams;
+    result: ToolsConfigResult;
+  };
+  'tools.configSet': {
+    params: ToolsConfigSetParams;
+    result: ToolsConfigResult;
+  };
+  'tools.bootstrap': {
+    params: ToolsBootstrapParams;
+    result: TaskRunResult;
+  };
+  'tools.install': {
+    params: ToolsInstallParams;
+    result: TaskRunResult;
+  };
+  'tools.uninstall': {
+    params: ToolsUninstallParams;
+    result: TaskRunResult;
+  };
+  'tools.upgrade': {
+    params: ToolsUpgradeParams;
+    result: TaskRunResult;
+  };
+  'tools.doctor': {
+    params: ToolsDoctorParams;
+    result: ToolsDoctorResult;
+  };
+  'tools.cacheClean': {
+    params: ToolsCacheCleanParams;
+    result: ToolsCacheCleanResult;
+  };
 }
 
 /** Host and plugin event names. */
@@ -327,6 +400,7 @@ export const STRATA_EVENTS = {
   SERVICE_STATE_CHANGED: 'service.stateChanged',
   TASK_OUTPUT: 'task.output',
   TASK_EXIT: 'task.exit',
+  TOOLS_STATE_CHANGED: 'tools.stateChanged',
 } as const;
 
 /** Typed event payload map. */
@@ -337,4 +411,5 @@ export interface StrataEventPayloadMap {
   'service.stateChanged': ServiceStateChangedPayload;
   'task.output': TaskOutputPayload;
   'task.exit': TaskExitPayload;
+  'tools.stateChanged': ToolsStateChangedPayload;
 }

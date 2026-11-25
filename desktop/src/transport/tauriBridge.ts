@@ -1,4 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
+import pkg from '../../package.json' with { type: 'json' };
 import type {
   AdbDevice,
   AdbTunnel,
@@ -6,6 +7,7 @@ import type {
   DeviceStoreFile,
   EndpointProbeResult,
   NativeTerminalKind,
+  PortForwardEntry,
   SshTarget,
 } from '../types/device.ts';
 
@@ -43,6 +45,8 @@ const BROWSER_MOCK_ADB_DEVICES: AdbDevice[] = [
     isWireless: true,
   },
 ];
+
+const browserMockForwards: PortForwardEntry[] = [];
 
 function readBrowserStore(): DeviceStoreFile {
   if (typeof window === 'undefined') {
@@ -127,6 +131,58 @@ export const tauriDeviceBridge = {
     return true;
   },
 
+  async forwardDevicePort(
+    serial: string,
+    remotePort: number,
+    localPort?: number,
+  ): Promise<PortForwardEntry> {
+    if (isTauriRuntime()) {
+      return invoke<PortForwardEntry>('forward_device_port', {
+        serial,
+        remotePort,
+        localPort: localPort ?? null,
+      });
+    }
+    const existing = browserMockForwards.find(
+      (f) =>
+        f.serial === serial &&
+        f.remotePort === remotePort &&
+        (!localPort || f.localPort === localPort),
+    );
+    if (existing) return { ...existing };
+    const assignedLocal = localPort && localPort > 0 ? localPort : 20000 + remotePort;
+    const entry: PortForwardEntry = {
+      serial,
+      localPort: assignedLocal,
+      remotePort,
+      localSpec: `tcp:${assignedLocal}`,
+      remoteSpec: `tcp:${remotePort}`,
+    };
+    browserMockForwards.push(entry);
+    return { ...entry };
+  },
+
+  async listPortForwards(serial?: string): Promise<PortForwardEntry[]> {
+    if (isTauriRuntime()) {
+      return invoke<PortForwardEntry[]>('list_port_forwards', { serial: serial ?? null });
+    }
+    return browserMockForwards.filter((f) => !serial || f.serial === serial).map((f) => ({ ...f }));
+  },
+
+  async removePortForward(serial: string, localPort: number): Promise<boolean> {
+    if (isTauriRuntime()) {
+      return invoke<boolean>('remove_port_forward', { serial, localPort });
+    }
+    const idx = browserMockForwards.findIndex(
+      (f) => f.serial === serial && f.localPort === localPort,
+    );
+    if (idx >= 0) {
+      browserMockForwards.splice(idx, 1);
+      return true;
+    }
+    return false;
+  },
+
   async loadSavedDevices(): Promise<DeviceStoreFile> {
     if (isTauriRuntime()) {
       return invoke<DeviceStoreFile>('load_saved_devices');
@@ -174,7 +230,7 @@ export const tauriDeviceBridge = {
       reachable: true,
       authenticated: Boolean(token?.trim()),
       latencyMs: 6,
-      version: '0.1.0-preview',
+      version: `${pkg.version}-preview`,
       lanEnabled: host !== '127.0.0.1',
     };
   },

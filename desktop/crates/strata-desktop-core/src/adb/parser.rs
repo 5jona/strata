@@ -44,6 +44,17 @@ pub struct AdbTunnel {
     pub token: Option<String>,
 }
 
+/// Generic `adb forward` mapping entry for container SSH or service ports.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PortForwardEntry {
+    pub serial: String,
+    pub local_port: u16,
+    pub remote_port: u16,
+    pub local_spec: String,
+    pub remote_spec: String,
+}
+
 /// Errors produced by ADB discovery and tunnel operations.
 #[derive(Debug, Error)]
 pub enum AdbError {
@@ -59,6 +70,8 @@ pub enum AdbError {
     PortAllocation(#[source] std::io::Error),
     #[error("invalid ADB serial `{0}`")]
     InvalidSerial(String),
+    #[error("invalid port `{0}` (must be 1..=65535)")]
+    InvalidPort(u16),
 }
 
 /// Parses `adb devices -l` stdout into structured device descriptors.
@@ -119,6 +132,47 @@ pub fn parse_adb_devices_output(stdout: &str) -> Vec<AdbDevice> {
     devices
 }
 
+/// Parses `adb forward --list` stdout into structured TCP port forward entries.
+#[must_use]
+pub fn parse_adb_forward_list(stdout: &str, filter_serial: Option<&str>) -> Vec<PortForwardEntry> {
+    let mut entries = Vec::new();
+    for raw_line in stdout.lines() {
+        let line = raw_line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let mut parts = line.split_whitespace();
+        let (Some(serial), Some(local_spec), Some(remote_spec)) =
+            (parts.next(), parts.next(), parts.next())
+        else {
+            continue;
+        };
+        if let Some(target_serial) = filter_serial
+            && serial != target_serial
+        {
+            continue;
+        }
+        let Some(local_port) = local_spec
+            .strip_prefix("tcp:")
+            .and_then(|p| p.parse::<u16>().ok())
+        else {
+            continue;
+        };
+        let remote_port = remote_spec
+            .strip_prefix("tcp:")
+            .and_then(|p| p.parse::<u16>().ok())
+            .unwrap_or(0);
+        entries.push(PortForwardEntry {
+            serial: serial.to_owned(),
+            local_port,
+            remote_port,
+            local_spec: local_spec.to_owned(),
+            remote_spec: remote_spec.to_owned(),
+        });
+    }
+    entries
+}
+
 /// Validates an ADB serial identifier before passing it as an argument to `adb -s`.
 pub(crate) fn validate_serial(serial: &str) -> Result<(), AdbError> {
     if serial.is_empty()
@@ -153,5 +207,23 @@ DEADBEEF               unauthorized transport_id:9
         assert!(!list[0].is_wireless);
         assert!(list[1].is_wireless);
         assert_eq!(list[2].state, AdbDeviceState::Unauthorized);
+    }
+
+    #[test]
+    fn parses_and_filters_adb_forward_list() {
+        let sample = "\
+emulator-5554 tcp:17681 tcp:7681
+emulator-5554 tcp:22222 tcp:2222
+192.0.2.20:5555 tcp:17682 tcp:7681
+emulator-5554 localabstract:demo tcp:8080
+";
+        let all = parse_adb_forward_list(sample, None);
+        assert_eq!(all.len(), 3);
+        assert_eq!(all[1].local_port, 22222);
+        assert_eq!(all[1].remote_port, 2222);
+
+        let filtered = parse_adb_forward_list(sample, Some("emulator-5554"));
+        assert_eq!(filtered.len(), 2);
+        assert!(filtered.iter().all(|e| e.serial == "emulator-5554"));
     }
 }

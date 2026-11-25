@@ -3,7 +3,7 @@
 use std::process::Command;
 use std::time::Duration;
 
-use strata_desktop_core::adb::{AdbDevice, AdbTunnel};
+use strata_desktop_core::adb::{AdbDevice, AdbTunnel, PortForwardEntry};
 use strata_desktop_core::devices::{DeviceProfile, DeviceStoreFile};
 use strata_desktop_core::launcher::{
     NativeTerminalKind, SshTarget, build_terminal_launch_command, build_vscode_remote_uri,
@@ -51,6 +51,54 @@ pub(crate) fn disconnect_device(
         .lock()
         .map_err(|_| "ADB state mutex poisoned".to_owned())?;
     guard.disconnect_device(&serial).map_err(|e| e.to_string())
+}
+
+/// Forwards an arbitrary container or device TCP port to `127.0.0.1` over ADB.
+#[tauri::command]
+pub(crate) fn forward_device_port(
+    state: State<'_, AppState>,
+    serial: String,
+    remote_port: u16,
+    local_port: Option<u16>,
+) -> Result<PortForwardEntry, String> {
+    let mut guard = state
+        .adb
+        .lock()
+        .map_err(|_| "ADB state mutex poisoned".to_owned())?;
+    guard
+        .forward_device_port(&serial, remote_port, local_port)
+        .map_err(|e| e.to_string())
+}
+
+/// Lists active TCP `adb forward` entries, optionally filtered by device serial.
+#[tauri::command]
+pub(crate) fn list_port_forwards(
+    state: State<'_, AppState>,
+    serial: Option<String>,
+) -> Result<Vec<PortForwardEntry>, String> {
+    let guard = state
+        .adb
+        .lock()
+        .map_err(|_| "ADB state mutex poisoned".to_owned())?;
+    guard
+        .list_port_forwards(serial.as_deref())
+        .map_err(|e| e.to_string())
+}
+
+/// Removes an active `adb forward` rule on `serial` for `tcp:<local_port>`.
+#[tauri::command]
+pub(crate) fn remove_port_forward(
+    state: State<'_, AppState>,
+    serial: String,
+    local_port: u16,
+) -> Result<bool, String> {
+    let mut guard = state
+        .adb
+        .lock()
+        .map_err(|_| "ADB state mutex poisoned".to_owned())?;
+    guard
+        .remove_port_forward(&serial, local_port)
+        .map_err(|e| e.to_string())
 }
 
 /// Loads saved multi-device desktop profiles from local config storage.

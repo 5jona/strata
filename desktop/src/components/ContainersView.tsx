@@ -1,18 +1,22 @@
-import { Button, copyTextWithFallback, EmptyState, Input, MetricTile, useToast } from '@gojona/ui';
-import { Box, HardDrive, Plus, RefreshCw, Search, ServerCog, Shield } from 'lucide-react';
+import { Button, copyTextWithFallback, EmptyState, Input, useToast } from '@gojona/ui';
+import { Box, Plus, RefreshCw, Search } from 'lucide-react';
 import { useState } from 'react';
-import { formatBytes, formatSshCommand, formatUptime } from '../lib/format.ts';
+import { formatBytes, formatSshCommand } from '../lib/format.ts';
+import { buildPreviewSshTarget, resolveLaunchSshTarget } from '../lib/sshTarget.ts';
 import type { StrataTransport } from '../transport/httpWsTransport.ts';
 import { tauriDeviceBridge } from '../transport/tauriBridge.ts';
 import type { DeviceProfile } from '../types/device.ts';
 import type {
+  ContainerConfig,
   ContainerServiceRuntime,
   ContainerStatusSnapshot,
   DaemonSummarySnapshot,
 } from '../types/protocol.ts';
 import { STRATA_METHODS } from '../types/rpc.ts';
 import { ContainerCard } from './ContainerCard.tsx';
+import { ContainerConfigModal } from './ContainerConfigModal.tsx';
 import { type ContainerModalMode, ContainerModals } from './ContainerModals.tsx';
+import { ContainersKpiStrip } from './ContainersKpiStrip.tsx';
 
 export interface ContainersViewProps {
   device: DeviceProfile | null;
@@ -47,6 +51,10 @@ export function ContainersView({
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [modal, setModal] = useState<ContainerModalMode>(null);
+  const [configTarget, setConfigTarget] = useState<{
+    container: ContainerStatusSnapshot;
+    config: ContainerConfig;
+  } | null>(null);
 
   const filtered = containers.filter(
     (c) =>
@@ -54,8 +62,6 @@ export function ContainersView({
       c.hostname.toLowerCase().includes(query.toLowerCase()),
   );
 
-  const totalAllocated = containers.reduce((sum, c) => sum + c.disk.imageAllocatedBytes, 0);
-  const runningCount = containers.filter((c) => c.phase === 'running').length;
   const totalRunningServices = Object.values(servicesByContainer)
     .flat()
     .filter((s) => s.status === 'running').length;
@@ -70,25 +76,28 @@ export function ContainersView({
     }
   };
 
-  const resolveSshTarget = (c: ContainerStatusSnapshot) => ({
-    user: device?.sshUser || 'root',
-    host:
-      c.primaryIpv4 && c.primaryIpv4 !== '0.0.0.0' ? c.primaryIpv4 : (device?.host ?? '127.0.0.1'),
-    port: c.sshPort,
-    remotePath: '/root',
-    alias: `strata-${c.id}`,
-  });
+  const handleOpenVsCode = (c: ContainerStatusSnapshot) => {
+    void runAction('打开 VS Code Remote-SSH', async () => {
+      const { target, forwardedLocalPort } = await resolveLaunchSshTarget(device, c);
+      await tauriDeviceBridge.openVsCodeRemote(target);
+      pushToast(
+        forwardedLocalPort
+          ? `已建立 ADB SSH 转发 (127.0.0.1:${forwardedLocalPort}) 并拉起 VS Code`
+          : `已调用 VS Code Remote-SSH (${c.id})`,
+        'info',
+      );
+    });
+  };
 
   return (
     <div className="flex h-full flex-col gap-4 overflow-y-auto p-5 strata-scroll">
-      {/* Header */}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-lg font-semibold text-[var(--text-primary)]">
             容器实例 · {device?.label ?? '未选择设备'}
           </h1>
           <p className="text-xs text-[var(--text-secondary)]">
-            一键启停、连接终端或 VS Code Remote-SSH，展开卡片可执行空间回收、扩容与备份
+            一键启停、连接终端或 VS Code Remote-SSH，展开卡片可执行空间回收、DNS 同步与透传配置
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -103,35 +112,12 @@ export function ContainersView({
         </div>
       </div>
 
-      {/* KPI Strip */}
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <MetricTile
-          label="运行中容器"
-          value={`${runningCount}/${containers.length}`}
-          icon={<Box className="size-4 text-[var(--accent)]" />}
-          statusLabel={runningCount > 0 ? '活跃' : '空闲'}
-          statusVariant={runningCount > 0 ? 'success' : 'neutral'}
-        />
-        <MetricTile
-          label="托管后台服务"
-          value={totalRunningServices}
-          unit="个运行中"
-          icon={<ServerCog className="size-4 text-[var(--accent)]" />}
-        />
-        <MetricTile
-          label="磁盘实际占用"
-          value={formatBytes(totalAllocated)}
-          icon={<HardDrive className="size-4 text-[var(--accent)]" />}
-        />
-        <MetricTile
-          label="stratad 运行时长"
-          value={daemonStatus ? formatUptime(daemonStatus.uptimeMs) : '—'}
-          hint={daemonStatus ? `PID ${daemonStatus.pid}` : undefined}
-          icon={<Shield className="size-4 text-[var(--accent)]" />}
-        />
-      </div>
+      <ContainersKpiStrip
+        containers={containers}
+        runningServiceCount={totalRunningServices}
+        daemonStatus={daemonStatus}
+      />
 
-      {/* Search bar */}
       <div className="relative max-w-sm">
         <Search className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-[var(--text-secondary)]" />
         <Input
@@ -143,7 +129,6 @@ export function ContainersView({
         />
       </div>
 
-      {/* Container List */}
       {filtered.length === 0 ? (
         <EmptyState
           icon={<Box className="size-8" />}
@@ -196,20 +181,9 @@ export function ContainersView({
                   })
                 }
                 onOpenTerminal={() => onOpenTerminal(c.id)}
-                onOpenVsCode={() => {
-                  const target = resolveSshTarget(c);
-                  void tauriDeviceBridge
-                    .openVsCodeRemote(target)
-                    .then(() => pushToast(`已调用 VS Code Remote-SSH (${c.id})`, 'info'))
-                    .catch((err) =>
-                      pushToast(
-                        `启动 VS Code 失败: ${err instanceof Error ? err.message : String(err)}`,
-                        'danger',
-                      ),
-                    );
-                }}
+                onOpenVsCode={() => handleOpenVsCode(c)}
                 onCopySsh={() => {
-                  const cmd = formatSshCommand(resolveSshTarget(c));
+                  const cmd = formatSshCommand(buildPreviewSshTarget(device, c));
                   void copyTextWithFallback(cmd).then((ok) =>
                     pushToast(ok ? `已复制: ${cmd}` : '复制失败', ok ? 'success' : 'warning'),
                   );
@@ -246,13 +220,20 @@ export function ContainersView({
                     pushToast(`已开始下载 strata-${c.id}.${format}`, 'info');
                   });
                 }}
+                onSyncDns={() =>
+                  transport &&
+                  void withBusy(c.id, `同步 DNS ${c.id}`, async () => {
+                    await transport.invoke(STRATA_METHODS.CONTAINER_SYNC_DNS, { container: c.id });
+                    pushToast(`已将 Android DNS 同步至 ${c.id}`, 'success');
+                  })
+                }
                 onConfig={() => {
                   if (!transport) return;
                   void runAction('读取容器配置', async () => {
                     const res = await transport.invoke(STRATA_METHODS.CONTAINER_CONFIG_GET, {
                       container: c.id,
                     });
-                    setModal({ kind: 'config', container: c, config: res.config });
+                    setConfigTarget({ container: c, config: res.config });
                   });
                 }}
                 onDelete={() => setModal({ kind: 'delete', container: c })}
@@ -285,13 +266,6 @@ export function ContainersView({
             pushToast(`已克隆容器 ${targetId}`, 'success');
           });
         }}
-        onSaveConfig={async (patch) => {
-          if (!transport) return;
-          await withBusy(patch.container ?? 'main', '保存容器配置', async () => {
-            await transport.invoke(STRATA_METHODS.CONTAINER_CONFIG_PATCH, patch);
-            pushToast('容器配置已保存', 'success');
-          });
-        }}
         onDelete={async (id, deleteImage) => {
           if (!transport) return;
           await withBusy(id, '删除容器', async () => {
@@ -301,6 +275,21 @@ export function ContainersView({
               force: true,
             });
             pushToast(`容器 ${id} 已删除`, 'info');
+          });
+        }}
+      />
+
+      <ContainerConfigModal
+        open={configTarget !== null}
+        container={configTarget?.container ?? null}
+        config={configTarget?.config ?? null}
+        busy={busyId !== null}
+        onClose={() => setConfigTarget(null)}
+        onSave={async (patch) => {
+          if (!transport) return;
+          await withBusy(patch.container ?? 'main', '保存容器配置', async () => {
+            await transport.invoke(STRATA_METHODS.CONTAINER_CONFIG_PATCH, patch);
+            pushToast('容器配置已保存', 'success');
           });
         }}
       />

@@ -3,7 +3,6 @@ import {
   Button,
   Card,
   Input,
-  ProgressBar,
   SegmentedControl,
   SettingRow,
   Slider,
@@ -11,13 +10,14 @@ import {
   Switch,
   useToast,
 } from '@gojona/ui';
-import { Download, FolderUp, Globe, RefreshCw, XCircle } from 'lucide-react';
+import { Download, FolderUp, Globe, RefreshCw } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { formatBytes } from '../lib/format.ts';
 import type { StrataTransport } from '../transport/httpWsTransport.ts';
 import type { ContainerJobProgressPayload, DistroEntry, DistroMirror } from '../types/protocol.ts';
 import { STRATA_METHODS } from '../types/rpc.ts';
 import { LocalImportDropzone } from './LocalImportDropzone.tsx';
+import { ProvisionJobsBanner } from './ProvisionJobsBanner.tsx';
 
 export interface InstallViewProps {
   transport: StrataTransport | null;
@@ -143,52 +143,7 @@ export function InstallView({ transport, activeJobs, onRefresh, runAction }: Ins
         />
       </div>
 
-      {activeJobs.length > 0 && (
-        <div className="flex flex-col gap-2">
-          {activeJobs.map((job) => (
-            <Card key={job.jobId} className="flex flex-col gap-2 p-3.5">
-              <div className="flex items-center justify-between gap-2">
-                <div className="flex items-center gap-2">
-                  <span className="text-sm font-medium text-[var(--text-primary)]">
-                    {job.container}
-                  </span>
-                  <Badge
-                    variant={
-                      job.state === 'completed'
-                        ? 'success'
-                        : job.state === 'failed'
-                          ? 'danger'
-                          : 'accent'
-                    }
-                  >
-                    {job.stage}
-                  </Badge>
-                </div>
-                {job.state === 'running' && transport && (
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    onClick={() =>
-                      void transport.invoke(STRATA_METHODS.CONTAINER_JOB_CANCEL, {
-                        jobId: job.jobId,
-                      })
-                    }
-                  >
-                    <XCircle className="size-3.5" />
-                    取消
-                  </Button>
-                )}
-              </div>
-              <ProgressBar
-                value={job.percent ?? 0}
-                showValue
-                label={job.message ?? '处理中…'}
-                tone={job.state === 'failed' ? 'danger' : 'accent'}
-              />
-            </Card>
-          ))}
-        </div>
-      )}
+      <ProvisionJobsBanner transport={transport} jobs={activeJobs} />
 
       {sourceMode === 'online' ? (
         <div className="flex flex-col gap-3">

@@ -1,4 +1,14 @@
 {
   "$schema": "https://biomejs.dev/schemas/2.6.8/schema.json",
-  "extends": ["@gojona/config/biome.json"]
+  "extends": ["@gojona/config/biome.json"],
+  "files": {
+    "includes": [
+      "!src/generated",
+      "!**/dist",
+      "!**/node_modules",
+      "!**/vendor",
+      "!**/pnpm-lock.yaml",
+      "!**/*.instructions.md"
+    ]
+  }
 }

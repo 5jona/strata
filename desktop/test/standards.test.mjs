@@ -29,7 +29,7 @@ function walkFiles(dir, extensions, out = []) {
   return out;
 }
 
-test('all desktop TypeScript and Rust source files stay within the 400-line hard limit', () => {
+test('all desktop TypeScript and Rust source files stay within the 300-line target', () => {
   const files = [
     ...walkFiles(path.join(DESKTOP_ROOT, 'src'), ['.ts', '.tsx', '.css']),
     ...walkFiles(path.join(DESKTOP_ROOT, 'crates'), ['.rs']),
@@ -40,14 +40,14 @@ test('all desktop TypeScript and Rust source files stay within the 400-line hard
   const violations = [];
   for (const file of files) {
     const lines = fs.readFileSync(file, 'utf8').split('\n').length;
-    if (lines > 400) {
+    if (lines > 300) {
       violations.push(`${path.relative(DESKTOP_ROOT, file)} (${lines} lines)`);
     }
   }
   assert.deepEqual(
     violations,
     [],
-    `Desktop files exceeding 400-line hard limit:\n${violations.join('\n')}`,
+    `Desktop files exceeding 300-line limit:\n${violations.join('\n')}`,
   );
 });
 

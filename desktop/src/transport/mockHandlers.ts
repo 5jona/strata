@@ -233,6 +233,10 @@ export function setMockServiceStatus(
 
 export function patchMockContainerConfig(dataset: MockDeviceDataset, p: Record<string, unknown>) {
   const rec = requireMockContainer(dataset, p.container as string | undefined);
+  if (typeof p.enabled === 'boolean') {
+    rec.config.enabled = p.enabled;
+    rec.snapshot.enabled = p.enabled;
+  }
   if (typeof p.hostname === 'string') {
     rec.config.hostname = p.hostname;
     rec.snapshot.hostname = p.hostname;
@@ -254,6 +258,12 @@ export function patchMockContainerConfig(dataset: MockDeviceDataset, p: Record<s
     rec.snapshot.hostRuntime = p.hostRuntime;
   }
   if (typeof p.noatime === 'boolean') rec.config.noatime = p.noatime;
+  if (Array.isArray(p.extraCharDevs)) {
+    rec.config.extraCharDevs = p.extraCharDevs.map(String);
+  }
+  if (Array.isArray(p.extraMounts)) {
+    rec.config.extraMounts = p.extraMounts as ContainerConfig['extraMounts'];
+  }
   return { container: rec.snapshot.id, config: rec.config };
 }
 

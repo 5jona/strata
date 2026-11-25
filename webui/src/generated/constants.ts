@@ -32,6 +32,12 @@ export const STRATA_PROTOCOL = {
   DEFAULT_DISTRO_MIRROR_TUNA: 'https://mirrors.tuna.tsinghua.edu.cn/lxc-images',
   /** Official LinuxContainers Simplestreams fallback mirror. */
   DEFAULT_DISTRO_MIRROR_OFFICIAL: 'https://images.linuxcontainers.org',
+  /** Canonical in-container directory and env layout schema version. */
+  CONTAINER_LAYOUT_SCHEMA_VERSION: 1,
+  /** Unified container PATH across PTY, exec, TaskRunner, services, and Dropbear SSH. */
+  DEFAULT_CONTAINER_PATH: '/opt/strata/mise/shims:/opt/strata/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
+  /** Canonical default working directory inside Strata containers. */
+  DEFAULT_CONTAINER_WORKDIR: '/workspace',
 } as const;
 
 /** Canonical Android host and in-container runtime paths. */
@@ -44,9 +50,26 @@ export const STRATA_PATHS = {
   DEFAULT_DAEMON_LOG_PATH: '/data/adb/strata/run/logs/stratad.log',
   DEFAULT_WEB_TOKEN_PATH: '/data/adb/strata/run/web.token',
   DEFAULT_CONTAINERS_ROOT: '/data/local/strata/containers',
+  DEFAULT_BACKUP_DIR: '/data/local/strata/backups',
   CONTAINER_RUN_DIR: '/run/strata',
   CONTAINER_HOST_ENV_PATH: '/run/strata/host.env',
   CONTAINER_DROPBEAR_PID_PATH: '/run/strata/dropbear.pid',
+  CONTAINER_WORKSPACE_DIR: '/workspace',
+  CONTAINER_OPT_ROOT: '/opt/strata',
+  CONTAINER_OPT_BIN_DIR: '/opt/strata/bin',
+  CONTAINER_MISE_DATA_DIR: '/opt/strata/mise',
+  CONTAINER_MISE_SHIMS_DIR: '/opt/strata/mise/shims',
+  CONTAINER_MISE_CONFIG_DIR: '/etc/strata/mise',
+  CONTAINER_MISE_CONFIG_FILE: '/etc/strata/mise/config.toml',
+  CONTAINER_MISE_SECRETS_FILE: '/etc/strata/mise/secrets.env',
+  CONTAINER_UV_TOOL_DIR: '/opt/strata/uv/tools',
+  CONTAINER_STRATA_ETC_DIR: '/etc/strata',
+  CONTAINER_LAYOUT_PATH: '/etc/strata/layout.json',
+  CONTAINER_PROFILE_ENV_PATH: '/etc/profile.d/strata-env.sh',
+  CONTAINER_ETC_ENVIRONMENT_PATH: '/etc/environment',
+  CONTAINER_CACHE_ROOT: '/var/cache/strata',
+  CONTAINER_MISE_CACHE_DIR: '/var/cache/strata/mise',
+  CONTAINER_UV_CACHE_DIR: '/var/cache/strata/uv',
   SELINUX_IMAGE_CONTEXT: 'u:object_r:vold_data_file:s0',
   CGROUP_V2_ROOT: '/sys/fs/cgroup',
   CGROUP_V2_NAMESPACE: 'strata',

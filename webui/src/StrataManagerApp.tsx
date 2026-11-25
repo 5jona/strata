@@ -11,53 +11,37 @@ import {
   Button,
   Card,
   cn,
-  Tabs,
-  TabsContent,
-  TabsList,
-  TabsTrigger,
+  StatusBanner,
   ThemeProvider,
   ToastProvider,
+  useCopyFeedback,
   useToast,
 } from '@gojona/ui';
-import { Layers, ServerCog, Settings2, Terminal } from 'lucide-react';
-import { useCallback, useMemo, useState } from 'react';
-import { ConfigTab } from './components/ConfigTab.tsx';
-import { OverviewTab } from './components/OverviewTab.tsx';
-import { ServicesPanel } from './components/ServicesPanel.tsx';
-import { StrataHeaderActions } from './components/StrataHeaderActions.tsx';
-import { TasksTab } from './components/TasksTab.tsx';
-import { useStrataPluginTheme } from './hooks/useStrataPluginTheme.ts';
-import { useStrataRuntime } from './hooks/useStrataRuntime.ts';
-import { createMockStrataTransport } from './lib/mockStrataBridge.ts';
+import { Layers } from 'lucide-react';
+import { useCallback, useMemo } from 'react';
 import { STRATA_MANIFEST, STRATA_PLUGIN_ID } from './manifest.ts';
-
-const STRATA_TAB_ORDER = ['overview', 'services', 'tasks', 'config'] as const;
-type StrataTab = (typeof STRATA_TAB_ORDER)[number];
+import { createMockStrataTransport } from './plugin/mockStrataBridge.ts';
+import { QuickControlSection } from './plugin/QuickControlSection.tsx';
+import { StrataHeaderActions } from './plugin/StrataHeaderActions.tsx';
+import { useStrataPluginTheme } from './plugin/useStrataPluginTheme.ts';
+import { useStrataQuickPanel } from './plugin/useStrataQuickPanel.ts';
+import { ServicesPanel } from './shared/ServicesPanel.tsx';
+import { buildSshCommand } from './shared/strataFormat.ts';
 
 const PINNED_DEFAULT_BOUNDS = { widthDp: 344, heightDp: 520 };
 
-function isStrataTab(value: string): value is StrataTab {
-  return value === 'overview' || value === 'services' || value === 'tasks' || value === 'config';
-}
-
 function StrataWorkbench() {
   const { isNativeHost, isDark, copyText } = useStrataPluginTheme();
-  const { dismiss, requestImeFocus } = useContainerAction();
+  const { dismiss } = useContainerAction();
   const backendState = usePluginBackendState();
   const { mode, isPinned, clickThrough, setMode, setClickThrough } = usePresentationMode('drawer');
   const { trigger: triggerHaptic } = useHaptics();
   const { pushToast } = useToast();
 
-  const [tab, setTab] = useState<StrataTab>('overview');
   const backendOnline = !isNativeHost || backendState === 'online';
-  const runtime = useStrataRuntime(backendOnline, isDark);
-
-  const handleImeFocusChange = useCallback(
-    (focused: boolean) => {
-      void requestImeFocus(focused).catch(() => {});
-    },
-    [requestImeFocus],
-  );
+  const panel = useStrataQuickPanel(backendOnline, isDark);
+  const active = panel.activeContainer;
+  const { copyStatus, copyText: copyWithFeedback } = useCopyFeedback({ onCopy: copyText });
 
   const handleCycleMode = useCallback(() => {
     void triggerHaptic('click');
@@ -75,30 +59,12 @@ function StrataWorkbench() {
     void setClickThrough(!clickThrough).catch(() => {});
   }, [clickThrough, setClickThrough, triggerHaptic]);
 
-  const handleCopySsh = useCallback(
-    async (sshCommand: string) => {
-      const ok = await copyText(sshCommand);
-      pushToast(ok ? `已复制：${sshCommand}` : '复制失败，请手动复制', ok ? 'success' : 'danger');
-    },
-    [copyText, pushToast],
-  );
-
-  const handleCopyText = useCallback(
-    async (text: string, label: string) => {
-      const ok = await copyText(text);
-      pushToast(ok ? `已复制 ${label}` : `复制 ${label} 失败`, ok ? 'success' : 'danger');
-    },
-    [copyText, pushToast],
-  );
-
-  const { setSelectedId, refreshConfigAndLogs } = runtime;
-  const handleSelectContainer = useCallback(
-    (containerId: string) => {
-      setSelectedId(containerId);
-      void refreshConfigAndLogs(containerId);
-    },
-    [setSelectedId, refreshConfigAndLogs],
-  );
+  const handleCopySsh = useCallback(async () => {
+    if (!active) return;
+    const cmd = buildSshCommand(active);
+    const ok = await copyWithFeedback(cmd);
+    pushToast(ok ? `已复制：${cmd}` : '复制失败，请手动复制', ok ? 'success' : 'danger');
+  }, [active, copyWithFeedback, pushToast]);
 
   return (
     <div
@@ -133,144 +99,69 @@ function StrataWorkbench() {
             mode={mode}
             isPinned={isPinned}
             clickThrough={clickThrough}
-            loading={runtime.loading}
+            loading={panel.loading}
             onToggleClickThrough={handleToggleClickThrough}
             onCycleMode={handleCycleMode}
-            onRefresh={() => void runtime.refreshAll()}
+            onRefresh={() => void panel.refreshAll()}
             onDismiss={() => void dismiss()}
           />
         }
       >
-        <div className="flex w-full grow shrink-0 flex-col gap-2.5">
-          {runtime.containers.length > 1 ? (
-            <div className="flex shrink-0 items-center gap-1.5 overflow-x-auto pb-0.5">
-              {runtime.containers.map((item) => (
+        <div className="flex flex-col gap-2.5">
+          {panel.containers.length > 1 ? (
+            <div className="flex items-center gap-1.5 overflow-x-auto pb-0.5">
+              {panel.containers.map((item) => (
                 <Button
                   key={item.id}
                   className="shrink-0"
                   size="sm"
-                  variant={item.id === runtime.selectedId ? 'pill' : 'secondary'}
-                  aria-label={`选择容器 ${item.id}`}
-                  onClick={() => handleSelectContainer(item.id)}
+                  variant={item.id === panel.selectedId ? 'pill' : 'secondary'}
+                  onClick={() => panel.selectContainer(item.id)}
                 >
                   {item.id}
-                  {item.isDefault ? ' (主力)' : ''}
                 </Button>
               ))}
             </div>
           ) : null}
 
           {!backendOnline ? (
-            <Card className="flex flex-col gap-1.5 p-3">
-              <span className="text-xs font-medium text-[var(--warning)]">
-                等待 stratad 守护进程接入
-              </span>
-              <p className="text-[11px] leading-relaxed text-[var(--text-secondary)]">
-                Strata 守护进程支持完全独立运行；当 `stratad` 启动并开启 SideVeil 桥接后会自动上线。
-              </p>
-            </Card>
-          ) : runtime.lastError ? (
-            <Card className="flex flex-col gap-2 p-3">
-              <span className="text-xs font-medium text-[var(--danger)]">状态读取失败</span>
-              <p className="font-mono text-[11px] text-[var(--text-secondary)]">
-                {runtime.lastError}
-              </p>
-              <Button
-                size="sm"
-                variant="secondary"
-                aria-label="重试加载状态"
-                onClick={() => void runtime.refreshAll()}
-              >
-                重试连接
-              </Button>
-            </Card>
-          ) : runtime.activeContainer ? (
-            <Tabs
-              className="flex flex-1 shrink-0 flex-col"
-              value={tab}
-              onValueChange={(v) => isStrataTab(v) && setTab(v)}
-              tabOrder={STRATA_TAB_ORDER}
-            >
-              <TabsList className="shrink-0" aria-label="Strata 管理视图切换">
-                <TabsTrigger value="overview">
-                  <Layers className="size-3.5" />
-                  总览
-                </TabsTrigger>
-                <TabsTrigger value="services">
-                  <ServerCog className="size-3.5" />
-                  服务
-                </TabsTrigger>
-                <TabsTrigger value="tasks">
-                  <Terminal className="size-3.5" />
-                  任务
-                </TabsTrigger>
-                <TabsTrigger value="config">
-                  <Settings2 className="size-3.5" />
-                  配置
-                </TabsTrigger>
-              </TabsList>
-
-              <TabsContent value="overview" className="flex-1 shrink-0">
-                <OverviewTab
-                  container={runtime.activeContainer}
-                  hudState={runtime.hudState}
-                  webStatus={runtime.webStatus}
-                  pairingToken={runtime.pairingToken}
-                  busyAction={runtime.busyAction}
-                  onLifecycle={runtime.runLifecycle}
-                  onMaintenance={runtime.runMaintenance}
-                  onUpdateHud={runtime.updateHud}
-                  onToggleWebLan={runtime.toggleWebLan}
-                  onRotateWebToken={runtime.rotateWebToken}
-                  onCopySsh={handleCopySsh}
-                  onCopyText={handleCopyText}
-                />
-              </TabsContent>
-
-              <TabsContent value="services" className="flex-1 shrink-0">
-                <ServicesPanel
-                  containerId={runtime.activeContainer.id}
-                  containerRunning={runtime.activeContainer.phase === 'running'}
-                  services={runtime.services}
-                  serviceLogs={runtime.serviceLogs}
-                  busyKey={runtime.busyAction}
-                  onRefresh={() => runtime.refreshServicesAndWeb(runtime.activeContainer?.id)}
-                  onAction={runtime.controlService}
-                  onLoadLogs={runtime.loadServiceLogs}
-                  onCopyText={handleCopyText}
-                />
-              </TabsContent>
-
-              <TabsContent value="tasks" className="flex-1 shrink-0">
-                <TasksTab
-                  containerRunning={runtime.activeContainer.phase === 'running'}
-                  tasks={runtime.tasks}
-                  activeTaskId={runtime.activeTaskId}
-                  entries={runtime.taskEntries}
-                  busy={runtime.busyAction !== null}
-                  onRunTask={runtime.runTask}
-                  onCancelTask={runtime.cancelTask}
-                  onSelectTask={runtime.selectTask}
-                  onClearConsole={runtime.clearTaskConsole}
-                  onCopyLog={copyText}
-                  onImeFocusChange={handleImeFocusChange}
-                />
-              </TabsContent>
-
-              <TabsContent value="config" className="flex-1 shrink-0">
-                <ConfigTab
-                  config={runtime.containerConfig}
-                  dropbearLogs={runtime.dropbearLogs}
-                  sshKeys={runtime.sshKeys}
-                  busy={runtime.busyAction !== null}
-                  onRefresh={() => runtime.refreshConfigAndLogs()}
-                  onSaveConfig={runtime.patchConfig}
-                  onAddSshKey={runtime.addSshKey}
-                  onCopyLog={copyText}
-                  onImeFocusChange={handleImeFocusChange}
-                />
-              </TabsContent>
-            </Tabs>
+            <StatusBanner
+              tone="warning"
+              title="stratad 后端暂不可用"
+              description="请确认 Strata 模块守护进程已启动，或打开 KernelSU WebUI 拉起服务。"
+            />
+          ) : panel.lastError ? (
+            <StatusBanner
+              tone="danger"
+              title="无法连接 stratad"
+              description={panel.lastError}
+              action={
+                <Button size="sm" variant="secondary" onClick={() => void panel.refreshAll()}>
+                  重试
+                </Button>
+              }
+            />
+          ) : active ? (
+            <>
+              <QuickControlSection
+                container={active}
+                hudState={panel.hudState}
+                busyAction={panel.busyAction}
+                copyStatus={copyStatus}
+                onLifecycle={panel.runLifecycle}
+                onCopySsh={handleCopySsh}
+                onSyncDns={panel.syncDns}
+                onUpdateHud={panel.updateHud}
+              />
+              <ServicesPanel
+                compact
+                containerId={active.id}
+                containerRunning={active.phase === 'running'}
+                services={panel.services}
+                busyKey={panel.busyAction}
+                onAction={panel.controlService}
+              />
+            </>
           ) : (
             <Card className="p-4 text-center text-xs text-[var(--text-secondary)]">
               正在读取 Strata 容器状态…

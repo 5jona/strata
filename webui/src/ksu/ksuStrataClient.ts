@@ -1,12 +1,19 @@
-import { type BridgeClient, MockTransport, shellQuote } from '@gojona/bridge';
-import { handleMockPluginInvoke } from '../lib/mock/handlers.ts';
-import { createInitialMockState } from '../lib/mock/state.ts';
-import type { StrataRpcMethodMap } from '../types.ts';
+import { type BridgeClient, shellQuote } from '@gojona/bridge';
+import { STRATA_PROTOCOL, type StrataRpcMethodMap } from '../types.ts';
 
 /** Canonical path to the Strata CLI installed inside the KernelSU module directory. */
-export const STRATA_CLI_BIN = '/data/adb/modules/strata/bin/strata';
+export const STRATA_CLI_BIN = `/data/adb/modules/${STRATA_PROTOCOL.MODULE_ID}/bin/strata`;
+
+/** Canonical path to the KernelSU service supervisor script. */
+export const STRATA_SERVICE_SH = `/data/adb/modules/${STRATA_PROTOCOL.MODULE_ID}/service.sh`;
 
 export type StrataKsuMethod = keyof StrataRpcMethodMap;
+
+/** Result returned by `strata --json web token`. */
+export interface KsuWebTokenResult {
+  token: string;
+  tokenPath: string;
+}
 
 /** Builds a POSIX-safe shell command invoking `strata rpc <method> [json]`. */
 export function buildStrataRpcShellCommand(method: string, params?: unknown): string {
@@ -22,14 +29,20 @@ export function buildStrataReadTokenCommand(): string {
   return `${shellQuote(STRATA_CLI_BIN)} --json web token </dev/null`;
 }
 
+/** Builds a non-blocking shell command launching `service.sh --now` in the background. */
+export function buildStartDaemonShellCommand(): string {
+  return `nohup /system/bin/sh ${shellQuote(STRATA_SERVICE_SH)} --now >/dev/null 2>&1 </dev/null & /system/bin/sleep 1`;
+}
+
 /** Invokes a typed `stratad` JSON-RPC method through `@gojona/bridge`'s KernelSU `exec` transport. */
 export async function invokeStrataKsuRpc<M extends StrataKsuMethod>(
   bridge: Pick<BridgeClient, 'exec'>,
   method: M,
   params?: StrataRpcMethodMap[M]['params'],
+  timeoutMs = 15_000,
 ): Promise<StrataRpcMethodMap[M]['result']> {
   const cmd = buildStrataRpcShellCommand(method, params);
-  const res = await bridge.exec(cmd, { timeoutMs: 15_000 });
+  const res = await bridge.exec(cmd, { timeoutMs });
   if (res.errno !== 0) {
     const detail = res.stderr.trim() || res.stdout.trim() || `errno ${res.errno}`;
     throw new Error(`strata rpc ${method} 失败：${detail}`);
@@ -44,48 +57,22 @@ export async function invokeStrataKsuRpc<M extends StrataKsuMethod>(
 /** Reads the current `stratad` Bearer token via `strata --json web token` (root KSU context). */
 export async function readStrataKsuWebToken(
   bridge: Pick<BridgeClient, 'exec'>,
-): Promise<{ token: string; tokenPath: string }> {
+): Promise<KsuWebTokenResult> {
   const res = await bridge.exec(buildStrataReadTokenCommand(), { timeoutMs: 8_000 });
   if (res.errno !== 0) {
     const detail = res.stderr.trim() || res.stdout.trim() || `errno ${res.errno}`;
     throw new Error(`读取 Token 失败：${detail}`);
   }
-  return JSON.parse(res.stdout.trim()) as { token: string; tokenPath: string };
+  return JSON.parse(res.stdout.trim()) as KsuWebTokenResult;
 }
 
-function unquoteSingle(token: string): string {
-  if (token.startsWith("'") && token.endsWith("'")) {
-    return token.slice(1, -1).replaceAll("'\\''", "'");
+/** Launches the `stratad` supervisor via KernelSU `service.sh --now`. */
+export async function startStrataDaemonViaKsu(bridge: Pick<BridgeClient, 'exec'>): Promise<void> {
+  const res = await bridge.exec(buildStartDaemonShellCommand(), { timeoutMs: 10_000 });
+  if (res.errno !== 0) {
+    const detail = res.stderr.trim() || res.stdout.trim() || `errno ${res.errno}`;
+    throw new Error(`拉起守护进程失败：${detail}`);
   }
-  return token;
 }
 
-/**
- * Creates a standalone preview `MockTransport` handling `strata rpc` and `strata --json web token`
- * when opening the KSU WebUI in a desktop browser outside KernelSU Manager.
- */
-export function createMockKsuStrataTransport(): MockTransport {
-  const state = createInitialMockState();
-  return new MockTransport({
-    namespace: 'strata-ksu-preview',
-    onExec: (cmd) => {
-      if (cmd.includes('web token')) {
-        return {
-          errno: 0,
-          stdout: JSON.stringify({ token: state.webToken, tokenPath: state.webStatus.tokenPath }),
-          stderr: '',
-        };
-      }
-      const normalizedCmd = cmd.replace(/\s+<\/dev\/null\s*$/, '');
-      const rpcMatch = normalizedCmd.match(/\brpc\s+('[^']*'|\S+)(?:\s+(.+))?$/);
-      if (!rpcMatch) {
-        return { errno: 1, stdout: '', stderr: `unsupported mock command: ${cmd}` };
-      }
-      const method = unquoteSingle(rpcMatch[1] ?? '');
-      const rawJson = rpcMatch[2] ? unquoteSingle(rpcMatch[2].trim()) : undefined;
-      const params = rawJson ? (JSON.parse(rawJson) as unknown) : undefined;
-      const result = handleMockPluginInvoke(state, () => {}, method, params);
-      return { errno: 0, stdout: JSON.stringify(result), stderr: '' };
-    },
-  });
-}
+export { createMockKsuStrataTransport } from './mockKsuTransport.ts';

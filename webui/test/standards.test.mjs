@@ -57,8 +57,7 @@ test('webui source files obey bridge, token, and refresh-rate standards', () => 
 });
 
 test('compiled SideVeil plugin package matches manifest.ts and Vite + Pochita bundle invariants', () => {
-  const pluginDir = path.join(REPO_ROOT, 'plugins/strata.manager');
-  const manifestPath = path.join(pluginDir, 'manifest.json');
+  const manifestPath = path.join(REPO_ROOT, 'module/plugins/strata.manager/manifest.json');
   const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
 
   assert.equal(manifest.schemaVersion, 1);
@@ -71,13 +70,13 @@ test('compiled SideVeil plugin package matches manifest.ts and Vite + Pochita bu
   assert.equal(manifest.surface?.backdrop, STRATA_MANIFEST.surface?.backdrop);
   assert.deepEqual(manifest.capabilities, STRATA_MANIFEST.capabilities);
 
-  const webDir = path.join(pluginDir, 'web');
+  const webDir = path.join(REPO_ROOT, 'out/stage/plugins/strata.manager/web');
   const htmlPath = path.join(webDir, 'index.html');
   const iconPath = path.join(webDir, 'icon.svg');
   assert.ok(fs.existsSync(htmlPath), `Missing compiled bundle: ${htmlPath}`);
   assert.ok(fs.existsSync(iconPath), `Missing compiled icon: ${iconPath}`);
 
-  for (const targetHtml of [htmlPath, path.join(REPO_ROOT, 'webroot/index.html')]) {
+  for (const targetHtml of [htmlPath, path.join(REPO_ROOT, 'out/stage/webroot/index.html')]) {
     assert.ok(fs.existsSync(targetHtml), `Missing compiled bundle: ${targetHtml}`);
     const html = fs.readFileSync(targetHtml, 'utf8');
     assert.match(html, /<meta\s+name="color-scheme"\s+content="light dark"/i);
@@ -116,19 +115,15 @@ test('compiled SideVeil plugin package matches manifest.ts and Vite + Pochita bu
 test('all managed source and test files stay within the 400-line hard limit', () => {
   const scanSpecs = [
     { dir: path.join(WEBUI_ROOT, 'src'), extensions: ['.ts', '.tsx', '.css'] },
-    { dir: path.join(REPO_ROOT, 'crates'), extensions: ['.rs'] },
-    { dir: path.join(REPO_ROOT, 'container/strata-debug'), extensions: ['.py'] },
-    { dir: path.join(REPO_ROOT, 'scripts'), extensions: ['.py', '.sh'] },
-    { dir: path.join(REPO_ROOT, 'tests'), extensions: ['.py'] },
+    { dir: path.join(REPO_ROOT, 'daemon/crates'), extensions: ['.rs'] },
+    { dir: path.join(REPO_ROOT, 'tools/strata-debug-agent/src'), extensions: ['.rs'] },
+    { dir: path.join(REPO_ROOT, 'tools/strata-mcp/src'), extensions: ['.rs'] },
+    { dir: path.join(REPO_ROOT, 'scripts'), extensions: ['.py', '.sh', '.mjs'] },
+    { dir: path.join(REPO_ROOT, 'module'), extensions: ['.sh'] },
   ];
-  const explicitFiles = [
-    path.join(REPO_ROOT, 'container/host-exec'),
-    path.join(REPO_ROOT, 'container/setup-container.sh'),
-    ...fs
-      .readdirSync(REPO_ROOT)
-      .filter((name) => name.endsWith('.sh'))
-      .map((name) => path.join(REPO_ROOT, name)),
-  ].filter((file) => fs.existsSync(file));
+  const explicitFiles = [path.join(REPO_ROOT, 'module/container/host-exec')].filter((file) =>
+    fs.existsSync(file),
+  );
 
   const files = [...explicitFiles];
   for (const { dir, extensions } of scanSpecs) {
@@ -147,5 +142,51 @@ test('all managed source and test files stay within the 400-line hard limit', ()
     violations,
     [],
     `Source files exceeding 400-line hard limit:\n${violations.join('\n')}`,
+  );
+});
+
+test('SideVeil StrataManagerApp remains a zero-tab zero-IME quick panel and webui handwritten files stay <= 300 lines', () => {
+  const pluginApp = fs.readFileSync(path.join(WEBUI_ROOT, 'src/StrataManagerApp.tsx'), 'utf8');
+  assert.equal(/<Tabs\b/.test(pluginApp), false, 'StrataManagerApp must not render Tabs');
+  assert.equal(/<Input\b/.test(pluginApp), false, 'StrataManagerApp must not render Input fields');
+  assert.equal(
+    /backupStart|CONTAINER_BACKUP_START/.test(pluginApp),
+    false,
+    'StrataManagerApp must not trigger backups',
+  );
+
+  const tabsApp = fs.readFileSync(path.join(WEBUI_ROOT, 'src/ksu/KsuTabsWorkspace.tsx'), 'utf8');
+  assert.match(tabsApp, /value="overview"/);
+  assert.match(tabsApp, /value="services"/);
+  assert.match(tabsApp, /value="config"/);
+  assert.match(tabsApp, /value="diagnostics"/);
+
+  const pluginAppLines = pluginApp.split('\n').length;
+  assert.ok(
+    pluginAppLines <= 220,
+    `StrataManagerApp.tsx must be <= 220 lines (got ${pluginAppLines})`,
+  );
+  const ksuApp = fs.readFileSync(path.join(WEBUI_ROOT, 'src/ksu/KsuStrataApp.tsx'), 'utf8');
+  const ksuAppLines = ksuApp.split('\n').length;
+  assert.ok(ksuAppLines <= 180, `KsuStrataApp.tsx must be <= 180 lines (got ${ksuAppLines})`);
+
+  const webuiFiles = walkFiles(path.join(WEBUI_ROOT, 'src'), ['.ts', '.tsx', '.css']);
+  const oversized = [];
+  for (const file of webuiFiles) {
+    const lines = fs.readFileSync(file, 'utf8').split('\n').length;
+    if (lines > 300) {
+      oversized.push(`${path.relative(REPO_ROOT, file)} (${lines} lines)`);
+    }
+    const content = fs.readFileSync(file, 'utf8');
+    assert.equal(
+      /\/data\/local\/tmp/.test(content),
+      false,
+      `${path.relative(REPO_ROOT, file)} must not hardcode /data/local/tmp`,
+    );
+  }
+  assert.deepEqual(
+    oversized,
+    [],
+    `webui/src handwritten files exceeding 300-line limit:\n${oversized.join('\n')}`,
   );
 });

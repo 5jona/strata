@@ -36,12 +36,12 @@ const baseManifest = definePluginManifest({
   },
 });
 
-/** Static SideVeil v1 plugin manifest synchronized with `plugins/strata.manager/manifest.json`. */
+/** Static SideVeil v1 plugin manifest synchronized with `module/plugins/strata.manager/manifest.json`. */
 export const STRATA_MANIFEST: StrataPluginManifestV1 = {
   schemaVersion: 1,
   apiVersion: 1,
   minHostVersion: '0.1.0',
   ...baseManifest,
-  description: 'Android Linux 容器快捷控制、托管服务与 PC 配对侧边栏',
+  description: 'Android Linux 容器速控面板与托管服务快捷开关',
   defaultEnabled: true,
 };

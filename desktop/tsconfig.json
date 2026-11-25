@@ -14,7 +14,10 @@
     "allowImportingTsExtensions": true,
     "isolatedModules": true,
     "resolveJsonModule": true,
-    "verbatimModuleSyntax": true
+    "verbatimModuleSyntax": true,
+    "paths": {
+      "@strata/generated/*": ["../webui/src/generated/*"]
+    }
   },
   "include": ["src"]
 }

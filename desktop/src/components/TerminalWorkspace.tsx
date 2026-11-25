@@ -1,5 +1,6 @@
 import { Button, cn, EmptyState, useToast } from '@gojona/ui';
 import { ExternalLink, Plus, Terminal, X } from 'lucide-react';
+import { resolveLaunchSshTarget } from '../lib/sshTarget.ts';
 import type { StrataTransport } from '../transport/httpWsTransport.ts';
 import { tauriDeviceBridge } from '../transport/tauriBridge.ts';
 import type { DeviceProfile, TerminalTabSpec } from '../types/device.ts';
@@ -42,17 +43,16 @@ export default function TerminalWorkspace({
     const cid = activeTab?.containerId ?? runningContainers[0]?.id;
     const snap = containers.find((c) => c.id === cid);
     if (!snap) return;
-    const host =
-      snap.primaryIpv4 && snap.primaryIpv4 !== '0.0.0.0'
-        ? snap.primaryIpv4
-        : (device?.host ?? '127.0.0.1');
-    void tauriDeviceBridge
-      .openNativeTerminal({
-        user: device?.sshUser || 'root',
-        host,
-        port: snap.sshPort,
+    void resolveLaunchSshTarget(device, snap)
+      .then(async ({ target, forwardedLocalPort }) => {
+        const prog = await tauriDeviceBridge.openNativeTerminal(target);
+        pushToast(
+          forwardedLocalPort
+            ? `已建立 ADB 转发 (127.0.0.1:${forwardedLocalPort}) 并启动终端: ${prog}`
+            : `已启动外部终端: ${prog}`,
+          'info',
+        );
       })
-      .then((prog) => pushToast(`已启动外部终端: ${prog}`, 'info'))
       .catch((err) =>
         pushToast(
           `启动系统终端失败: ${err instanceof Error ? err.message : String(err)}`,

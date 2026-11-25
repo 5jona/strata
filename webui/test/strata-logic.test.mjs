@@ -1,13 +1,14 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createMockStrataTransport } from '../src/lib/mockStrataBridge.ts';
+import { createMockStrataTransport } from '../src/plugin/mockStrataBridge.ts';
+import { createStrataClient, invokeStrataRpc } from '../src/plugin/strataRpc.ts';
 import {
   getCustomCharDevs,
   getCustomMounts,
   hasL5DiagMounts,
   toggleCharDev,
   toggleL5DiagMounts,
-} from '../src/lib/passthrough.ts';
+} from '../src/shared/passthrough.ts';
 import {
   buildSshCommand,
   buildTaskCommand,
@@ -16,8 +17,8 @@ import {
   formatUptime,
   parseSshPort,
   summarizeSshKey,
-} from '../src/lib/strataFormat.ts';
-import { createStrataClient, invokeStrataRpc } from '../src/lib/strataRpc.ts';
+  toLogEntries,
+} from '../src/shared/strataFormat.ts';
 import { L5_DIAG_MOUNTS, STRATA_EVENTS, STRATA_METHODS } from '../src/types.ts';
 
 test('formatters produce stable human-readable output', () => {
@@ -225,4 +226,15 @@ test('createStrataClient and invokeStrataRpc delegate to typed plugin client cle
     { method: STRATA_METHODS.DAEMON_PING, params: undefined, options: { timeoutMs: 5_000 } },
     { method: STRATA_METHODS.HUD_SET, params: { enabled: true }, options: { timeoutMs: 12_000 } },
   ]);
+});
+
+test('toLogEntries classifies info, warn, and error log lines accurately', () => {
+  const entries = toLogEntries(
+    ['[stratad] started', '[stratad] warning: slow loop', '[dropbear] auth failed: denied'],
+    'test',
+  );
+  assert.equal(entries.length, 3);
+  assert.equal(entries[0].level, 'info');
+  assert.equal(entries[1].level, 'warn');
+  assert.equal(entries[2].level, 'error');
 });

@@ -8,7 +8,7 @@ const kitRoot = process.env.POCHITA_KIT_ROOT
   : undefined;
 
 export default createPochitaViteConfig({
-  outDir: path.resolve(__dirname, '../plugins/strata.manager/web'),
+  outDir: path.resolve(__dirname, '../out/stage/plugins/strata.manager/web'),
   port: 5178,
   ...(kitRoot ? { kitRoot } : {}),
   surface: 'native-glass',

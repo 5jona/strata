@@ -30,6 +30,14 @@ export interface AdbTunnel {
   token?: string;
 }
 
+export interface PortForwardEntry {
+  serial: string;
+  localPort: number;
+  remotePort: number;
+  localSpec: string;
+  remoteSpec: string;
+}
+
 export interface DeviceProfile {
   id: string;
   label: string;
@@ -74,7 +82,14 @@ export interface SshTarget {
   alias?: string;
 }
 
-export type NavViewId = 'containers' | 'services' | 'terminal' | 'install' | 'network' | 'logs';
+export type NavViewId =
+  | 'containers'
+  | 'tools'
+  | 'services'
+  | 'terminal'
+  | 'install'
+  | 'network'
+  | 'logs';
 
 export interface TerminalTabSpec {
   id: string;

@@ -241,24 +241,28 @@ mod tests {
         std::env::temp_dir().join(format!("strata-desktop-test-{name}-{nanos}.json"))
     }
 
+    fn make_profile(id: &str, kind: DeviceKind, serial: Option<&str>) -> DeviceProfile {
+        DeviceProfile {
+            id: id.to_owned(),
+            label: "Demo Device".to_owned(),
+            kind,
+            serial: serial.map(str::to_owned),
+            host: "127.0.0.1".to_owned(),
+            port: 7681,
+            token: Some("abcdef123456".to_owned()),
+            ssh_user: Some("root".to_owned()),
+            ssh_port: Some(2222),
+            model: Some("Demo_Device".to_owned()),
+        }
+    }
+
     #[test]
     fn round_trip_upsert_and_remove() {
         let path = temp_store_path("devices");
         let store = DeviceStore::new(&path);
         assert!(store.load().unwrap().devices.is_empty());
 
-        let tablet = DeviceProfile {
-            id: "demo-tablet".to_owned(),
-            label: "Demo Tablet".to_owned(),
-            kind: DeviceKind::Adb,
-            serial: Some("emulator-5554".to_owned()),
-            host: "127.0.0.1".to_owned(),
-            port: 7681,
-            token: Some("abcdef123456".to_owned()),
-            ssh_user: Some("root".to_owned()),
-            ssh_port: Some(2222),
-            model: Some("Demo_Tablet".to_owned()),
-        };
+        let tablet = make_profile("demo-tablet", DeviceKind::Adb, Some("emulator-5554"));
         let saved = store.upsert(tablet.clone()).unwrap();
         assert_eq!(saved.devices.len(), 1);
         assert_eq!(store.load().unwrap().devices[0], tablet);
@@ -271,32 +275,9 @@ mod tests {
 
     #[test]
     fn rejects_invalid_profiles() {
-        let bad_adb = DeviceProfile {
-            id: "bad/id".to_owned(),
-            label: "Bad".to_owned(),
-            kind: DeviceKind::Adb,
-            serial: None,
-            host: "127.0.0.1".to_owned(),
-            port: 7681,
-            token: None,
-            ssh_user: None,
-            ssh_port: None,
-            model: None,
-        };
-        assert!(validate_device_profile(&bad_adb).is_err());
-
-        let missing_serial = DeviceProfile {
-            id: "ok-id".to_owned(),
-            label: "Tablet".to_owned(),
-            kind: DeviceKind::Adb,
-            serial: Some("   ".to_owned()),
-            host: "127.0.0.1".to_owned(),
-            port: 7681,
-            token: None,
-            ssh_user: None,
-            ssh_port: None,
-            model: None,
-        };
-        assert!(validate_device_profile(&missing_serial).is_err());
+        assert!(validate_device_profile(&make_profile("bad/id", DeviceKind::Adb, None)).is_err());
+        assert!(
+            validate_device_profile(&make_profile("ok-id", DeviceKind::Adb, Some("   "))).is_err()
+        );
     }
 }

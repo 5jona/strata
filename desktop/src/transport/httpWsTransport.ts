@@ -1,5 +1,6 @@
 import type { ContainerJobProgressPayload } from '../types/protocol.ts';
 import {
+  type RpcInvokeArgs,
   type StrataDesktopEventMap,
   type StrataDesktopEventName,
   type StrataDesktopMethod,
@@ -8,66 +9,32 @@ import {
   StrataRpcError,
 } from '../types/rpc.ts';
 import {
+  downloadContainerExport,
+  type ImportUploadOptions,
+  uploadContainerImage,
+} from './httpTransfer.ts';
+import {
   type DecodedServerPtyFrame,
   decodeServerPtyFrame,
   encodePtyAckFrame,
   encodePtyDataFrame,
   encodePtyResizeFrame,
-  type PtySessionMeta,
   parsePtySessionMeta,
 } from './ptyProtocol.ts';
+import type {
+  EventListener,
+  PtyConnectionHandlers,
+  PtySessionHandle,
+  StrataTransport,
+} from './transportTypes.ts';
 
-export interface ImportUploadOptions {
-  containerId: string;
-  file: File;
-  sizeMb: number;
-  hostname?: string;
-  sshPort?: number;
-  autoStart: boolean;
-  hostBridge: boolean;
-  noatime: boolean;
-  onProgress?: (loaded: number, total: number) => void;
-  signal?: AbortSignal;
-}
-
-export interface PtyConnectionHandlers {
-  onOpen?: () => void;
-  onMeta?: (meta: PtySessionMeta) => void;
-  onData: (chunk: Uint8Array) => void;
-  onExit?: (exitCode: number, signal?: number) => void;
-  onClose?: (reason: string) => void;
-  onError?: (message: string) => void;
-}
-
-export interface PtySessionHandle {
-  sendInput(data: string | Uint8Array): void;
-  sendResize(cols: number, rows: number): void;
-  sendAck(bytes: number): void;
-  close(): void;
-}
-
-export type EventListener = (envelope: StrataEventEnvelope) => void;
-
-export interface StrataTransport {
-  readonly mode: 'http-ws' | 'mock';
-  readonly baseUrl: string;
-  invoke<M extends StrataDesktopMethod>(
-    method: M,
-    params?: StrataDesktopRpcMap[M]['params'],
-  ): Promise<StrataDesktopRpcMap[M]['result']>;
-  subscribe(listener: EventListener): () => void;
-  openPty(
-    containerId: string,
-    cols: number,
-    rows: number,
-    handlers: PtyConnectionHandlers,
-    resumeSessionId?: string,
-  ): PtySessionHandle;
-  killPty(sessionId: string): Promise<void>;
-  uploadImage(options: ImportUploadOptions): Promise<ContainerJobProgressPayload>;
-  downloadExport(containerId: string, format: 'tar.gz' | 'img.gz'): Promise<void>;
-  dispose(): void;
-}
+export type {
+  EventListener,
+  ImportUploadOptions,
+  PtyConnectionHandlers,
+  PtySessionHandle,
+  StrataTransport,
+};
 
 interface JsonRpcResponse<T> {
   jsonrpc: '2.0';
@@ -117,9 +84,10 @@ export class HttpWsTransport implements StrataTransport {
 
   async invoke<M extends StrataDesktopMethod>(
     method: M,
-    params?: StrataDesktopRpcMap[M]['params'],
+    ...args: RpcInvokeArgs<StrataDesktopRpcMap[M]['params']>
   ): Promise<StrataDesktopRpcMap[M]['result']> {
     const id = String(this.rpcSeq++);
+    const params = args[0];
     const response = await this.fetchImpl(`${this.baseUrl}/api/rpc`, {
       method: 'POST',
       headers: {
@@ -210,9 +178,7 @@ export class HttpWsTransport implements StrataTransport {
           this.reconnectTimer = setTimeout(() => this.connectEventsSocket(), delay);
         }
       };
-      ws.onerror = () => {
-        ws.close();
-      };
+      ws.onerror = () => ws.close();
     } catch {
       // Retry on next timer tick if constructor fails
     }
@@ -241,9 +207,7 @@ export class HttpWsTransport implements StrataTransport {
       cols: String(Math.max(2, Math.floor(cols))),
       rows: String(Math.max(2, Math.floor(rows))),
     });
-    if (resumeSessionId) {
-      query.set('session', resumeSessionId);
-    }
+    if (resumeSessionId) query.set('session', resumeSessionId);
     const url = this.toWsUrl(`/ws/pty/${encodeURIComponent(containerId)}?${query.toString()}`);
     const ws = new WebSocket(url, this.wsSubprotocols());
     ws.binaryType = 'arraybuffer';
@@ -257,11 +221,8 @@ export class HttpWsTransport implements StrataTransport {
       }
       if (ev.data instanceof ArrayBuffer) {
         const frame: DecodedServerPtyFrame = decodeServerPtyFrame(ev.data);
-        if (frame.type === 'data') {
-          handlers.onData(frame.payload);
-        } else if (frame.type === 'exit') {
-          handlers.onExit?.(frame.exitCode, frame.signal);
-        }
+        if (frame.type === 'data') handlers.onData(frame.payload);
+        else if (frame.type === 'exit') handlers.onExit?.(frame.exitCode, frame.signal);
       }
     };
     ws.onerror = () => handlers.onError?.('PTY WebSocket 通信异常');
@@ -269,19 +230,13 @@ export class HttpWsTransport implements StrataTransport {
 
     return {
       sendInput(data) {
-        if (ws.readyState === WebSocket.OPEN) {
-          ws.send(encodePtyDataFrame(data));
-        }
+        if (ws.readyState === WebSocket.OPEN) ws.send(encodePtyDataFrame(data));
       },
       sendResize(nextCols, nextRows) {
-        if (ws.readyState === WebSocket.OPEN) {
-          ws.send(encodePtyResizeFrame(nextCols, nextRows));
-        }
+        if (ws.readyState === WebSocket.OPEN) ws.send(encodePtyResizeFrame(nextCols, nextRows));
       },
       sendAck(bytes) {
-        if (ws.readyState === WebSocket.OPEN && bytes > 0) {
-          ws.send(encodePtyAckFrame(bytes));
-        }
+        if (ws.readyState === WebSocket.OPEN && bytes > 0) ws.send(encodePtyAckFrame(bytes));
       },
       close() {
         ws.close(1000, 'client closed');
@@ -297,72 +252,17 @@ export class HttpWsTransport implements StrataTransport {
   }
 
   uploadImage(options: ImportUploadOptions): Promise<ContainerJobProgressPayload> {
-    return new Promise((resolve, reject) => {
-      const qs = new URLSearchParams({
-        id: options.containerId,
-        filename: options.file.name,
-        sizeMb: String(options.sizeMb),
-        autoStart: String(options.autoStart),
-        hostBridge: String(options.hostBridge),
-        noatime: String(options.noatime),
-      });
-      if (options.hostname) qs.set('hostname', options.hostname);
-      if (options.sshPort) qs.set('sshPort', String(options.sshPort));
-
-      const xhr = new XMLHttpRequest();
-      xhr.open('POST', `${this.baseUrl}/api/images/import?${qs.toString()}`);
-      if (this.token) {
-        xhr.setRequestHeader('Authorization', `Bearer ${this.token}`);
-      }
-      xhr.setRequestHeader('Content-Type', 'application/octet-stream');
-
-      xhr.upload.onprogress = (ev) => {
-        if (ev.lengthComputable) {
-          options.onProgress?.(ev.loaded, ev.total);
-        }
-      };
-
-      const onAbort = () => xhr.abort();
-      options.signal?.addEventListener('abort', onAbort, { once: true });
-
-      xhr.onload = () => {
-        options.signal?.removeEventListener('abort', onAbort);
-        if (xhr.status >= 200 && xhr.status < 300) {
-          try {
-            resolve(JSON.parse(xhr.responseText) as ContainerJobProgressPayload);
-          } catch {
-            reject(new Error('导入响应 JSON 解析失败'));
-          }
-        } else {
-          reject(new Error(`导入失败 (HTTP ${xhr.status}): ${xhr.responseText}`));
-        }
-      };
-      xhr.onerror = () => {
-        options.signal?.removeEventListener('abort', onAbort);
-        reject(new Error('镜像上传网络中断'));
-      };
-      xhr.onabort = () => {
-        reject(new Error('用户取消上传'));
-      };
-      xhr.send(options.file);
-    });
+    return uploadContainerImage(this.baseUrl, this.token, options);
   }
 
   async downloadExport(containerId: string, format: 'tar.gz' | 'img.gz'): Promise<void> {
-    const url = `${this.baseUrl}/api/containers/${encodeURIComponent(containerId)}/export?format=${format}`;
-    const resp = await this.fetchImpl(url, { headers: this.authHeaders() });
-    if (!resp.ok) {
-      throw new Error(`导出失败 (HTTP ${resp.status})`);
-    }
-    const blob = await resp.blob();
-    const objectUrl = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = objectUrl;
-    link.download = `strata-${containerId}.${format}`;
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
-    setTimeout(() => URL.revokeObjectURL(objectUrl), 10_000);
+    return downloadContainerExport(
+      this.baseUrl,
+      this.authHeaders(),
+      this.fetchImpl,
+      containerId,
+      format,
+    );
   }
 
   dispose(): void {

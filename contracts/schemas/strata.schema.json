@@ -91,6 +91,55 @@
       ],
       "description": "Output stream label for task.output events."
     },
+    "ToolManagerKind": {
+      "type": "string",
+      "enum": [
+        "mise",
+        "apt",
+        "uv",
+        "bundle",
+        "system"
+      ],
+      "description": "Package or runtime manager backend inside a Strata container."
+    },
+    "ToolGroupKind": {
+      "type": "string",
+      "enum": [
+        "core-bridge",
+        "mise-runtimes",
+        "cli-dev",
+        "debug-l3-l5",
+        "python-uv"
+      ],
+      "description": "Logical category of container tools."
+    },
+    "ToolMirrorPreset": {
+      "type": "string",
+      "enum": [
+        "tuna",
+        "official",
+        "custom"
+      ],
+      "description": "Mirror configuration preset for mise, apt, uv, npm, and cargo."
+    },
+    "ToolDiagnosticStatus": {
+      "type": "string",
+      "enum": [
+        "ok",
+        "warn",
+        "error"
+      ],
+      "description": "Health check severity for container layout and tool diagnostics."
+    },
+    "ToolsBootstrapProfile": {
+      "type": "string",
+      "enum": [
+        "minimal",
+        "dev",
+        "debug"
+      ],
+      "description": "Bootstrap preset profile for container toolchain initialization."
+    },
     "WebConsoleConfig": {
       "type": "object",
       "properties": {
@@ -1053,13 +1102,17 @@
           ]
         },
         "outputPath": {
-          "type": "string"
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "additionalProperties": false,
-      "required": [
-        "outputPath"
-      ],
       "description": "Parameters for container.backup and container.backupStart."
     },
     "BackupResult": {
@@ -2696,6 +2749,1117 @@
         "restartCount"
       ],
       "description": "Event payload emitted on service.stateChanged transitions."
+    },
+    "ToolsStatusParams": {
+      "type": "object",
+      "properties": {
+        "container": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "description": "Parameters for tools.status."
+    },
+    "ToolManagerHealth": {
+      "type": "object",
+      "properties": {
+        "installed": {
+          "type": "boolean"
+        },
+        "version": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "binPath": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "installed"
+      ],
+      "description": "Availability and version summary for a container tool manager or bridge binary."
+    },
+    "ToolsStatusResult": {
+      "type": "object",
+      "properties": {
+        "container": {
+          "type": "string"
+        },
+        "layoutSchemaVersion": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 4294967295
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "layoutCompliant": {
+          "type": "boolean"
+        },
+        "workspaceDir": {
+          "type": "string"
+        },
+        "miseConfigPath": {
+          "type": "string"
+        },
+        "mise": {
+          "$ref": "#/$defs/ToolManagerHealth"
+        },
+        "uv": {
+          "$ref": "#/$defs/ToolManagerHealth"
+        },
+        "apt": {
+          "$ref": "#/$defs/ToolManagerHealth"
+        },
+        "hostExec": {
+          "$ref": "#/$defs/ToolManagerHealth"
+        },
+        "strataDebug": {
+          "$ref": "#/$defs/ToolManagerHealth"
+        },
+        "installedToolCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "outdatedToolCount": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "mirrorPreset": {
+          "$ref": "#/$defs/ToolMirrorPreset"
+        },
+        "hasGithubToken": {
+          "type": "boolean"
+        },
+        "cacheBytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "installsBytes": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "container",
+        "layoutCompliant",
+        "workspaceDir",
+        "miseConfigPath",
+        "mise",
+        "uv",
+        "apt",
+        "hostExec",
+        "strataDebug",
+        "installedToolCount",
+        "mirrorPreset",
+        "hasGithubToken",
+        "cacheBytes",
+        "installsBytes"
+      ],
+      "description": "Fast local-only snapshot of container layout compliance, tool managers, and caches."
+    },
+    "ToolsListParams": {
+      "type": "object",
+      "properties": {
+        "container": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "group": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ToolGroupKind"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "checkOutdated": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "checkOutdated"
+      ],
+      "description": "Parameters for tools.list."
+    },
+    "InstalledToolItem": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "manager": {
+          "$ref": "#/$defs/ToolManagerKind"
+        },
+        "group": {
+          "$ref": "#/$defs/ToolGroupKind"
+        },
+        "version": {
+          "type": "string"
+        },
+        "requestedVersion": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "latestVersion": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "outdated": {
+          "type": "boolean"
+        },
+        "backend": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "installPath": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "sourcePath": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "active": {
+          "type": "boolean"
+        },
+        "installed": {
+          "type": "boolean"
+        },
+        "broken": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "name",
+        "manager",
+        "group",
+        "version",
+        "outdated",
+        "active",
+        "installed",
+        "broken"
+      ],
+      "description": "Single installed or configured tool entry reported by tools.list."
+    },
+    "ToolsListResult": {
+      "type": "object",
+      "properties": {
+        "container": {
+          "type": "string"
+        },
+        "miseAvailable": {
+          "type": "boolean"
+        },
+        "uvAvailable": {
+          "type": "boolean"
+        },
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/InstalledToolItem"
+          }
+        },
+        "outdatedWarning": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "container",
+        "miseAvailable",
+        "uvAvailable",
+        "items"
+      ],
+      "description": "Grouped inventory of mise runtimes, uv tools, apt packages, and core bridge binaries."
+    },
+    "ToolsCatalogParams": {
+      "type": "object",
+      "properties": {
+        "container": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "group": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ToolGroupKind"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "query": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "description": "Parameters for tools.catalog."
+    },
+    "ToolCatalogEntry": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "summary": {
+          "type": "string"
+        },
+        "manager": {
+          "$ref": "#/$defs/ToolManagerKind"
+        },
+        "group": {
+          "$ref": "#/$defs/ToolGroupKind"
+        },
+        "defaultVersion": {
+          "type": "string"
+        },
+        "backendHint": {
+          "type": "string"
+        },
+        "arm64Verified": {
+          "type": "boolean"
+        },
+        "estimatedMb": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "recommended": {
+          "type": "boolean"
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "name",
+        "summary",
+        "manager",
+        "group",
+        "defaultVersion",
+        "backendHint",
+        "arm64Verified",
+        "estimatedMb",
+        "recommended",
+        "tags"
+      ],
+      "description": "Curated ARM64/GKI-safe tool entry available for installation."
+    },
+    "ToolBundleSpec": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "summary": {
+          "type": "string"
+        },
+        "tools": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "name",
+        "summary",
+        "tools"
+      ],
+      "description": "Curated multi-tool installation preset bundle."
+    },
+    "ToolsCatalogResult": {
+      "type": "object",
+      "properties": {
+        "container": {
+          "type": "string"
+        },
+        "entries": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ToolCatalogEntry"
+          }
+        },
+        "bundles": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ToolBundleSpec"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "container",
+        "entries",
+        "bundles"
+      ],
+      "description": "Result returned by tools.catalog."
+    },
+    "ToolsConfigGetParams": {
+      "type": "object",
+      "properties": {
+        "container": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "description": "Parameters for tools.configGet."
+    },
+    "ToolsConfigResult": {
+      "type": "object",
+      "properties": {
+        "container": {
+          "type": "string"
+        },
+        "mirrorPreset": {
+          "$ref": "#/$defs/ToolMirrorPreset"
+        },
+        "aptMirrorUrl": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "nodeMirrorUrl": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "pypiIndexUrl": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "npmRegistryUrl": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "rustupDistServer": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "goproxy": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "httpProxy": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "httpsProxy": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "noProxy": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "urlReplacements": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "jobs": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "minimumReleaseAge": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "hasGithubToken": {
+          "type": "boolean"
+        },
+        "githubTokenMasked": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "miseConfigToml": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "container",
+        "mirrorPreset",
+        "urlReplacements",
+        "jobs",
+        "hasGithubToken",
+        "miseConfigToml"
+      ],
+      "description": "Sanitized tool manager mirror, proxy, and mise configuration (never exposes raw secrets)."
+    },
+    "ToolsConfigSetParams": {
+      "type": "object",
+      "properties": {
+        "container": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "mirrorPreset": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ToolMirrorPreset"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "aptMirrorUrl": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "nodeMirrorUrl": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "pypiIndexUrl": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "npmRegistryUrl": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "rustupDistServer": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "goproxy": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "httpProxy": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "httpsProxy": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "noProxy": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "urlReplacements": {
+          "anyOf": [
+            {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              }
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "jobs": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 4294967295
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "minimumReleaseAge": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "githubToken": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "miseConfigToml": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "description": "Parameters for tools.configSet."
+    },
+    "ToolsBootstrapParams": {
+      "type": "object",
+      "properties": {
+        "container": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "profile": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ToolsBootstrapProfile"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "mirrorPreset": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ToolMirrorPreset"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "description": "Parameters for tools.bootstrap."
+    },
+    "ToolsInstallParams": {
+      "type": "object",
+      "properties": {
+        "container": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "manager": {
+          "$ref": "#/$defs/ToolManagerKind"
+        },
+        "packages": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "pin": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "manager",
+        "packages",
+        "pin"
+      ],
+      "description": "Parameters for tools.install."
+    },
+    "ToolsUninstallParams": {
+      "type": "object",
+      "properties": {
+        "container": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "manager": {
+          "$ref": "#/$defs/ToolManagerKind"
+        },
+        "packages": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "manager",
+        "packages"
+      ],
+      "description": "Parameters for tools.uninstall."
+    },
+    "ToolsUpgradeParams": {
+      "type": "object",
+      "properties": {
+        "container": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "manager": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ToolManagerKind"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "packages": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "bump": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "packages",
+        "bump"
+      ],
+      "description": "Parameters for tools.upgrade."
+    },
+    "ToolsDoctorParams": {
+      "type": "object",
+      "properties": {
+        "container": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "description": "Parameters for tools.doctor."
+    },
+    "ToolDiagnosticItem": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "category": {
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/ToolDiagnosticStatus"
+        },
+        "summary": {
+          "type": "string"
+        },
+        "remediation": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "category",
+        "status",
+        "summary"
+      ],
+      "description": "Single structured health diagnostic check for container layout or tool manager."
+    },
+    "ToolsDoctorResult": {
+      "type": "object",
+      "properties": {
+        "container": {
+          "type": "string"
+        },
+        "ok": {
+          "type": "boolean"
+        },
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ToolDiagnosticItem"
+          }
+        },
+        "miseDoctorJson": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "container",
+        "ok",
+        "items"
+      ],
+      "description": "Result returned by tools.doctor."
+    },
+    "ToolsCacheCleanParams": {
+      "type": "object",
+      "properties": {
+        "container": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "cleanMise": {
+          "type": "boolean"
+        },
+        "cleanUv": {
+          "type": "boolean"
+        },
+        "cleanApt": {
+          "type": "boolean"
+        },
+        "pruneUnused": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "cleanMise",
+        "cleanUv",
+        "cleanApt",
+        "pruneUnused"
+      ],
+      "description": "Parameters for tools.cacheClean."
+    },
+    "ToolsCacheCleanResult": {
+      "type": "object",
+      "properties": {
+        "container": {
+          "type": "string"
+        },
+        "beforeBytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "afterBytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "freedBytes": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "container",
+        "beforeBytes",
+        "afterBytes",
+        "freedBytes"
+      ],
+      "description": "Result returned by tools.cacheClean."
+    },
+    "ToolsStateChangedPayload": {
+      "type": "object",
+      "properties": {
+        "container": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "taskId": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "container",
+        "reason"
+      ],
+      "description": "Event payload emitted when a container tools mutation task completes."
     }
   }
 }

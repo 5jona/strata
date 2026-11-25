@@ -2,10 +2,10 @@ import type {
   ContainerConfig,
   ContainerServiceRuntime,
   ContainerStatusSnapshot,
-  DistroEntry,
   KernelCapabilitiesResult,
   WebStatusResult,
 } from '../types/protocol.ts';
+import { createInitialToolsState, type MockToolsState } from './mockToolsInitialState.ts';
 
 export interface MockContainerRecord {
   snapshot: ContainerStatusSnapshot;
@@ -14,6 +14,7 @@ export interface MockContainerRecord {
   serviceLogs: Record<string, string[]>;
   sshKeys: string[];
   logs: string[];
+  tools: MockToolsState;
 }
 
 export interface MockDeviceDataset {
@@ -25,88 +26,6 @@ export interface MockDeviceDataset {
 }
 
 const GB = 1024 * 1024 * 1024;
-const MB = 1024 * 1024;
-
-export const MOCK_DISTRO_CATALOG: DistroEntry[] = [
-  {
-    id: 'ubuntu/24.04',
-    os: 'Ubuntu',
-    release: 'noble',
-    releaseTitle: 'Ubuntu 24.04 LTS (Noble)',
-    arch: 'arm64',
-    variant: 'default',
-    version: '20261120',
-    sizeBytes: 128 * MB,
-    sha256: 'a8d9e1f2c3b4a5968778695a4b3c2d1e0f9a8b7c6d5e4f3a2b1c0d9e8f7a6b5c',
-    downloadUrl:
-      'https://mirrors.tuna.tsinghua.edu.cn/lxc-images/images/ubuntu/noble/arm64/default/rootfs.tar.xz',
-  },
-  {
-    id: 'debian/12',
-    os: 'Debian',
-    release: 'bookworm',
-    releaseTitle: 'Debian 12 (Bookworm)',
-    arch: 'arm64',
-    variant: 'default',
-    version: '20261120',
-    sizeBytes: 96 * MB,
-    sha256: 'b7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a0b9c8d7e6f5a4b3c2d1e0f9a8b7c6',
-    downloadUrl:
-      'https://mirrors.tuna.tsinghua.edu.cn/lxc-images/images/debian/bookworm/arm64/default/rootfs.tar.xz',
-  },
-  {
-    id: 'alpine/3.21',
-    os: 'Alpine',
-    release: '3.21',
-    releaseTitle: 'Alpine Linux 3.21',
-    arch: 'arm64',
-    variant: 'default',
-    version: '20261120',
-    sizeBytes: 4 * MB,
-    sha256: 'c6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a0b9c8d7e6f5a4b3c2d1e0f9a8b7c6d5',
-    downloadUrl:
-      'https://mirrors.tuna.tsinghua.edu.cn/lxc-images/images/alpine/3.21/arm64/default/rootfs.tar.xz',
-  },
-  {
-    id: 'archlinux/current',
-    os: 'Arch Linux',
-    release: 'current',
-    releaseTitle: 'Arch Linux ARM (Rolling)',
-    arch: 'arm64',
-    variant: 'default',
-    version: '20261120',
-    sizeBytes: 174 * MB,
-    sha256: 'd5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a0b9c8d7e6f5a4b3c2d1e0f9a8b7c6d5e4',
-    downloadUrl:
-      'https://mirrors.tuna.tsinghua.edu.cn/lxc-images/images/archlinux/current/arm64/default/rootfs.tar.xz',
-  },
-  {
-    id: 'fedora/41',
-    os: 'Fedora',
-    release: '41',
-    releaseTitle: 'Fedora 41 Server',
-    arch: 'arm64',
-    variant: 'default',
-    version: '20261120',
-    sizeBytes: 142 * MB,
-    sha256: 'e4f3a2b1c0d9e8f7a6b5c4d3e2f1a0b9c8d7e6f5a4b3c2d1e0f9a8b7c6d5e4f3',
-    downloadUrl:
-      'https://mirrors.tuna.tsinghua.edu.cn/lxc-images/images/fedora/41/arm64/default/rootfs.tar.xz',
-  },
-  {
-    id: 'kali/current',
-    os: 'Kali',
-    release: 'current',
-    releaseTitle: 'Kali Linux ARM64',
-    arch: 'arm64',
-    variant: 'default',
-    version: '20261120',
-    sizeBytes: 158 * MB,
-    sha256: 'f3a2b1c0d9e8f7a6b5c4d3e2f1a0b9c8d7e6f5a4b3c2d1e0f9a8b7c6d5e4f3a2',
-    downloadUrl:
-      'https://mirrors.tuna.tsinghua.edu.cn/lxc-images/images/kali/current/arm64/default/rootfs.tar.xz',
-  },
-];
 
 function makeTabletDataset(): MockDeviceDataset {
   const mainConfig: ContainerConfig = {
@@ -196,7 +115,7 @@ function makeTabletDataset(): MockDeviceDataset {
       lanUrls: ['http://192.0.2.10:7681'],
     },
     daemonLogs: [
-      '[INFO] stratad 0.1.0 started on Android 16 GKI (Demo Tablet)',
+      '[INFO] stratad 0.2.0 started on Android 16 GKI (Demo Tablet)',
       '[INFO] web API bound to 0.0.0.0:7681 (RFC1918 peer guard enabled)',
       '[INFO] container `main` booted in 412ms (nsPid=18422, loop=/dev/block/loop17)',
       '[INFO] service `main/rsshub` started (pid=18510, autoStart=true)',
@@ -261,7 +180,6 @@ function makeTabletDataset(): MockDeviceDataset {
           rsshub: [
             '2026-11-24 18:10:02 [rsshub] RSSHub listening on http://0.0.0.0:1200',
             '2026-11-24 21:40:15 [rsshub] GET /github/issue/DIYgod/RSSHub 200 184ms',
-            '2026-11-24 21:44:51 [rsshub] Memory cache hit ratio: 94.2%',
           ],
           syncthing: [
             '2026-11-24 18:10:04 [syncthing] My ID: STRATA7-DEMO-SYNC99',
@@ -276,6 +194,7 @@ function makeTabletDataset(): MockDeviceDataset {
           '[init] dropbear listening on 0.0.0.0:2222 (public-key only)',
           '[init] synced Android DNS -> /etc/resolv.conf',
         ],
+        tools: createInitialToolsState('main', true),
       },
       'arch-dev': {
         snapshot: {
@@ -309,6 +228,7 @@ function makeTabletDataset(): MockDeviceDataset {
         serviceLogs: {},
         sshKeys: [],
         logs: ['[init] container arch-dev stopped cleanly (0 residual mounts/loops)'],
+        tools: createInitialToolsState('arch-dev', false),
       },
     },
   };
@@ -332,8 +252,5 @@ function makePhoneDataset(): MockDeviceDataset {
 }
 
 export function createMockDatasetForDevice(deviceId: string): MockDeviceDataset {
-  if (deviceId.includes('phone')) {
-    return makePhoneDataset();
-  }
-  return makeTabletDataset();
+  return deviceId.includes('phone') ? makePhoneDataset() : makeTabletDataset();
 }

@@ -15,6 +15,7 @@ import { LogsKernelView } from './components/LogsKernelView.tsx';
 import { NetworkSshView } from './components/NetworkSshView.tsx';
 import { ServicesView } from './components/ServicesView.tsx';
 import { Sidebar } from './components/Sidebar.tsx';
+import { ToolsView } from './components/tools/ToolsView.tsx';
 import { useDesktopDevices } from './hooks/useDesktopDevices.ts';
 import { useStrataWorkspace } from './hooks/useStrataWorkspace.ts';
 import type { NavViewId, TerminalTabSpec } from './types/device.ts';
@@ -149,6 +150,14 @@ function StrataDesktopShell() {
                 onRefresh={workspace.refreshAll}
                 onOpenTerminal={handleOpenTerminal}
                 onNavigateInstall={() => setActiveView('install')}
+                runAction={workspace.runAction}
+              />
+            )}
+
+            {activeView === 'tools' && (
+              <ToolsView
+                transport={devicesState.transport}
+                containers={workspace.containers}
                 runAction={workspace.runAction}
               />
             )}

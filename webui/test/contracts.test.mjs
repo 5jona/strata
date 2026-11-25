@@ -10,9 +10,9 @@ import {
   invokeStrataKsuRpc,
   readStrataKsuWebToken,
 } from '../src/ksu/ksuStrataClient.ts';
-import { createMockStrataTransport } from '../src/lib/mockStrataBridge.ts';
-import { hasL5DiagMounts, isL5DiagMount, toggleL5DiagMounts } from '../src/lib/passthrough.ts';
 import { STRATA_MANIFEST } from '../src/manifest.ts';
+import { createMockStrataTransport } from '../src/plugin/mockStrataBridge.ts';
+import { hasL5DiagMounts, isL5DiagMount, toggleL5DiagMounts } from '../src/shared/passthrough.ts';
 import { L5_DIAG_MOUNTS, L5_DIAG_PATHS, STRATA_EVENTS, STRATA_METHODS } from '../src/types.ts';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -32,8 +32,8 @@ function assertMatchesDef(value, defName, label) {
   );
 }
 
-test('plugins/strata.manager/manifest.json has exact field-by-field parity with manifest.ts', () => {
-  const manifestPath = path.join(REPO_ROOT, 'plugins/strata.manager/manifest.json');
+test('module/plugins/strata.manager/manifest.json has exact field-by-field parity with manifest.ts', () => {
+  const manifestPath = path.join(REPO_ROOT, 'module/plugins/strata.manager/manifest.json');
   const manifestJson = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
   assert.deepEqual(manifestJson, STRATA_MANIFEST);
 });
@@ -278,7 +278,7 @@ test('mockStrataBridge RPC responses and pushed events conform to generated JSON
 });
 
 test('L5_DIAG_MOUNTS passthrough matching aligns between passthrough.ts and Rust strata-ctl', () => {
-  const rustCtlPath = path.join(REPO_ROOT, 'crates/strata-ctl/src/commands/config.rs');
+  const rustCtlPath = path.join(REPO_ROOT, 'daemon/crates/strata-ctl/src/commands/config.rs');
   const rustCtlSource = fs.readFileSync(rustCtlPath, 'utf8');
   assert.match(
     rustCtlSource,
@@ -335,38 +335,45 @@ test('standalone KSU strata rpc client quotes shell args safely and decodes type
   assert.ok(tokenRes.token.length >= 16);
 });
 
-test('version and versionCode stay aligned across module.prop, Rust, Python, WebUI, plugin, and Desktop', () => {
-  const moduleProp = fs.readFileSync(path.join(REPO_ROOT, 'module.prop'), 'utf8');
+test('version and versionCode stay aligned across module.prop, daemon, tools, WebUI, plugin, and Desktop', () => {
+  const moduleProp = fs.readFileSync(path.join(REPO_ROOT, 'module/module.prop'), 'utf8');
   const versionMatch = moduleProp.match(/^version=v([0-9]+)\.([0-9]+)\.([0-9]+)$/m);
   const codeMatch = moduleProp.match(/^versionCode=([0-9]+)$/m);
-  assert.ok(versionMatch, 'module.prop must declare version=vMAJOR.MINOR.PATCH');
-  assert.ok(codeMatch, 'module.prop must declare numeric versionCode');
+  assert.ok(versionMatch, 'module/module.prop must declare version=vMAJOR.MINOR.PATCH');
+  assert.ok(codeMatch, 'module/module.prop must declare numeric versionCode');
 
   const expectedVersion = `${versionMatch[1]}.${versionMatch[2]}.${versionMatch[3]}`;
   const expectedCode =
     Number(versionMatch[1]) * 10000 + Number(versionMatch[2]) * 100 + Number(versionMatch[3]);
   assert.equal(Number(codeMatch[1]), expectedCode);
 
-  const rootCargo = fs.readFileSync(path.join(REPO_ROOT, 'Cargo.toml'), 'utf8');
-  const rootCargoMatch = rootCargo.match(/\[workspace\.package\][\s\S]*?^version\s*=\s*"([^"]+)"/m);
-  assert.ok(rootCargoMatch, 'Cargo.toml must declare workspace.package.version');
-  assert.equal(rootCargoMatch[1], expectedVersion);
+  const daemonCargo = fs.readFileSync(path.join(REPO_ROOT, 'daemon/Cargo.toml'), 'utf8');
+  const daemonCargoMatch = daemonCargo.match(
+    /\[workspace\.package\][\s\S]*?^version\s*=\s*"([^"]+)"/m,
+  );
+  assert.ok(daemonCargoMatch, 'daemon/Cargo.toml must declare workspace.package.version');
+  assert.equal(daemonCargoMatch[1], expectedVersion);
+
+  const debugAgentCargo = fs.readFileSync(
+    path.join(REPO_ROOT, 'tools/strata-debug-agent/Cargo.toml'),
+    'utf8',
+  );
+  const debugAgentMatch = debugAgentCargo.match(/\[package\][\s\S]*?^version\s*=\s*"([^"]+)"/m);
+  assert.ok(debugAgentMatch, 'tools/strata-debug-agent/Cargo.toml must declare package.version');
+  assert.equal(debugAgentMatch[1], expectedVersion);
+
+  const mcpCargo = fs.readFileSync(path.join(REPO_ROOT, 'tools/strata-mcp/Cargo.toml'), 'utf8');
+  const mcpMatch = mcpCargo.match(/\[package\][\s\S]*?^version\s*=\s*"([^"]+)"/m);
+  assert.ok(mcpMatch, 'tools/strata-mcp/Cargo.toml must declare package.version');
+  assert.equal(mcpMatch[1], expectedVersion);
 
   const webuiPkg = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, 'webui/package.json'), 'utf8'));
   const pluginManifest = JSON.parse(
-    fs.readFileSync(path.join(REPO_ROOT, 'plugins/strata.manager/manifest.json'), 'utf8'),
+    fs.readFileSync(path.join(REPO_ROOT, 'module/plugins/strata.manager/manifest.json'), 'utf8'),
   );
   assert.equal(webuiPkg.version, expectedVersion);
   assert.equal(pluginManifest.version, expectedVersion);
   assert.equal(STRATA_MANIFEST.version, expectedVersion);
-
-  const debugInit = fs.readFileSync(
-    path.join(REPO_ROOT, 'container/strata-debug/__init__.py'),
-    'utf8',
-  );
-  const debugMatch = debugInit.match(/^__version__\s*=\s*"([^"]+)"/m);
-  assert.ok(debugMatch, 'container/strata-debug/__init__.py must declare __version__');
-  assert.equal(debugMatch[1], expectedVersion);
 
   const desktopPkg = JSON.parse(
     fs.readFileSync(path.join(REPO_ROOT, 'desktop/package.json'), 'utf8'),

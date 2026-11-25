@@ -2,12 +2,17 @@
 //! and root Bearer token retrieval.
 
 mod parser;
+#[cfg(test)]
+mod tests;
 
 use std::collections::HashMap;
 use std::net::TcpListener;
 use std::process::Command;
 
-pub use parser::{AdbDevice, AdbDeviceState, AdbError, AdbTunnel, parse_adb_devices_output};
+pub use parser::{
+    AdbDevice, AdbDeviceState, AdbError, AdbTunnel, PortForwardEntry, parse_adb_devices_output,
+    parse_adb_forward_list,
+};
 
 use crate::{DEFAULT_REMOTE_API_PORT, REMOTE_WEB_TOKEN_PATH};
 
@@ -64,6 +69,7 @@ pub struct AdbManager<R: CommandRunner = SystemCommandRunner> {
     adb_bin: String,
     runner: R,
     tunnels: HashMap<String, AdbTunnel>,
+    port_forwards: HashMap<(String, u16), PortForwardEntry>,
 }
 
 impl AdbManager<SystemCommandRunner> {
@@ -83,6 +89,7 @@ impl<R: CommandRunner> AdbManager<R> {
             adb_bin: adb_bin.into(),
             runner,
             tunnels: HashMap::new(),
+            port_forwards: HashMap::new(),
         }
     }
 
@@ -151,6 +158,79 @@ impl<R: CommandRunner> AdbManager<R> {
         self.tunnels.values().cloned().collect()
     }
 
+    /// Forwards an arbitrary container/device TCP port to `127.0.0.1:<local_port>` via `adb forward`.
+    /// Reuses an existing tracked forward when `explicit_local_port` is omitted or matches.
+    pub fn forward_device_port(
+        &mut self,
+        serial: &str,
+        remote_port: u16,
+        explicit_local_port: Option<u16>,
+    ) -> Result<PortForwardEntry, AdbError> {
+        parser::validate_serial(serial)?;
+        if remote_port == 0 {
+            return Err(AdbError::InvalidPort(remote_port));
+        }
+        let key = (serial.to_owned(), remote_port);
+        if let Some(existing) = self.port_forwards.get(&key)
+            && explicit_local_port.is_none_or(|p| p == 0 || p == existing.local_port)
+        {
+            return Ok(existing.clone());
+        }
+        let local_port = match explicit_local_port {
+            Some(p) if p > 0 => p,
+            _ => allocate_loopback_port()?,
+        };
+        let local_spec = format!("tcp:{local_port}");
+        let remote_spec = format!("tcp:{remote_port}");
+        self.run_ok(&["-s", serial, "forward", &local_spec, &remote_spec])?;
+        let entry = PortForwardEntry {
+            serial: serial.to_owned(),
+            local_port,
+            remote_port,
+            local_spec,
+            remote_spec,
+        };
+        self.port_forwards.insert(key, entry.clone());
+        Ok(entry)
+    }
+
+    /// Lists active TCP `adb forward` rules, optionally filtered by `serial`.
+    pub fn list_port_forwards(
+        &self,
+        serial: Option<&str>,
+    ) -> Result<Vec<PortForwardEntry>, AdbError> {
+        if let Some(s) = serial {
+            parser::validate_serial(s)?;
+        }
+        let out = self.run_ok(&["forward", "--list"])?;
+        Ok(parse_adb_forward_list(&out.stdout, serial))
+    }
+
+    /// Removes an `adb forward` rule bound to `tcp:<local_port>` on `serial`.
+    pub fn remove_port_forward(&mut self, serial: &str, local_port: u16) -> Result<bool, AdbError> {
+        parser::validate_serial(serial)?;
+        if local_port == 0 {
+            return Err(AdbError::InvalidPort(local_port));
+        }
+        self.run_ok(&[
+            "-s",
+            serial,
+            "forward",
+            "--remove",
+            &format!("tcp:{local_port}"),
+        ])?;
+        self.port_forwards
+            .retain(|(s, _), entry| !(s == serial && entry.local_port == local_port));
+        if self
+            .tunnels
+            .get(serial)
+            .is_some_and(|tunnel| tunnel.local_port == local_port)
+        {
+            self.tunnels.remove(serial);
+        }
+        Ok(true)
+    }
+
     /// Best-effort root token fetch via `adb -s <serial> shell su -c 'cat /data/adb/strata/run/web.token'`.
     #[must_use]
     pub fn try_fetch_remote_token(&self, serial: &str) -> Option<String> {
@@ -186,79 +266,5 @@ impl<R: CommandRunner> AdbManager<R> {
                 stderr: out.stderr.trim().to_owned(),
             })
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::cell::RefCell;
-
-    use super::*;
-
-    #[derive(Debug, Default)]
-    struct FakeRunner {
-        calls: RefCell<Vec<Vec<String>>>,
-        responses: RefCell<Vec<CommandOutput>>,
-    }
-
-    impl FakeRunner {
-        fn with_responses(responses: Vec<CommandOutput>) -> Self {
-            Self {
-                calls: RefCell::new(Vec::new()),
-                responses: RefCell::new(responses),
-            }
-        }
-    }
-
-    impl CommandRunner for FakeRunner {
-        fn run(&self, _program: &str, args: &[String]) -> Result<CommandOutput, AdbError> {
-            self.calls.borrow_mut().push(args.to_vec());
-            let mut list = self.responses.borrow_mut();
-            if list.is_empty() {
-                return Ok(CommandOutput {
-                    status_code: Some(0),
-                    success: true,
-                    stdout: String::new(),
-                    stderr: String::new(),
-                });
-            }
-            Ok(list.remove(0))
-        }
-    }
-
-    #[test]
-    fn connects_fetches_token_and_disconnects() {
-        let runner = FakeRunner::with_responses(vec![
-            CommandOutput {
-                status_code: Some(0),
-                success: true,
-                stdout: String::new(),
-                stderr: String::new(),
-            },
-            CommandOutput {
-                status_code: Some(0),
-                success: true,
-                stdout: "0123456789abcdef0123456789abcdef\n".to_owned(),
-                stderr: String::new(),
-            },
-            CommandOutput {
-                status_code: Some(0),
-                success: true,
-                stdout: String::new(),
-                stderr: String::new(),
-            },
-        ]);
-        let mut mgr = AdbManager::with_runner("adb", runner);
-        let tunnel = mgr
-            .connect_device("emulator-5554", Some(7681), Some(17681))
-            .unwrap();
-        assert_eq!(tunnel.local_port, 17681);
-        assert_eq!(tunnel.base_url, "http://127.0.0.1:17681");
-        assert_eq!(
-            tunnel.token.as_deref(),
-            Some("0123456789abcdef0123456789abcdef")
-        );
-        assert!(mgr.disconnect_device("emulator-5554").unwrap());
-        assert!(!mgr.disconnect_device("emulator-5554").unwrap());
     }
 }

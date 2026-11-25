@@ -159,3 +159,79 @@ test('MockStrataTransport interactive PTY emits prompt and executes preview comm
   pty.close();
   transport.dispose();
 });
+
+test('MockStrataTransport supports tools.* RPC, ColorOS blocklist, secret masking, and task streaming', async () => {
+  const transport = new MockStrataTransport('mock-tablet');
+  const events = [];
+  const unsub = transport.subscribe((ev) => events.push(ev));
+
+  const status = await transport.invoke(STRATA_METHODS.TOOLS_STATUS, { container: 'main' });
+  assert.equal(status.mise.installed, true);
+  assert.equal(status.layoutCompliant, true);
+
+  const catalog = await transport.invoke(STRATA_METHODS.TOOLS_CATALOG, { container: 'main' });
+  assert.ok(catalog.bundles.some((b) => b.id === 'core-dev'));
+  assert.ok(catalog.entries.some((e) => e.id === 'python'));
+
+  await assert.rejects(
+    () =>
+      transport.invoke(STRATA_METHODS.TOOLS_INSTALL, {
+        container: 'main',
+        manager: 'apt',
+        packages: ['openssh-server'],
+        pin: false,
+      }),
+    (err) => err instanceof StrataRpcError && err.code === -32602,
+  );
+
+  await assert.rejects(
+    () =>
+      transport.invoke(STRATA_METHODS.TOOLS_UNINSTALL, {
+        container: 'main',
+        manager: 'apt',
+        packages: ['dropbear-bin'],
+      }),
+    (err) => err instanceof StrataRpcError && err.code === -32602,
+  );
+
+  const cfgUpdated = await transport.invoke(STRATA_METHODS.TOOLS_CONFIG_SET, {
+    container: 'main',
+    githubToken: 'ghp_1234567890abcdef',
+  });
+  assert.equal(cfgUpdated.hasGithubToken, true);
+  assert.equal(cfgUpdated.githubTokenMasked, 'ghp_...cdef');
+
+  const task = await transport.invoke(STRATA_METHODS.TOOLS_INSTALL, {
+    container: 'main',
+    manager: 'uv',
+    packages: ['httpie'],
+    pin: true,
+  });
+  assert.ok(task.taskId.startsWith('task-'));
+
+  await new Promise((r) => setTimeout(r, 650));
+  assert.ok(events.some((e) => e.event === STRATA_EVENTS.TASK_OUTPUT));
+  assert.ok(events.some((e) => e.event === STRATA_EVENTS.TASK_EXIT));
+  assert.ok(events.some((e) => e.event === STRATA_EVENTS.TOOLS_STATE_CHANGED));
+
+  const list = await transport.invoke(STRATA_METHODS.TOOLS_LIST, {
+    container: 'main',
+    checkOutdated: false,
+  });
+  assert.ok(list.items.some((i) => i.name === 'httpie' && i.manager === 'uv'));
+
+  const doctor = await transport.invoke(STRATA_METHODS.TOOLS_DOCTOR, { container: 'main' });
+  assert.equal(doctor.ok, true);
+
+  const clean = await transport.invoke(STRATA_METHODS.TOOLS_CACHE_CLEAN, {
+    container: 'main',
+    cleanMise: true,
+    cleanUv: true,
+    cleanApt: true,
+    pruneUnused: false,
+  });
+  assert.ok(clean.freedBytes > 0);
+
+  unsub();
+  transport.dispose();
+});
