@@ -65,19 +65,21 @@ prepare_rootfs_image() {
 }
 
 provision_rootfs_via_chroot() {
-    echo "[*] Staging container scripts, strata-debug, and SSH public key..."
+    echo "[*] Staging container scripts, static strata-debug, and SSH public key..."
     adb_cmd shell "rm -rf ${CONTAINER_STAGE} && mkdir -p ${CONTAINER_STAGE}"
     adb_cmd push \
-        "${SCRIPT_DIR}/container/setup-container.sh" \
-        "${SCRIPT_DIR}/container/host-exec" \
-        "${SCRIPT_DIR}/container/strata-debug" \
+        "${SCRIPT_DIR}/module/container/setup-container.sh" \
+        "${SCRIPT_DIR}/module/container/host-exec" \
         "${CONTAINER_STAGE}/" >/dev/null
+    if [ -f "${SCRIPT_DIR}/out/stage/bin/strata-debug" ]; then
+        adb_cmd push "${SCRIPT_DIR}/out/stage/bin/strata-debug" "${CONTAINER_STAGE}/strata-debug" >/dev/null
+    fi
     [ -n "${PUBKEY_PATH}" ] && adb_cmd push "${PUBKEY_PATH}" "${CONTAINER_STAGE}/authorized_keys" >/dev/null
 
     local setup_flags=""
     [ "${DEBUG_PROFILE}" -eq 1 ] && setup_flags="--debug-profile"
 
-    echo "[*] Running container/setup-container.sh inside chroot (installing Dropbear, Python, tools)..."
+    echo "[*] Running module/container/setup-container.sh inside chroot (installing Dropbear, mise, uv, tools)..."
     adb_su "
         set -eu
         LOOP_DEV=''

@@ -1,13 +1,29 @@
-/target/
+# Build, cache, staging, and packaging outputs
 /out/
+*.zip
+*.tar.gz
+
+# Rust build artifacts and local Cargo overrides
+/target/
+/daemon/target/
+/desktop/target/
+/tools/strata-debug-agent/target/
+/tools/strata-mcp/target/
 /.cargo/config.toml
-/bin/stratad
-/bin/strata
-/plugins/strata.manager/web/
-/webroot/
+/daemon/.cargo/config.toml
+/desktop/.cargo/config.toml
+
+# WebUI and Desktop frontend dependencies / outputs
 /webui/node_modules/
+/webui/dist/
+/desktop/node_modules/
+/desktop/dist/
+
+# Python caches
 __pycache__/
 *.pyc
+
+# Editor and OS files
 *.tmp
 *.swp
 *~

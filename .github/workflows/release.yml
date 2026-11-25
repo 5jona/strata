@@ -7,29 +7,188 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Release tag to package and publish (defaults to version in module.prop)"
+        description: "Release tag label for manual dry-run builds (defaults to git describe)"
         required: false
         type: string
+      dry_run:
+        description: "Dry-run mode (builds archives without publishing a GitHub Release)"
+        required: false
+        default: true
+        type: boolean
 
 permissions:
   contents: write
 
+concurrency:
+  group: release-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
-  release:
-    name: Build & Publish KernelSU Module
+  build-android:
+    name: Build Android KernelSU Module
     runs-on: ubuntu-latest
+    outputs:
+      release_tag: ${{ steps.meta.outputs.release_tag }}
+    env:
+      CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER: "${{ github.workspace }}/scripts/aarch64-android-linker.sh"
+      CC_aarch64_linux_android: "${{ github.workspace }}/scripts/aarch64-android-linker.sh"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Verify version parity and resolve release tag
+        id: meta
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            node scripts/bump-version.mjs --check --tag "${GITHUB_REF_NAME}"
+            TAG="${GITHUB_REF_NAME}"
+          else
+            node scripts/bump-version.mjs --check
+            if [ -n "${INPUT_TAG}" ]; then
+              TAG="${INPUT_TAG}"
+            else
+              TAG="$(git describe --tags --always 2>/dev/null || echo v0.0.0-dispatch)"
+            fi
+          fi
+          echo "release_tag=${TAG}" >> "${GITHUB_OUTPUT}"
+          echo "RELEASE_TAG=${TAG}" >> "${GITHUB_ENV}"
+
+      - name: Setup Rust toolchain (Android + static musl)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+          targets: aarch64-linux-android, aarch64-unknown-linux-musl
+
+      - name: Cache Cargo artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            daemon
+            tools/strata-debug-agent
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 12.22.0
+
+      - name: Setup Node.js pnpm cache
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: webui/pnpm-lock.yaml
+
+      - name: Resolve Android SDK & NDK r30 paths
+        run: |
+          set -euo pipefail
+          SDK_ROOT="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          NDK_HOME="${SDK_ROOT}/ndk/30.0.16248370"
+          NDK_BIN="${NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          echo "${NDK_BIN}" >> "${GITHUB_PATH}"
+          {
+            echo "ANDROID_HOME=${SDK_ROOT}"
+            echo "ANDROID_SDK_ROOT=${SDK_ROOT}"
+            echo "ANDROID_NDK_HOME=${NDK_HOME}"
+            echo "AR_aarch64_linux_android=${NDK_BIN}/llvm-ar"
+            echo "RANLIB_aarch64_linux_android=${NDK_BIN}/llvm-ranlib"
+          } >> "${GITHUB_ENV}"
+
+      - name: Cache Android NDK r30
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.ANDROID_NDK_HOME }}
+          key: android-ndk-${{ runner.os }}-30.0.16248370
+
+      - name: Install Android NDK r30 if not cached
+        run: |
+          set -euo pipefail
+          if [ -d "${ANDROID_NDK_HOME}" ]; then
+            echo "[*] Reusing cached Android NDK at ${ANDROID_NDK_HOME}"
+            exit 0
+          fi
+          SDK_ROOT="${ANDROID_SDK_ROOT}"
+          SDKMANAGER="$(find "${SDK_ROOT}/cmdline-tools" -name sdkmanager -type f | sort -V | tail -n 1)"
+          yes | "${SDKMANAGER}" --sdk_root="${SDK_ROOT}" --licenses >/dev/null || true
+          "${SDKMANAGER}" --sdk_root="${SDK_ROOT}" --install "ndk;30.0.16248370"
+
+      - name: Install WebUI dependencies
+        run: pnpm --dir webui install --frozen-lockfile
+
+      - name: Verify contracts and golden fixtures
+        run: |
+          webui/node_modules/.bin/pochita-contracts-gen check contracts/*.contract.json
+          webui/node_modules/.bin/pochita-contracts-gen validate-fixtures contracts/schemas/strata.schema.json contracts/fixtures
+
+      - name: Build KernelSU module archive
+        run: bash scripts/build.sh
+
+      - name: Stage strata-<tag>.zip and KernelSU update.json
+        run: |
+          set -euo pipefail
+          rm -rf release-android
+          mkdir -p release-android
+          cp out/strata.zip "release-android/strata-${RELEASE_TAG}.zip"
+          node -e '
+            const fs = require("node:fs");
+            const prop = fs.readFileSync("module/module.prop", "utf8");
+            const codeMatch = prop.match(/^versionCode=(\d+)$/m);
+            if (!codeMatch) throw new Error("Missing versionCode in module/module.prop");
+            const tag = process.env.RELEASE_TAG;
+            const repo = process.env.GITHUB_REPOSITORY || "5jona/strata";
+            const payload = {
+              version: tag,
+              versionCode: Number(codeMatch[1]),
+              zipUrl: `https://github.com/${repo}/releases/download/${tag}/strata-${tag}.zip`,
+              changelog: `https://raw.githubusercontent.com/${repo}/${tag}/docs/CHANGELOG.md`,
+            };
+            fs.writeFileSync("release-android/update.json", `${JSON.stringify(payload, null, 2)}\n`, "utf8");
+          '
+
+      - name: Upload Android module release assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-android
+          path: release-android/*
+
+  build-desktop:
+    name: Build Desktop (${{ matrix.label }})
+    needs: [build-android]
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            label: linux-x86_64
+          - os: windows-latest
+            label: windows-x86_64
+          - os: macos-latest
+            label: macos-arm64
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-linux-android
-          components: rustfmt, clippy
-
-      - name: Cache Cargo artifacts
-        uses: Swatinem/rust-cache@v2
+      - name: Install Linux Tauri dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libdbus-1-dev \
+            pkg-config
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
@@ -41,86 +200,194 @@ jobs:
         with:
           node-version: 24
           cache: pnpm
-          cache-dependency-path: webui/pnpm-lock.yaml
+          cache-dependency-path: desktop/pnpm-lock.yaml
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo artifacts
+        uses: Swatinem/rust-cache@v2
         with:
-          python-version: "3.12"
+          workspaces: desktop
 
-      - name: Install Android NDK 30.0.16248370 and configure linker
+      - name: Install Desktop dependencies and run checks
+        run: |
+          pnpm --dir desktop install --frozen-lockfile
+          pnpm --dir desktop check
+
+      - name: Build Tauri v2 Desktop bundles
+        working-directory: desktop
+        run: pnpm dlx @tauri-apps/cli@2 build
+
+      - name: Collect Desktop installer bundles
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ needs.build-android.outputs.release_tag }}
+          MATRIX_LABEL: ${{ matrix.label }}
         run: |
           set -euo pipefail
-          SDK_ROOT="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
-          SDKMANAGER="$(find "${SDK_ROOT}/cmdline-tools" -name sdkmanager -type f | sort -V | tail -n 1)"
-          echo "Using sdkmanager: ${SDKMANAGER} (SDK_ROOT=${SDK_ROOT})"
-          yes | "${SDKMANAGER}" --sdk_root="${SDK_ROOT}" --licenses >/dev/null || true
-          "${SDKMANAGER}" --sdk_root="${SDK_ROOT}" --install "ndk;30.0.16248370"
-          echo "ANDROID_HOME=${SDK_ROOT}" >> "$GITHUB_ENV"
-          echo "ANDROID_SDK_ROOT=${SDK_ROOT}" >> "$GITHUB_ENV"
-          echo "ANDROID_NDK_HOME=${SDK_ROOT}/ndk/30.0.16248370" >> "$GITHUB_ENV"
-          echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=${GITHUB_WORKSPACE}/scripts/aarch64-android-linker.sh" >> "$GITHUB_ENV"
+          rm -rf release-desktop
+          mkdir -p release-desktop
+          shopt -s nullglob
+          for ext in deb rpm AppImage exe msi dmg; do
+            for f in desktop/target/release/bundle/*/*."${ext}"; do
+              cp "$f" "release-desktop/$(basename "$f")"
+            done
+          done
+          ls -la release-desktop/
 
-      - name: Install WebUI dependencies
-        run: pnpm --dir webui install --frozen-lockfile
+      - name: Upload Desktop release assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-desktop-${{ matrix.label }}
+          path: release-desktop/*
 
-      - name: Check contracts and validate golden fixtures
-        run: |
-          webui/node_modules/.bin/pochita-contracts-gen check contracts/*.contract.json
-          webui/node_modules/.bin/pochita-contracts-gen validate-fixtures contracts/schemas/strata.schema.json contracts/fixtures
+  build-mcp:
+    name: Build strata-mcp (${{ matrix.target_label }})
+    needs: [build-android]
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target_label: linux-x86_64
+            archive: tar.gz
+            bin_name: strata-mcp
+          - os: macos-latest
+            target_label: macos-arm64
+            archive: tar.gz
+            bin_name: strata-mcp
+          - os: windows-latest
+            target_label: windows-x86_64
+            archive: zip
+            bin_name: strata-mcp.exe
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - name: Build KernelSU module archive
-        run: bash build.sh
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
 
-      - name: Package release assets and SHA256SUMS
-        id: package
+      - name: Cache Cargo artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: tools/strata-mcp
+
+      - name: Build strata-mcp release binary
+        working-directory: tools/strata-mcp
+        run: cargo build --release
+
+      - name: Package strata-mcp archive (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
         env:
-          INPUT_TAG: ${{ inputs.tag }}
+          RELEASE_TAG: ${{ needs.build-android.outputs.release_tag }}
+          TARGET_LABEL: ${{ matrix.target_label }}
+          BIN_NAME: ${{ matrix.bin_name }}
         run: |
-          if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
-            if [ -n "${INPUT_TAG}" ]; then
-              TAG="${INPUT_TAG}"
-            else
-              TAG="$(awk -F= '$1 == "version" { print $2; exit }' module.prop)"
-            fi
-          else
-            TAG="${GITHUB_REF_NAME}"
-          fi
-          if [ -z "${TAG}" ]; then
-            echo "Failed to determine release tag" >&2
-            exit 1
-          fi
-          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
-          rm -rf release-assets
-          mkdir -p release-assets
-          cp out/strata.zip "release-assets/strata-${TAG}.zip"
+          set -euo pipefail
+          rm -rf release-mcp
+          mkdir -p release-mcp
+          tar -C tools/strata-mcp/target/release -czf "release-mcp/strata-mcp-${RELEASE_TAG}-${TARGET_LABEL}.tar.gz" "${BIN_NAME}"
+          ls -la release-mcp/
+
+      - name: Package strata-mcp archive (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ needs.build-android.outputs.release_tag }}
+          TARGET_LABEL: ${{ matrix.target_label }}
+          BIN_NAME: ${{ matrix.bin_name }}
+        run: |
+          New-Item -ItemType Directory -Force -Path release-mcp | Out-Null
+          Compress-Archive -Path "tools/strata-mcp/target/release/$env:BIN_NAME" -DestinationPath "release-mcp/strata-mcp-$env:RELEASE_TAG-$env:TARGET_LABEL.zip" -Force
+          Get-ChildItem release-mcp
+
+      - name: Upload strata-mcp release asset
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-mcp-${{ matrix.target_label }}
+          path: release-mcp/*
+
+  publish-release:
+    name: Assemble SHA256SUMS & Publish Release
+    needs: [build-android, build-desktop, build-mcp]
+    runs-on: ubuntu-latest
+    env:
+      RELEASE_TAG: ${{ needs.build-android.outputs.release_tag }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Download all release artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: Generate unified SHA256SUMS.txt
+        run: |
+          set -euo pipefail
           (
             cd release-assets
-            sha256sum "strata-${TAG}.zip" > SHA256SUMS.txt
+            find . -maxdepth 1 -type f ! -name 'SHA256SUMS.txt' -printf '%P\n' \
+              | LC_ALL=C sort \
+              | xargs sha256sum > SHA256SUMS.txt
           )
           cat release-assets/SHA256SUMS.txt
 
-      - name: Upload workflow artifacts
+      - name: Upload combined release artifact bundle
         uses: actions/upload-artifact@v4
         with:
-          name: strata-${{ steps.package.outputs.tag }}
-          path: release-assets/*
+          name: strata-${{ env.RELEASE_TAG }}
+          path: release-assets/
+
+      - name: Extract release notes from docs/CHANGELOG.md
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          set -euo pipefail
+          VERSION="${RELEASE_TAG#v}"
+          node -e '
+            const fs = require("node:fs");
+            const ver = process.argv[1];
+            const lines = fs.readFileSync("docs/CHANGELOG.md", "utf8").split(/\r?\n/);
+            const headerRe = new RegExp(`^## \\[${ver.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\$&")}\\](?:\\s|$)`);
+            const start = lines.findIndex((l) => headerRe.test(l));
+            if (start === -1) {
+              console.error(`Missing docs/CHANGELOG.md section for ${ver}`);
+              process.exit(1);
+            }
+            const rest = lines.slice(start + 1);
+            const endOffset = rest.findIndex((l) => /^## \[/.test(l));
+            const body = (endOffset === -1 ? rest : rest.slice(0, endOffset)).join("\n").trim();
+            if (!body) {
+              console.error(`Empty docs/CHANGELOG.md section for ${ver}`);
+              process.exit(1);
+            }
+            fs.writeFileSync("RELEASE_NOTES.md", `${body}\n`, "utf8");
+          ' "${VERSION}"
 
       - name: Publish GitHub Release
-        if: startsWith(github.ref, 'refs/tags/v') || inputs.tag != ''
+        if: startsWith(github.ref, 'refs/tags/v')
         env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ steps.package.outputs.tag }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          if gh release view "${TAG}" >/dev/null 2>&1; then
-            gh release upload "${TAG}" release-assets/* --clobber
+          set -euo pipefail
+          extra_args=()
+          if [[ "${RELEASE_TAG}" == *-alpha* || "${RELEASE_TAG}" == *-beta* || "${RELEASE_TAG}" == *-rc* ]]; then
+            extra_args+=(--prerelease)
+          fi
+          if gh release view "${RELEASE_TAG}" >/dev/null 2>&1; then
+            gh release upload "${RELEASE_TAG}" release-assets/* --clobber
           else
-            EXTRA_ARGS=()
-            if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
-              EXTRA_ARGS+=(--target "${GITHUB_SHA}")
-            fi
-            gh release create "${TAG}" release-assets/* \
-              --title "Strata ${TAG}" \
-              --generate-notes \
-              "${EXTRA_ARGS[@]}"
+            gh release create "${RELEASE_TAG}" release-assets/* \
+              --title "Strata ${RELEASE_TAG}" \
+              --notes-file RELEASE_NOTES.md \
+              "${extra_args[@]}"
           fi

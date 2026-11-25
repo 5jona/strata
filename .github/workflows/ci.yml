@@ -45,7 +45,7 @@ jobs:
         run: pnpm --dir webui check
 
   rust:
-    name: Rust
+    name: Rust (Daemon & Tools)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -55,40 +55,111 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+          targets: aarch64-unknown-linux-musl
 
       - name: Cache Cargo artifacts
         uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            daemon
+            tools/strata-debug-agent
+            tools/strata-mcp
 
-      - name: Check Rust formatting
-        run: cargo fmt --check
+      - name: Check daemon workspace (fmt, clippy, test)
+        working-directory: daemon
+        run: |
+          cargo fmt --check
+          cargo clippy --workspace --all-targets -- -D warnings
+          cargo test --workspace
 
-      - name: Run Clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Check strata-debug-agent (fmt, clippy, test, static musl build)
+        working-directory: tools/strata-debug-agent
+        run: |
+          cargo fmt --check
+          cargo clippy --workspace --all-targets -- -D warnings
+          cargo test --workspace
+          cargo build --release --target aarch64-unknown-linux-musl
+          if readelf -l target/aarch64-unknown-linux-musl/release/strata-debug | grep -q 'INTERP'; then
+            echo "Error: strata-debug binary contains PT_INTERP" >&2
+            exit 1
+          fi
 
-      - name: Run Rust workspace tests
-        run: cargo test --workspace
+      - name: Check strata-mcp (fmt, clippy, test)
+        working-directory: tools/strata-mcp
+        run: |
+          cargo fmt --check
+          cargo clippy --workspace --all-targets -- -D warnings
+          cargo test --workspace
 
-  python:
-    name: Python
+  desktop:
+    name: Desktop (Frontend & Tauri Rust)
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Tauri Linux system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libdbus-1-dev \
+            pkg-config
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 12.22.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: desktop/pnpm-lock.yaml
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache Cargo artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop
+
+      - name: Install Desktop dependencies
+        run: pnpm --dir desktop install --frozen-lockfile
+
+      - name: Run Desktop frontend checks
+        run: pnpm --dir desktop check
+
+      - name: Check Desktop Rust workspace (fmt, clippy, test)
+        working-directory: desktop
+        run: |
+          cargo fmt --check
+          cargo clippy --workspace --all-targets -- -D warnings
+          cargo test --workspace
+
+  version-and-scripts:
+    name: Version Parity & Scripts
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
         with:
-          python-version: "3.12"
+          node-version: 24
 
-      - name: Syntax-check Python sources
+      - name: Check cross-stack version parity
+        run: node scripts/bump-version.mjs --check
+
+      - name: Syntax-check shell and helper scripts
         run: |
-          python3 -m py_compile \
-            container/strata-debug/*.py \
-            scripts/strata-debug-mcp.py \
-            scripts/strata_mcp/*.py \
-            scripts/verify-live.py \
-            scripts/verify_live/*.py \
-            tests/*.py
-
-      - name: Run Python unit tests
-        run: python3 -m unittest discover -s tests -v
+          bash -n scripts/*.sh scripts/lib/*.sh module/*.sh module/container/setup-container.sh
+          python3 -m py_compile scripts/verify-live.py scripts/verify_live/*.py

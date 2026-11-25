@@ -37,7 +37,7 @@ Options:
   --size <size>           Sparse ext4 rootfs image cap (default: 32G)
   --pubkey <path>         SSH public key (default: ~/.ssh/id_ed25519.pub or id_rsa.pub)
   --recreate              Force recreate /data/local/strata/containers/main/rootfs.img
-  --skip-build            Skip build.sh and use existing out/strata.zip
+  --skip-build            Skip scripts/build.sh and use existing out/strata.zip
   --skip-module-install   Skip module build/install (resume container setup after reboot)
   --no-reboot-wait        Exit 0 with instructions if KernelSU staged modules_update
   --enable-debug-mounts   Enable uinput char dev and L5 diagnostics mounts (default: on)
@@ -123,7 +123,7 @@ check_device_root() {
 install_module_zip() {
     if [ "${SKIP_BUILD}" -eq 0 ] || [ ! -f "${ZIP_PATH}" ]; then
         echo "[*] Building Strata module archive..."
-        bash "${SCRIPT_DIR}/build.sh"
+        bash "${SCRIPT_DIR}/scripts/build.sh"
     fi
     [ -f "${ZIP_PATH}" ] || { echo "[!] Module archive missing: ${ZIP_PATH}" >&2; exit 1; }
 
@@ -148,10 +148,11 @@ install_module_zip() {
             /system/bin/chmod 0755 /data/local/strata /data/local/strata/containers /data/local/strata/containers/main ${MOUNT_DIR} \
                 ${REMOTE_MOD_DIR}/service.sh ${REMOTE_MOD_DIR}/post-fs-data.sh ${REMOTE_MOD_DIR}/customize.sh \
                 ${REMOTE_MOD_DIR}/uninstall.sh ${REMOTE_MOD_DIR}/bin/stratad ${REMOTE_MOD_DIR}/bin/strata \
+                ${REMOTE_MOD_DIR}/bin/strata-debug \
                 ${REMOTE_MOD_DIR}/container/host-exec ${REMOTE_MOD_DIR}/container/setup-container.sh \
                 ${REMOTE_MOD_DIR}/scripts/sync-sideveil-plugin.sh
             /system/bin/chmod 0644 ${REMOTE_MOD_DIR}/module.prop ${REMOTE_MOD_DIR}/config.json
-            [ -d ${REMOTE_MOD_DIR}/container/strata-debug ] && /system/bin/chmod 0755 ${REMOTE_MOD_DIR}/container/strata-debug/cli.py ${REMOTE_MOD_DIR}/container/strata-debug/forward_bridge.py 2>/dev/null || true
+            /system/bin/rm -rf ${REMOTE_MOD_DIR}/container/strata-debug
             if [ ! -f /data/adb/strata/config.json ]; then
                 /system/bin/cp ${REMOTE_MOD_DIR}/config.json /data/adb/strata/config.json
                 /system/bin/chown 0:0 /data/adb/strata/config.json

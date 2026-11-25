@@ -9,6 +9,14 @@ CC_aarch64_linux_android = "{{config_root}}/scripts/aarch64-android-linker.sh"
 [task_config]
 dir = "{{config_root}}"
 
+[tasks."version:bump"]
+description = "Bump module, daemon, tools, WebUI, plugin manifest, desktop, and docs/CHANGELOG.md versions"
+run = "node scripts/bump-version.mjs"
+
+[tasks."version:check"]
+description = "Verify version and versionCode parity across all Strata targets and docs/CHANGELOG.md"
+run = "node scripts/bump-version.mjs --check"
+
 [tasks."contracts:gen"]
 description = "Regenerate Rust, TypeScript, and JSON Schema contracts from contracts/*.contract.json"
 run = "webui/node_modules/.bin/pochita-contracts-gen generate contracts/*.contract.json"
@@ -18,11 +26,17 @@ description = "Verify generated contracts have zero drift and validate golden wi
 run = "webui/node_modules/.bin/pochita-contracts-gen check contracts/*.contract.json && webui/node_modules/.bin/pochita-contracts-gen validate-fixtures contracts/schemas/strata.schema.json contracts/fixtures"
 
 [tasks."rust:check"]
-description = "Run Rust fmt check, clippy (-D warnings), and workspace unit tests"
-run = "cargo fmt --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace"
+description = "Run Rust fmt check, clippy (-D warnings), and unit tests across daemon, strata-debug-agent, and strata-mcp"
+run = """
+set -euo pipefail
+for ws in daemon tools/strata-debug-agent tools/strata-mcp; do
+  echo "[*] Checking Rust workspace: ${ws}"
+  (cd "${ws}" && cargo fmt --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace)
+done
+"""
 
 [tasks."webui:check"]
-description = "Lint, typecheck, build, and test Strata SideVeil plugin WebUI"
+description = "Lint, typecheck, build, and test Strata SideVeil plugin and standalone KernelSU WebUI"
 dir = "{{config_root}}/webui"
 run = "pnpm check"
 
@@ -31,30 +45,74 @@ description = "Format and auto-fix Strata WebUI files with Biome"
 dir = "{{config_root}}/webui"
 run = "pnpm format"
 
-[tasks."python:check"]
-description = "Syntax-check Python tools and run host-side unit tests for strata-debug"
-run = "python3 -m py_compile container/strata-debug/*.py scripts/strata-debug-mcp.py scripts/strata_mcp/*.py scripts/verify-live.py scripts/verify_live/*.py tests/*.py && python3 -m unittest discover -s tests -v"
+[tasks."desktop:check"]
+description = "Lint, typecheck, build, and test Strata Desktop frontend and Rust crates"
+dir = "{{config_root}}/desktop"
+run = """
+set -euo pipefail
+pnpm check
+cargo fmt --check
+if command -v pkg-config >/dev/null 2>&1 && pkg-config --exists webkit2gtk-4.1; then
+  cargo clippy --workspace --all-targets -- -D warnings
+  cargo test --workspace
+else
+  cargo clippy --all-targets -- -D warnings
+  cargo test
+fi
+"""
+
+[tasks."build:daemon"]
+description = "Cross-compile stratad and strata CLI for aarch64-linux-android into out/stage/bin"
+run = """
+set -euo pipefail
+(cd daemon && cargo build --release --target aarch64-linux-android -p stratad -p strata-ctl)
+mkdir -p out/stage/bin
+cp daemon/target/aarch64-linux-android/release/stratad out/stage/bin/stratad
+cp daemon/target/aarch64-linux-android/release/strata out/stage/bin/strata
+chmod 0755 out/stage/bin/stratad out/stage/bin/strata
+"""
+
+[tasks."build:debug-agent"]
+description = "Cross-compile static musl strata-debug for aarch64-unknown-linux-musl and verify zero PT_INTERP"
+run = """
+set -euo pipefail
+(cd tools/strata-debug-agent && cargo build --release --target aarch64-unknown-linux-musl)
+BIN="tools/strata-debug-agent/target/aarch64-unknown-linux-musl/release/strata-debug"
+if readelf -l "${BIN}" | grep -q 'INTERP'; then
+  echo "[!] Error: ${BIN} contains PT_INTERP (expected static musl ELF)" >&2
+  exit 1
+fi
+mkdir -p out/stage/bin
+cp "${BIN}" out/stage/bin/strata-debug
+chmod 0755 out/stage/bin/strata-debug
+"""
+
+[tasks."build:mcp"]
+description = "Build host-side Rust strata-mcp release binary"
+dir = "{{config_root}}/tools/strata-mcp"
+run = "cargo build --release"
 
 [tasks.check]
-description = "Run full contract, Rust, WebUI, and Python quality gates"
-depends = ["contracts:check", "rust:check", "webui:check", "python:check"]
+description = "Run full version, contract, Rust, WebUI, and Desktop quality gates"
+depends = ["version:check", "contracts:check", "rust:check", "webui:check", "desktop:check"]
 
 [tasks.format]
-description = "Format Rust workspace with rustfmt"
-run = "cargo fmt --all"
+description = "Format all Rust workspaces with rustfmt"
+run = """
+set -euo pipefail
+for ws in daemon tools/strata-debug-agent tools/strata-mcp desktop; do
+  (cd "${ws}" && cargo fmt --all)
+done
+"""
 
 [tasks.build]
-description = "Cross-compile stratad and strata CLI for aarch64-linux-android"
-run = "cargo build --release --target aarch64-linux-android -p stratad -p strata-ctl"
-
-[tasks.archive]
-description = "Build release binaries and package KernelSU archive out/strata.zip"
-run = "bash build.sh"
+description = "Build daemon, static musl debug agent, WebUI dual bundles, and package out/strata.zip"
+run = "bash scripts/build.sh"
 
 [tasks.reload]
 description = "Build and hot-reload Strata onto connected Android device"
-run = "bash reload.sh"
+run = "bash scripts/reload.sh"
 
 [tasks.clean]
-description = "Remove Rust target directory, staged binaries, and output archive"
-run = "rm -rf target out bin/stratad bin/strata"
+description = "Remove Rust target directories, staged binaries, and output archive"
+run = "rm -rf out daemon/target tools/strata-debug-agent/target tools/strata-mcp/target desktop/target desktop/dist"
