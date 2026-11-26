@@ -183,6 +183,10 @@ pub(crate) struct ObserveStepParams {
     /// {"kind":"edge-swipe","side":"left"|"right","yPercent":50,"distanceDp":96,"durationMs":240,"cancelBack":false} |
     /// shorthands: "edge-swipe", "edge-swipe:left|right", "tap:x,y", "long-press:x,y[,ms]", "swipe:x0,y0,x1,y1[,ms]".
     pub(crate) action_gesture: Option<Value>,
+    /// Optional sequential multi-step action array: [{"kind":"tap","x":100,"y":200}, {"kind":"swipe","x0":...,"y0":...,"x1":...,"y1":...,"durationMs":240}, {"kind":"shell","command":"..."}, {"kind":"sleep","ms":200}].
+    pub(crate) actions: Option<Vec<Value>>,
+    /// Optional UI text to wait for after actions complete (polls up to settleMs, max 5000ms).
+    pub(crate) wait_for_text: Option<String>,
     pub(crate) cursor: Option<String>,
     pub(crate) settle_ms: Option<u64>,
     pub(crate) package: Option<String>,

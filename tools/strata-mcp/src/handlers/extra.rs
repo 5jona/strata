@@ -205,7 +205,8 @@ fn observe_retry_policy(p: &ObserveStepParams) -> RetryPolicy {
         .as_deref()
         .is_some_and(|s| !s.trim().is_empty());
     let has_gesture = p.action_gesture.as_ref().is_some_and(|v| !v.is_null());
-    if has_rpc || has_shell || has_cdp_eval || has_gesture {
+    let has_actions = p.actions.as_ref().is_some_and(|v| !v.is_empty());
+    if has_rpc || has_shell || has_cdp_eval || has_gesture || has_actions {
         RetryPolicy::SideEffect
     } else {
         RetryPolicy::Idempotent
@@ -247,6 +248,12 @@ fn build_observe_argv(p: ObserveStepParams) -> Result<(Vec<String>, RetryPolicy)
         let encoded = normalize_action_gesture(g)?;
         cmd.extend(["--action-gesture".to_owned(), encoded]);
     }
+    if let Some(actions) = p.actions.filter(|v| !v.is_empty()) {
+        let encoded = serde_json::to_string(&Value::Array(actions))
+            .map_err(|e| format!("serialize actions failed: {e}"))?;
+        cmd.extend(["--actions".to_owned(), encoded]);
+    }
+    push_opt(&mut cmd, "--wait-for-text", p.wait_for_text.as_deref());
     Ok((cmd, policy))
 }
 
@@ -280,6 +287,8 @@ mod tests {
             action_shell: None,
             action_cdp_eval: None,
             action_gesture: None,
+            actions: None,
+            wait_for_text: None,
             cursor: None,
             settle_ms: None,
             package: None,
@@ -343,5 +352,32 @@ mod tests {
             observe_retry_policy(&with_null_gesture),
             RetryPolicy::Idempotent
         );
+
+        let mut with_empty_actions = empty_observe_params();
+        with_empty_actions.actions = Some(vec![]);
+        assert_eq!(
+            observe_retry_policy(&with_empty_actions),
+            RetryPolicy::Idempotent
+        );
+
+        let mut with_actions = empty_observe_params();
+        with_actions.actions = Some(vec![
+            json!({"kind": "tap", "x": 10, "y": 20}),
+            json!({"kind": "sleep", "ms": 100}),
+        ]);
+        with_actions.wait_for_text = Some("Ready".to_owned());
+        let (argv, policy) = build_observe_argv(with_actions).expect("actions argv");
+        assert_eq!(policy, RetryPolicy::SideEffect);
+        let a_idx = argv
+            .iter()
+            .position(|a| a == "--actions")
+            .expect("--actions");
+        let seq: Value = serde_json::from_str(&argv[a_idx + 1]).expect("actions json");
+        assert_eq!(seq.as_array().map(Vec::len), Some(2));
+        let w_idx = argv
+            .iter()
+            .position(|a| a == "--wait-for-text")
+            .expect("--wait-for-text");
+        assert_eq!(argv[w_idx + 1], "Ready");
     }
 }

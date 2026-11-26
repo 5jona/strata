@@ -100,6 +100,10 @@ pub(crate) enum Command {
         #[arg(long)]
         action_gesture: Option<String>,
         #[arg(long)]
+        actions: Option<String>,
+        #[arg(long)]
+        wait_for_text: Option<String>,
+        #[arg(long)]
         cursor: Option<String>,
         #[arg(long, default_value_t = 350)]
         settle_ms: u64,

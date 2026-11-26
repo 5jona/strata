@@ -87,8 +87,12 @@ export function KsuContainerFleetCard({
         </span>
       </div>
 
-      <div className="grid grid-cols-1 gap-3 lg:grid-cols-12">
-        <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2 lg:col-span-7">
+      <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-12">
+        <div
+          className={`grid grid-cols-1 items-start gap-2.5 lg:col-span-7 ${
+            containers.length > 1 ? 'sm:grid-cols-2' : ''
+          }`}
+        >
           {containers.map((c) => {
             const isSelected = c.id === selectedId;
             const isRunning = c.phase === 'running';

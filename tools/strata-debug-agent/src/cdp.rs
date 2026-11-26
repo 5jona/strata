@@ -249,3 +249,27 @@ pub(crate) async fn audit_webview(
         Err(e) => json!({"ok": false, "socket": sock.socket, "pageUrl": page["url"], "error": e}),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::DOM_AUDIT_JS;
+
+    #[test]
+    fn dom_audit_script_contains_layout_quality_metrics() {
+        for key in [
+            "horizontalOverflow",
+            "horizontalOverflowSelectors",
+            "toastBottomOverlap",
+            r#"[data-pochita="toast-viewport"]"#,
+            r#"[data-pochita="app-shell-bottom"]"#,
+            "brokenImages",
+            "naturalWidth",
+            "domNodeCount",
+        ] {
+            assert!(
+                DOM_AUDIT_JS.contains(key),
+                "dom_audit.js missing expected metric/selector: {key}"
+            );
+        }
+    }
+}

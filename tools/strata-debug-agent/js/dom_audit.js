@@ -2,9 +2,12 @@
 (() => {
   const vw = window.innerWidth || document.documentElement.clientWidth || 0;
   const vh = window.innerHeight || document.documentElement.clientHeight || 0;
+  const docClientW = document.documentElement.clientWidth || 0;
   const rootOverflowX = document.documentElement.scrollWidth > vw + 1;
+  const horizontalOverflow = document.documentElement.scrollWidth > docClientW + 1;
   const rootOverflowY = document.documentElement.scrollHeight > vh + 1;
   const overflowSamples = [];
+  const horizontalOverflowSelectors = [];
   const offscreenSamples = [];
   const truncated = [];
   const smallTargets = [];
@@ -12,6 +15,19 @@
   let truncatedCount = 0;
   let smallTargetsCount = 0;
 
+  const shortSelector = (el) => {
+    let s = el.tagName.toLowerCase();
+    if (el.id) s += `#${el.id}`;
+    const dp = el.getAttribute && el.getAttribute('data-pochita');
+    if (dp) s += `[data-pochita="${dp}"]`;
+    if (typeof el.className === 'string' && el.className.trim()) {
+      const cls = el.className.trim().split(/\s+/).slice(0, 2).join('.');
+      if (cls) s += `.${cls}`;
+    }
+    return s.slice(0, 80);
+  };
+
+  const domNodeCount = document.getElementsByTagName('*').length;
   const els = Array.from(document.querySelectorAll('*')).slice(0, 600);
   for (const el of els) {
     const cs = getComputedStyle(el);
@@ -20,6 +36,19 @@
     }
     const r = el.getBoundingClientRect();
     if (r.width === 0 && r.height === 0) continue;
+
+    if (
+      (el.scrollWidth > el.clientWidth + 2 && cs.overflowX !== 'auto' && cs.overflowX !== 'scroll') ||
+      r.right > docClientW + 2 ||
+      r.left < -2
+    ) {
+      if (horizontalOverflowSelectors.length < 5) {
+        const sel = shortSelector(el);
+        if (!horizontalOverflowSelectors.includes(sel)) {
+          horizontalOverflowSelectors.push(sel);
+        }
+      }
+    }
 
     if (el.scrollWidth > el.clientWidth + 2 && cs.overflowX !== 'auto' && cs.overflowX !== 'scroll') {
       if (overflowSamples.length < 8) {
@@ -138,12 +167,39 @@
     }
   }
 
+  const isRectVisible = (el) => {
+    if (!el) return null;
+    const cs = getComputedStyle(el);
+    if (cs.display === 'none' || cs.visibility === 'hidden' || Number.parseFloat(cs.opacity) === 0) {
+      return null;
+    }
+    const r = el.getBoundingClientRect();
+    return r.width > 0 && r.height > 0 ? r : null;
+  };
+  const toastRect = isRectVisible(document.querySelector('[data-pochita="toast-viewport"]'));
+  const bottomRect = isRectVisible(document.querySelector('[data-pochita="app-shell-bottom"]'));
+  const toastBottomOverlap = Boolean(
+    toastRect &&
+      bottomRect &&
+      Math.min(toastRect.bottom, bottomRect.bottom) - Math.max(toastRect.top, bottomRect.top) > 0.5,
+  );
+
+  let brokenImages = 0;
+  for (const img of document.querySelectorAll('img')) {
+    if (img.complete && img.naturalWidth === 0) brokenImages++;
+  }
+
   return {
     title: document.title,
     url: location.href,
     viewport: { width: vw, height: vh },
     rootOverflowX,
+    horizontalOverflow,
+    horizontalOverflowSelectors,
     rootOverflowY,
+    toastBottomOverlap,
+    brokenImages,
+    domNodeCount,
     overflowCount: overflowSamples.length,
     overflowSamples,
     truncatedCount,
