@@ -187,11 +187,15 @@ export function KsuTabsWorkspace({ active, daemonOnline, rt }: KsuTabsWorkspaceP
               {active ? (
                 <KsuOverviewTab
                   container={active}
+                  containers={rt.containers}
+                  selectedId={rt.selectedId}
                   busyKey={rt.busyKey}
+                  onSelectContainer={rt.selectContainer}
                   onLifecycle={rt.runLifecycle}
                   onMaintenance={rt.runMaintenance}
                   onSetDefault={rt.setDefaultContainer}
                   onDeleteContainer={rt.deleteContainer}
+                  onCreateContainer={rt.createContainer}
                   onCopyText={rt.copyWithFeedback}
                   onOpenSettings={() => rt.setActiveTab('settings')}
                 />

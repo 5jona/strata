@@ -14,6 +14,7 @@ use super::adb_forward::HOST_DEBUG_BIN;
 use super::routing::TransportRoute;
 
 const MAX_BANNER_LINES: usize = 24;
+const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Debug)]
 struct RpcSession {
@@ -26,10 +27,18 @@ struct RpcSession {
 /// Failure classification for a persistent `serve-rpc` call.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum RpcCallError {
-    /// Failed before the request could be dispatched (safe to retry/failover).
+    /// Failed during spawn or pre-request handshake (remote command never ran; safe to failover).
+    PreConnectFailed(String),
+    /// Failed before the request could be dispatched on an existing session (safe to reconnect/failover).
     PreExec(String),
     /// Timed out or disconnected after request dispatch (must not duplicate side effects).
     InFlight(String),
+}
+
+impl RpcCallError {
+    fn is_pre_exec(&self) -> bool {
+        matches!(self, Self::PreConnectFailed(_) | Self::PreExec(_))
+    }
 }
 
 impl RpcSession {
@@ -42,14 +51,14 @@ impl RpcSession {
             .kill_on_drop(true);
         let mut child = cmd
             .spawn()
-            .map_err(|e| RpcCallError::PreExec(format!("spawn serve-rpc failed: {e}")))?;
+            .map_err(|e| RpcCallError::PreConnectFailed(format!("spawn serve-rpc failed: {e}")))?;
         let Some(stdin) = child.stdin.take() else {
-            return Err(RpcCallError::PreExec(
+            return Err(RpcCallError::PreConnectFailed(
                 "serve-rpc stdin unavailable".to_owned(),
             ));
         };
         let Some(stdout) = child.stdout.take() else {
-            return Err(RpcCallError::PreExec(
+            return Err(RpcCallError::PreConnectFailed(
                 "serve-rpc stdout unavailable".to_owned(),
             ));
         };
@@ -61,10 +70,10 @@ impl RpcSession {
         })
     }
 
-    fn spawn_for_route(route: &TransportRoute) -> Result<Self, RpcCallError> {
-        if route.kind == "adb-host" {
+    async fn spawn_for_route(route: &TransportRoute) -> Result<Self, RpcCallError> {
+        let mut sess = if route.kind == "adb-host" {
             let Some(serial) = route.adb_serial.as_deref() else {
-                return Err(RpcCallError::PreExec(
+                return Err(RpcCallError::PreConnectFailed(
                     "adb-host route missing serial".to_owned(),
                 ));
             };
@@ -74,12 +83,92 @@ impl RpcSession {
                 "shell".to_owned(),
                 format!("su -c '{HOST_DEBUG_BIN} serve-rpc'"),
             ];
-            return Self::spawn_command("adb", &args);
+            Self::spawn_command("adb", &args)?
+        } else {
+            let mut args = vec!["-T".to_owned()];
+            args.extend(route.base_ssh_args());
+            args.push("strata-debug serve-rpc".to_owned());
+            Self::spawn_command("ssh", &args)?
+        };
+        sess.handshake_with_timeout(HANDSHAKE_TIMEOUT).await?;
+        Ok(sess)
+    }
+
+    async fn write_rpc_line(&mut self, req: &Value) -> Result<(), String> {
+        let mut line =
+            serde_json::to_string(req).map_err(|e| format!("serialize rpc request: {e}"))?;
+        line.push('\n');
+        match tokio::time::timeout(Duration::from_secs(5), async {
+            self.stdin.write_all(line.as_bytes()).await?;
+            self.stdin.flush().await
+        })
+        .await
+        {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(e)) => Err(format!("serve-rpc write failed: {e}")),
+            Err(_) => Err("serve-rpc write timed out".to_owned()),
         }
-        let mut args = vec!["-T".to_owned()];
-        args.extend(route.base_ssh_args());
-        args.push("strata-debug serve-rpc".to_owned());
-        Self::spawn_command("ssh", &args)
+    }
+
+    async fn read_rpc_response(&mut self, id: u64) -> Result<Value, String> {
+        let mut skipped = 0usize;
+        let mut buf = String::new();
+        loop {
+            buf.clear();
+            let n = self
+                .stdout
+                .read_line(&mut buf)
+                .await
+                .map_err(|e| format!("serve-rpc read failed: {e}"))?;
+            if n == 0 {
+                return Err("serve-rpc pipe closed (EOF)".to_owned());
+            }
+            let trimmed = buf.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            if let Ok(resp) = serde_json::from_str::<Value>(trimmed)
+                && resp.get("jsonrpc").and_then(Value::as_str) == Some("2.0")
+                && resp.get("id").and_then(Value::as_u64) == Some(id)
+            {
+                if let Some(res) = resp.get("result") {
+                    return Ok(res.clone());
+                }
+                let msg = resp
+                    .get("error")
+                    .and_then(|e| e.get("message"))
+                    .and_then(Value::as_str)
+                    .unwrap_or("unknown serve-rpc error");
+                return Err(format!("serve-rpc error: {msg}"));
+            }
+            skipped += 1;
+            if skipped > MAX_BANNER_LINES {
+                return Err("serve-rpc produced unexpected non-JSON output".to_owned());
+            }
+        }
+    }
+
+    /// Verifies the SSH/ADB tunnel and remote `strata-debug serve-rpc` readiness before dispatching work.
+    async fn handshake_with_timeout(&mut self, timeout: Duration) -> Result<(), RpcCallError> {
+        let id = self.next_id;
+        self.next_id = self.next_id.wrapping_add(1).max(1);
+        let req = json!({"jsonrpc": "2.0", "id": id, "method": "ping", "params": {}});
+        match tokio::time::timeout(timeout, async {
+            self.write_rpc_line(&req)
+                .await
+                .map_err(RpcCallError::PreConnectFailed)?;
+            self.read_rpc_response(id)
+                .await
+                .map_err(RpcCallError::PreConnectFailed)
+        })
+        .await
+        {
+            Ok(res) => res.map(|_| ()),
+            Err(_) => Err(RpcCallError::PreConnectFailed(format!(
+                "serve-rpc handshake timed out after {}ms",
+                timeout.as_millis()
+            ))),
+        }
     }
 
     async fn call_cli(
@@ -96,72 +185,13 @@ impl RpcSession {
             "method": "cli",
             "params": {"argv": sub_argv},
         });
-        let mut line = serde_json::to_string(&req)
-            .map_err(|e| RpcCallError::PreExec(format!("serialize rpc request: {e}")))?;
-        line.push('\n');
+        self.write_rpc_line(&req)
+            .await
+            .map_err(RpcCallError::PreExec)?;
 
-        let write_res = tokio::time::timeout(Duration::from_secs(5), async {
-            self.stdin.write_all(line.as_bytes()).await?;
-            self.stdin.flush().await
-        })
-        .await;
-        match write_res {
-            Ok(Ok(())) => {}
-            Ok(Err(e)) => {
-                return Err(RpcCallError::PreExec(format!(
-                    "serve-rpc write failed: {e}"
-                )));
-            }
-            Err(_) => {
-                return Err(RpcCallError::PreExec(
-                    "serve-rpc write timed out".to_owned(),
-                ));
-            }
-        }
-
-        let read_fut = async {
-            let mut skipped = 0usize;
-            let mut buf = String::new();
-            loop {
-                buf.clear();
-                let n =
-                    self.stdout.read_line(&mut buf).await.map_err(|e| {
-                        RpcCallError::InFlight(format!("serve-rpc read failed: {e}"))
-                    })?;
-                if n == 0 {
-                    return Err(RpcCallError::InFlight(
-                        "serve-rpc pipe closed (EOF)".to_owned(),
-                    ));
-                }
-                let trimmed = buf.trim();
-                if trimmed.is_empty() {
-                    continue;
-                }
-                if let Ok(resp) = serde_json::from_str::<Value>(trimmed)
-                    && resp.get("jsonrpc").and_then(Value::as_str) == Some("2.0")
-                    && resp.get("id").and_then(Value::as_u64) == Some(id)
-                {
-                    if let Some(res) = resp.get("result") {
-                        return Ok(res.clone());
-                    }
-                    let msg = resp
-                        .get("error")
-                        .and_then(|e| e.get("message"))
-                        .and_then(Value::as_str)
-                        .unwrap_or("unknown serve-rpc error");
-                    return Err(RpcCallError::InFlight(format!("serve-rpc error: {msg}")));
-                }
-                skipped += 1;
-                if skipped > MAX_BANNER_LINES {
-                    return Err(RpcCallError::InFlight(
-                        "serve-rpc produced unexpected non-JSON output".to_owned(),
-                    ));
-                }
-            }
-        };
-
-        match tokio::time::timeout(timeout, read_fut).await {
-            Ok(res) => res,
+        match tokio::time::timeout(timeout, self.read_rpc_response(id)).await {
+            Ok(Ok(res)) => Ok(res),
+            Ok(Err(err)) => Err(RpcCallError::InFlight(err)),
             Err(_) => Err(RpcCallError::InFlight(format!(
                 "serve-rpc timed out after {}s",
                 timeout.as_secs()
@@ -220,11 +250,13 @@ pub(crate) async fn call_serve_rpc(
 
     let reused = guard.is_some();
     if guard.is_none() {
-        *guard = Some(RpcSession::spawn_for_route(route)?);
+        *guard = Some(RpcSession::spawn_for_route(route).await?);
     }
 
     let Some(sess) = guard.as_mut() else {
-        return Err(RpcCallError::PreExec("serve-rpc slot empty".to_owned()));
+        return Err(RpcCallError::PreConnectFailed(
+            "serve-rpc slot empty".to_owned(),
+        ));
     };
 
     match sess.call_cli(sub_argv, timeout).await {
@@ -236,9 +268,9 @@ pub(crate) async fn call_serve_rpc(
         }
         Err(err) => {
             *guard = None;
-            // If a reused pipe died silently (EOF/broken pipe before response), reconnect once on PreExec.
-            if reused && matches!(err, RpcCallError::PreExec(_)) {
-                let mut fresh = RpcSession::spawn_for_route(route)?;
+            // If a reused pipe died silently (EOF/broken pipe before dispatch), reconnect once on PreExec.
+            if reused && err.is_pre_exec() {
+                let mut fresh = RpcSession::spawn_for_route(route).await?;
                 let res = fresh.call_cli(sub_argv, timeout).await;
                 if let Ok(mut val) = res {
                     if let Value::Object(ref mut obj) = val {
@@ -270,6 +302,9 @@ done
 "#;
         let args = vec!["-c".to_owned(), script.to_owned()];
         let mut sess = RpcSession::spawn_command("sh", &args).expect("spawn mock rpc");
+        sess.handshake_with_timeout(Duration::from_secs(2))
+            .await
+            .expect("handshake");
 
         let r1 = sess
             .call_cli(&["health".to_owned()], Duration::from_secs(5))
@@ -281,26 +316,62 @@ done
             .expect("call 2");
 
         assert_eq!(r1["ok"], json!(true));
-        assert_eq!(r1["call"], json!(1));
-        assert_eq!(r2["call"], json!(2));
+        assert_eq!(r1["call"], json!(2));
+        assert_eq!(r2["call"], json!(3));
         assert_eq!(r1["pid"], r2["pid"], "must reuse the same process");
     }
 
     #[tokio::test]
-    async fn rpc_session_reports_eof_and_timeout_as_in_flight_errors() {
-        let args = vec!["-c".to_owned(), "exit 0".to_owned()];
+    async fn handshake_eof_and_timeout_report_pre_connect_failed() {
+        let eof_args = vec!["-c".to_owned(), "exit 255".to_owned()];
+        let mut eof_sess = RpcSession::spawn_command("sh", &eof_args).expect("spawn eof");
+        let err = eof_sess
+            .handshake_with_timeout(Duration::from_secs(2))
+            .await
+            .expect_err("handshake eof");
+        assert!(matches!(err, RpcCallError::PreConnectFailed(_)));
+
+        let slow_args = vec!["-c".to_owned(), "sleep 5".to_owned()];
+        let mut slow_sess = RpcSession::spawn_command("sh", &slow_args).expect("spawn slow");
+        let err2 = slow_sess
+            .handshake_with_timeout(Duration::from_millis(120))
+            .await
+            .expect_err("handshake timeout");
+        assert!(matches!(err2, RpcCallError::PreConnectFailed(_)));
+    }
+
+    #[tokio::test]
+    async fn post_handshake_eof_and_timeout_report_in_flight_errors() {
+        let drop_after_ping = r#"
+IFS= read -r ping
+id=$(printf '%s' "$ping" | sed -n 's/.*"id":\([0-9]*\).*/\1/p')
+printf '{"jsonrpc":"2.0","id":%s,"result":{"pong":true}}\n' "$id"
+IFS= read -r _req
+exit 0
+"#;
+        let args = vec!["-c".to_owned(), drop_after_ping.to_owned()];
         let mut sess = RpcSession::spawn_command("sh", &args).expect("spawn");
+        sess.handshake_with_timeout(Duration::from_secs(2))
+            .await
+            .expect("handshake ok");
         let err = sess
             .call_cli(&["health".to_owned()], Duration::from_secs(2))
             .await
-            .expect_err("eof");
-        assert!(matches!(
-            err,
-            RpcCallError::PreExec(_) | RpcCallError::InFlight(_)
-        ));
+            .expect_err("post-handshake eof");
+        assert!(matches!(err, RpcCallError::InFlight(_)));
 
-        let slow_args = vec!["-c".to_owned(), "read -r _; sleep 5".to_owned()];
+        let slow_after_ping = r#"
+IFS= read -r ping
+id=$(printf '%s' "$ping" | sed -n 's/.*"id":\([0-9]*\).*/\1/p')
+printf '{"jsonrpc":"2.0","id":%s,"result":{"pong":true}}\n' "$id"
+IFS= read -r _req
+sleep 5
+"#;
+        let slow_args = vec!["-c".to_owned(), slow_after_ping.to_owned()];
         let mut slow = RpcSession::spawn_command("sh", &slow_args).expect("spawn slow");
+        slow.handshake_with_timeout(Duration::from_secs(2))
+            .await
+            .expect("handshake ok");
         let err2 = slow
             .call_cli(&["health".to_owned()], Duration::from_millis(120))
             .await

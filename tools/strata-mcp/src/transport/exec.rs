@@ -39,6 +39,7 @@ pub(super) async fn run_adb_host_once(
             exit_code: 255,
             stdout_empty: true,
             has_json: false,
+            pre_exec_failed: false,
             stderr: err.clone(),
             payload: json!({"ok": false, "rc": 255, "route": "adb-host", "error": err}),
         };
@@ -73,6 +74,7 @@ async fn run_process_attempt(
                 exit_code: 127,
                 stdout_empty: true,
                 has_json: false,
+                pre_exec_failed: true,
                 stderr: err.clone(),
                 payload: json!({"ok": false, "rc": 127, "route": route_kind, "error": err}),
             };
@@ -96,6 +98,7 @@ async fn run_process_attempt(
                     exit_code: rc,
                     stdout_empty,
                     has_json: true,
+                    pre_exec_failed: false,
                     stderr,
                     payload,
                 };
@@ -104,6 +107,7 @@ async fn run_process_attempt(
                 exit_code: rc,
                 stdout_empty,
                 has_json: false,
+                pre_exec_failed: false,
                 stderr: stderr.clone(),
                 payload: json!({"ok": rc == 0, "rc": rc, "route": route_kind, "stdout": stdout.trim(), "stderr": stderr}),
             }
@@ -114,6 +118,7 @@ async fn run_process_attempt(
                 exit_code: 1,
                 stdout_empty: true,
                 has_json: false,
+                pre_exec_failed: false,
                 stderr: err.clone(),
                 payload: json!({"ok": false, "rc": 1, "route": route_kind, "error": err}),
             }
@@ -124,6 +129,7 @@ async fn run_process_attempt(
                 exit_code: 124,
                 stdout_empty: true,
                 has_json: false,
+                pre_exec_failed: false,
                 stderr: err.clone(),
                 payload: json!({"ok": false, "rc": 124, "route": route_kind, "error": err}),
             }

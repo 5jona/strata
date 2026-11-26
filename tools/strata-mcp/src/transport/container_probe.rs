@@ -59,6 +59,15 @@ pub(crate) async fn invalidate_container_probe(serial: Option<&str>) {
     }
 }
 
+/// Returns a valid cached container probe without spawning `adb`, if within the 15-second TTL.
+pub(crate) async fn cached_container_probe(serial: &str) -> Option<ContainerProbe> {
+    let guard = probe_cache().lock().await;
+    guard
+        .get(serial)
+        .filter(|(ts, _)| ts.elapsed() < PROBE_TTL)
+        .map(|(_, cached)| cached.clone())
+}
+
 /// Probes `strata --json list` over ADB with a 15-second TTL cache.
 pub(crate) async fn probe_containers_via_adb(serial: &str, force: bool) -> ContainerProbe {
     if !force {

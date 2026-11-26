@@ -1,9 +1,8 @@
 import { Button, Card, EmptyState, Input } from '@gojona/ui';
 import { Copy, Laptop, Layers, Plus, Terminal } from 'lucide-react';
 import { useId, useState } from 'react';
+import { buildBootstrapCommand, isValidContainerId } from '../shared/strataFormat.ts';
 import { STRATA_PROTOCOL } from '../types.ts';
-
-const CONTAINER_ID_RE = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,31}$/;
 
 /** Props accepted by `ZeroContainerCard`. */
 export interface ZeroContainerCardProps {
@@ -26,10 +25,10 @@ export function ZeroContainerCard({
   const [containerName, setContainerName] = useState<string>(STRATA_PROTOCOL.DEFAULT_CONTAINER_ID);
   const trimmedName = containerName.trim();
   const effectiveId = trimmedName || STRATA_PROTOCOL.DEFAULT_CONTAINER_ID;
-  const isValidId = CONTAINER_ID_RE.test(effectiveId);
+  const isValidId = isValidContainerId(effectiveId);
 
   const createRpcCmd = `strata rpc container.create '{"id":"${effectiveId}","distroId":"debian-12","sizeMb":4096,"setDefault":true}'`;
-  const bootstrapCmd = `bash scripts/bootstrap-device.sh --container ${effectiveId}`;
+  const bootstrapCmd = buildBootstrapCommand(effectiveId);
 
   if (!daemonOnline) {
     return (

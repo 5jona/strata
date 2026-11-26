@@ -8,29 +8,38 @@ import {
   splitBytes,
 } from '../shared/strataFormat.ts';
 import type { ContainerStatusSnapshot } from '../types.ts';
+import { KsuContainerFleetCard } from './KsuContainerFleetCard.tsx';
 import { KsuMaintenanceCard } from './KsuMaintenanceCard.tsx';
-import type { KsuMaintenanceOp } from './useKsuActions.ts';
+import type { CreateContainerOptions, KsuMaintenanceOp } from './useKsuActions.ts';
 
 /** Props accepted by `KsuOverviewTab`. */
 export interface KsuOverviewTabProps {
   container: ContainerStatusSnapshot;
+  containers: readonly ContainerStatusSnapshot[];
+  selectedId: string | null;
   busyKey: string | null;
+  onSelectContainer: (containerId: string) => void;
   onLifecycle: (action: 'start' | 'stop' | 'restart') => Promise<void>;
   onMaintenance: (op: KsuMaintenanceOp) => Promise<void>;
   onSetDefault: (containerId: string) => Promise<void>;
   onDeleteContainer: (containerId: string, deleteImage: boolean) => Promise<void>;
+  onCreateContainer: (containerId: string, options?: CreateContainerOptions) => Promise<void>;
   onCopyText: (text: string, label: string) => Promise<void>;
   onOpenSettings?: () => void;
 }
 
-/** Tab 1: container overview, metrics, SSH copy, missing-image recovery, and safe maintenance. */
+/** Tab 1: container overview, metrics, SSH copy, missing-image recovery, and fleet management. */
 export function KsuOverviewTab({
   container,
+  containers,
+  selectedId,
   busyKey,
+  onSelectContainer,
   onLifecycle,
   onMaintenance,
   onSetDefault,
   onDeleteContainer,
+  onCreateContainer,
   onCopyText,
   onOpenSettings,
 }: KsuOverviewTabProps) {
@@ -190,6 +199,16 @@ export function KsuOverviewTab({
         onMaintenance={onMaintenance}
         onSetDefault={onSetDefault}
         onDeleteContainer={onDeleteContainer}
+      />
+
+      <KsuContainerFleetCard
+        containers={containers}
+        selectedId={selectedId}
+        busyKey={busyKey}
+        onSelectContainer={onSelectContainer}
+        onSetDefault={onSetDefault}
+        onCreateContainer={onCreateContainer}
+        onCopyText={onCopyText}
       />
     </div>
   );

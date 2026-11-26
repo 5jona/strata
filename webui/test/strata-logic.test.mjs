@@ -14,13 +14,18 @@ import {
   toggleL5DiagMounts,
 } from '../src/shared/passthrough.ts';
 import {
+  buildBootstrapCommand,
   buildSshCommand,
   buildTaskCommand,
   formatBytes,
   formatMaintenanceToast,
   formatUptime,
+  isValidContainerId,
+  parseImageSizeGb,
   parseSshPort,
   SERVICE_STATUS_META,
+  suggestNextContainerId,
+  suggestNextSshPort,
   summarizeSshKey,
   toLogEntries,
 } from '../src/shared/strataFormat.ts';
@@ -252,4 +257,46 @@ test('isSideveilPermissionError detects SideVeil capability denial errors accura
   assert.equal(isSideveilPermissionError('capability clipboard denied'), true);
   assert.equal(isSideveilPermissionError(new Error('network timeout')), false);
   assert.match(SIDEVEIL_PERMISSION_GUIDE, /SideVeil 控制中心/);
+});
+
+test('container fleet helpers validate ids/sizes and suggest unoccupied names/ports', () => {
+  assert.equal(isValidContainerId('main'), true);
+  assert.equal(isValidContainerId('dev-box_01'), true);
+  assert.equal(isValidContainerId('-bad'), false);
+  assert.equal(isValidContainerId('bad name'), false);
+  assert.equal(isValidContainerId('a'.repeat(33)), false);
+
+  assert.equal(parseImageSizeGb('8'), 8);
+  assert.equal(parseImageSizeGb('512'), 512);
+  assert.equal(parseImageSizeGb('0'), null);
+  assert.equal(parseImageSizeGb('513'), null);
+  assert.equal(parseImageSizeGb('4.5'), null);
+
+  assert.equal(suggestNextContainerId([]), 'main');
+  assert.equal(suggestNextContainerId([{ id: 'main', sshPort: 2222 }]), 'dev');
+  assert.equal(
+    suggestNextContainerId([
+      { id: 'main', sshPort: 2222 },
+      { id: 'dev', sshPort: 2223 },
+      { id: 'lab', sshPort: 2224 },
+      { id: 'work', sshPort: 2225 },
+    ]),
+    'c2',
+  );
+
+  assert.equal(suggestNextSshPort([]), 2222);
+  assert.equal(suggestNextSshPort([{ id: 'main', sshPort: 2222 }]), 2223);
+  assert.equal(
+    suggestNextSshPort([
+      { id: 'main', sshPort: 2222 },
+      { id: 'dev', sshPort: 2223 },
+    ]),
+    2224,
+  );
+
+  assert.equal(
+    buildBootstrapCommand('dev', 2223),
+    'bash scripts/bootstrap-device.sh --container dev --ssh-port 2223',
+  );
+  assert.equal(buildBootstrapCommand('main'), 'bash scripts/bootstrap-device.sh --container main');
 });

@@ -7,6 +7,8 @@ mod exec;
 mod policy;
 pub(crate) mod routing;
 pub(crate) mod rpc_pool;
+#[cfg(test)]
+mod tests;
 mod transfer;
 
 use std::time::Duration;
@@ -18,7 +20,8 @@ pub(crate) use adb_forward::{
     adb_host_shell_command, argv_to_shell, ensure_adb_forward, invalidate_adb_forward, shell_quote,
 };
 pub(crate) use container_probe::{
-    build_container_required_error, invalidate_container_probe, probe_containers_via_adb,
+    ContainerProbe, build_container_required_error, cached_container_probe,
+    invalidate_container_probe, probe_containers_via_adb,
 };
 pub(crate) use exec::extract_trailing_json;
 use exec::{annotate_degraded, run_adb_host_once, run_ssh_once};
@@ -143,7 +146,6 @@ struct TransportRunner<'a> {
     remote_cmd: &'a str,
     host_cmd: &'a str,
     rpc_sub_argv: Option<&'a [String]>,
-    policy: RetryPolicy,
     timeout: Duration,
 }
 
@@ -164,19 +166,32 @@ impl RouteRunner for TransportRunner<'_> {
                         exit_code: 0,
                         stdout_empty: false,
                         has_json: true,
+                        pre_exec_failed: false,
                         stderr: String::new(),
                         payload,
                     };
                 }
-                Err(rpc_pool::RpcCallError::InFlight(err))
-                    if self.policy == RetryPolicy::SideEffect =>
-                {
+                Err(rpc_pool::RpcCallError::InFlight(err)) => {
                     return SshAttempt {
                         exit_code: 124,
                         stdout_empty: true,
                         has_json: false,
+                        pre_exec_failed: false,
                         stderr: err.clone(),
                         payload: json!({"ok": false, "rc": 124, "route": route.kind, "error": err}),
+                    };
+                }
+                Err(
+                    rpc_pool::RpcCallError::PreConnectFailed(err)
+                    | rpc_pool::RpcCallError::PreExec(err),
+                ) if route.kind != "adb-host" => {
+                    return SshAttempt {
+                        exit_code: 255,
+                        stdout_empty: true,
+                        has_json: false,
+                        pre_exec_failed: true,
+                        stderr: err.clone(),
+                        payload: json!({"ok": false, "rc": 255, "route": route.kind, "error": err}),
                     };
                 }
                 Err(_) => {}
@@ -197,6 +212,10 @@ impl RouteRunner for TransportRunner<'_> {
             invalidate_adb_forward(ser, lp);
         }
         routing::reset_control_socket(route).await;
+    }
+
+    async fn cached_probe(&self, serial: &str) -> Option<ContainerProbe> {
+        cached_container_probe(serial).await
     }
 }
 
@@ -221,10 +240,18 @@ async fn execute_three_tier(
         remote_cmd,
         host_cmd,
         rpc_sub_argv,
-        policy,
         timeout: eff,
     };
+    execute_three_tier_on_routes(&routes, policy, requirement, tool_label, &runner).await
+}
 
+async fn execute_three_tier_on_routes<R: RouteRunner>(
+    routes: &[TransportRoute],
+    policy: RetryPolicy,
+    requirement: RouteRequirement,
+    tool_label: &str,
+    runner: &R,
+) -> Value {
     let ssh_routes: Vec<TransportRoute> = routes
         .iter()
         .filter(|r| r.kind != "adb-host")
@@ -233,9 +260,25 @@ async fn execute_three_tier(
     let adb_host = routes.iter().find(|r| r.kind == "adb-host").cloned();
     let adb_ssh = routes.iter().find(|r| r.kind == "adb-ssh").cloned();
 
+    // Short-circuit known-stopped/zero-container devices within the 15s TTL cache.
+    if let Some(ref host_route) = adb_host
+        && let Some(serial) = host_route.adb_serial.as_deref()
+        && let Some(cached) = runner.cached_probe(serial).await
+        && cached.active_ssh_port.is_none()
+    {
+        if requirement == RouteRequirement::ContainerOnly {
+            return build_container_required_error(tool_label, &cached);
+        }
+        let reason = cached.degraded_reason.unwrap_or_else(|| {
+            "SSH/container transport unavailable; degraded to adb-host".to_owned()
+        });
+        let attempt = runner.run_once(host_route).await;
+        return annotate_degraded(attempt.payload, &reason);
+    }
+
     let mut last_payload = json!({"ok": false, "rc": 255, "error": "no transport route available"});
     if !ssh_routes.is_empty() {
-        let outcome = execute_routes_outcome(&ssh_routes, policy, &runner).await;
+        let outcome = execute_routes_outcome(&ssh_routes, policy, runner).await;
         if !outcome.exhausted_transport {
             return outcome.payload;
         }
@@ -249,7 +292,7 @@ async fn execute_three_tier(
         return last_payload;
     };
 
-    let probe = probe_containers_via_adb(serial, false).await;
+    let probe = runner.probe_containers(serial).await;
     if let Some(real_port) = probe.active_ssh_port
         && let Some(base_adb_ssh) = adb_ssh
         && base_adb_ssh.remote_ssh_port != real_port
@@ -258,7 +301,7 @@ async fn execute_three_tier(
             invalidate_adb_forward(serial, lp);
         }
         let refreshed = base_adb_ssh.with_remote_port(real_port);
-        let retry = execute_routes_outcome(&[refreshed], policy, &runner).await;
+        let retry = execute_routes_outcome(&[refreshed], policy, runner).await;
         if !retry.exhausted_transport {
             return retry.payload;
         }

@@ -1,9 +1,10 @@
 import type { LogEntry } from '@gojona/ui';
-import type {
-  ContainerPhase,
-  ContainerStatusSnapshot,
-  MaintenanceDonePayload,
-  ServiceStatus,
+import {
+  type ContainerPhase,
+  type ContainerStatusSnapshot,
+  type MaintenanceDonePayload,
+  type ServiceStatus,
+  STRATA_PROTOCOL,
 } from '../types.ts';
 
 /** Execution mode supported by headless task command builders. */
@@ -163,4 +164,80 @@ export function formatMaintenanceToast(
     tone: 'danger',
     description: payload.error ?? payload.summary,
   };
+}
+
+const CONTAINER_ID_RE = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,31}$/;
+
+/** Validates whether a container identifier matches Strata naming rules. */
+export function isValidContainerId(id: string): boolean {
+  return CONTAINER_ID_RE.test(id);
+}
+
+/** Parses and validates a container disk image size in GiB (`1`–`512`). */
+export function parseImageSizeGb(raw: string): number | null {
+  const trimmed = raw.trim();
+  if (!/^\d+$/.test(trimmed)) return null;
+  const parsed = Number.parseInt(trimmed, 10);
+  if (!Number.isSafeInteger(parsed) || parsed < 1 || parsed > 512) return null;
+  return parsed;
+}
+
+/** Suggests the next unoccupied container name based on existing containers. */
+export function suggestNextContainerId(containers: readonly ContainerStatusSnapshot[]): string {
+  const existing = new Set(containers.map((c) => c.id));
+  if (existing.size === 0) return STRATA_PROTOCOL.DEFAULT_CONTAINER_ID;
+  for (const candidate of ['dev', 'lab', 'work']) {
+    if (!existing.has(candidate)) return candidate;
+  }
+  let index = 2;
+  while (existing.has(`c${index}`)) {
+    index += 1;
+  }
+  return `c${index}`;
+}
+
+/** Suggests the next available Dropbear SSH port avoiding ports already assigned to containers. */
+export function suggestNextSshPort(containers: readonly ContainerStatusSnapshot[]): number {
+  const occupied = new Set(
+    containers.map((c) => c.sshPort).filter((p) => Number.isSafeInteger(p) && p > 0),
+  );
+  let port: number = STRATA_PROTOCOL.DEFAULT_SSH_PORT;
+  while (occupied.has(port) && port < 65535) {
+    port += 1;
+  }
+  return port;
+}
+
+/** Builds the PC-side `bootstrap-device.sh` CLI command for a container and optional SSH port. */
+export function buildBootstrapCommand(containerId: string, sshPort?: number): string {
+  const base = `bash scripts/bootstrap-device.sh --container ${containerId}`;
+  return sshPort !== undefined ? `${base} --ssh-port ${sshPort}` : base;
+}
+
+/** Validates container ID, SSH port, and image size inputs for quick container creation. */
+export function validateFleetCreateInput(
+  idRaw: string,
+  portRaw: string,
+  sizeGbRaw: string,
+  existingIds: ReadonlySet<string>,
+  occupiedPorts: ReadonlySet<number>,
+) {
+  const effectiveId = idRaw.trim();
+  const idError = !effectiveId
+    ? '请输入容器名称'
+    : !isValidContainerId(effectiveId)
+      ? '需以字母或数字开头，仅含字母、数字、- 与 _（最多 32 位）'
+      : existingIds.has(effectiveId)
+        ? `容器「${effectiveId}」已存在`
+        : null;
+  const parsedPort = parseSshPort(portRaw);
+  const portError =
+    parsedPort === null
+      ? 'SSH 端口需为 1–65535 整数'
+      : occupiedPorts.has(parsedPort)
+        ? `端口 ${parsedPort} 已被其他容器占用`
+        : null;
+  const parsedSizeGb = parseImageSizeGb(sizeGbRaw);
+  const sizeError = parsedSizeGb === null ? '磁盘上限需为 1–512 GB 整数' : null;
+  return { effectiveId, parsedPort, parsedSizeGb, idError, portError, sizeError };
 }

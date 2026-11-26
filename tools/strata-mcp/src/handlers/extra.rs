@@ -8,8 +8,8 @@ use super::gesture_arg::normalize_action_gesture;
 use crate::devices::DeviceRegistry;
 use crate::params::{CdpDebugParams, ObserveStepParams, VisualCaptureParams};
 use crate::transport::{
-    RetryPolicy, open_ssh_port_forward, shell_quote, ssh_exec_argv, ssh_exec_argv_once,
-    ssh_exec_raw_with_policy, transfer_pull,
+    RetryPolicy, RouteRequirement, open_ssh_port_forward, shell_quote, ssh_exec_argv,
+    ssh_exec_argv_once, ssh_exec_argv_with_req, ssh_exec_raw_with_policy, transfer_pull,
 };
 
 fn now_millis() -> u128 {
@@ -194,7 +194,26 @@ pub(crate) async fn handle_cdp(reg: &DeviceRegistry, p: CdpDebugParams) -> Value
     }
 }
 
-fn build_observe_argv(p: ObserveStepParams) -> Result<(Vec<String>, bool), String> {
+fn observe_retry_policy(p: &ObserveStepParams) -> RetryPolicy {
+    let has_rpc = p.action_rpc.as_ref().is_some_and(|v| !v.is_empty());
+    let has_shell = p
+        .action_shell
+        .as_deref()
+        .is_some_and(|s| !s.trim().is_empty());
+    let has_cdp_eval = p
+        .action_cdp_eval
+        .as_deref()
+        .is_some_and(|s| !s.trim().is_empty());
+    let has_gesture = p.action_gesture.as_ref().is_some_and(|v| !v.is_null());
+    if has_rpc || has_shell || has_cdp_eval || has_gesture {
+        RetryPolicy::SideEffect
+    } else {
+        RetryPolicy::Idempotent
+    }
+}
+
+fn build_observe_argv(p: ObserveStepParams) -> Result<(Vec<String>, RetryPolicy), String> {
+    let policy = observe_retry_policy(&p);
     let mut cmd = vec![
         "strata-debug".to_owned(),
         "observe".to_owned(),
@@ -217,47 +236,37 @@ fn build_observe_argv(p: ObserveStepParams) -> Result<(Vec<String>, bool), Strin
     if p.return_image.unwrap_or(false) {
         cmd.push("--inline-image".to_owned());
     }
-    let mut has_action = false;
     if let Some(rpc) = p.action_rpc
         && rpc.len() == 2
     {
-        has_action = true;
         cmd.extend(["--action-rpc".to_owned(), rpc[0].clone(), rpc[1].clone()]);
     }
-    if p.action_shell
-        .as_deref()
-        .is_some_and(|s| !s.trim().is_empty())
-    {
-        has_action = true;
-    }
     push_opt(&mut cmd, "--action-shell", p.action_shell.as_deref());
-    if p.action_cdp_eval
-        .as_deref()
-        .is_some_and(|s| !s.trim().is_empty())
-    {
-        has_action = true;
-    }
     push_opt(&mut cmd, "--action-cdp-eval", p.action_cdp_eval.as_deref());
     if let Some(g) = p.action_gesture.filter(|v| !v.is_null()) {
         let encoded = normalize_action_gesture(g)?;
-        has_action = true;
         cmd.extend(["--action-gesture".to_owned(), encoded]);
     }
-    Ok((cmd, has_action))
+    Ok((cmd, policy))
 }
 
 /// Runs L4 atomic observe step with optional inline visual capture.
 pub(crate) async fn handle_observe(reg: &DeviceRegistry, p: ObserveStepParams) -> Value {
     let target = p.target.to_override();
-    let (cmd, has_action) = match build_observe_argv(p) {
+    let (cmd, policy) = match build_observe_argv(p) {
         Ok(v) => v,
         Err(err) => return json!({"ok": false, "error": err}),
     };
-    if has_action {
-        ssh_exec_argv_once(reg, &target, &cmd, 45.0).await
-    } else {
-        ssh_exec_argv(reg, &target, &cmd, 45.0).await
-    }
+    ssh_exec_argv_with_req(
+        reg,
+        &target,
+        &cmd,
+        45.0,
+        policy,
+        RouteRequirement::HostOrContainer,
+        "observe_step",
+    )
+    .await
 }
 
 #[cfg(test)]
@@ -265,16 +274,12 @@ mod tests {
     use super::*;
     use crate::params::TargetArgs;
 
-    #[test]
-    fn builds_observe_argv_with_single_encoded_swipe_gesture() {
-        let params = ObserveStepParams {
+    fn empty_observe_params() -> ObserveStepParams {
+        ObserveStepParams {
             action_rpc: None,
             action_shell: None,
             action_cdp_eval: None,
-            action_gesture: Some(Value::String(
-                r#"{"kind":"swipe","x0":10,"y0":336,"x1":900,"y1":336,"durationMs":240}"#
-                    .to_owned(),
-            )),
+            action_gesture: None,
             cursor: None,
             settle_ms: None,
             package: None,
@@ -285,9 +290,17 @@ mod tests {
             return_image: None,
             roi: None,
             target: TargetArgs::default(),
-        };
-        let (argv, has_action) = build_observe_argv(params).expect("argv");
-        assert!(has_action);
+        }
+    }
+
+    #[test]
+    fn builds_observe_argv_with_single_encoded_swipe_gesture() {
+        let mut params = empty_observe_params();
+        params.action_gesture = Some(Value::String(
+            r#"{"kind":"swipe","x0":10,"y0":336,"x1":900,"y1":336,"durationMs":240}"#.to_owned(),
+        ));
+        let (argv, policy) = build_observe_argv(params).expect("argv");
+        assert_eq!(policy, RetryPolicy::SideEffect);
         let idx = argv
             .iter()
             .position(|a| a == "--action-gesture")
@@ -296,5 +309,39 @@ mod tests {
         assert_eq!(parsed["kind"], json!("swipe"));
         assert_eq!(parsed["x0"], json!(10));
         assert_eq!(parsed["x1"], json!(900));
+    }
+
+    #[test]
+    fn observe_retry_policy_uses_side_effect_for_any_action_and_idempotent_for_readonly() {
+        assert_eq!(
+            observe_retry_policy(&empty_observe_params()),
+            RetryPolicy::Idempotent
+        );
+
+        let mut with_shell = empty_observe_params();
+        with_shell.action_shell = Some("input swipe 100 200 800 200".to_owned());
+        assert_eq!(observe_retry_policy(&with_shell), RetryPolicy::SideEffect);
+
+        let mut with_blank_shell = empty_observe_params();
+        with_blank_shell.action_shell = Some("   ".to_owned());
+        assert_eq!(
+            observe_retry_policy(&with_blank_shell),
+            RetryPolicy::Idempotent
+        );
+
+        let mut with_rpc = empty_observe_params();
+        with_rpc.action_rpc = Some(vec!["ping".to_owned(), "{}".to_owned()]);
+        assert_eq!(observe_retry_policy(&with_rpc), RetryPolicy::SideEffect);
+
+        let mut with_cdp = empty_observe_params();
+        with_cdp.action_cdp_eval = Some("document.title".to_owned());
+        assert_eq!(observe_retry_policy(&with_cdp), RetryPolicy::SideEffect);
+
+        let mut with_null_gesture = empty_observe_params();
+        with_null_gesture.action_gesture = Some(Value::Null);
+        assert_eq!(
+            observe_retry_policy(&with_null_gesture),
+            RetryPolicy::Idempotent
+        );
     }
 }

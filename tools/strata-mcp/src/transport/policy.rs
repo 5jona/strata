@@ -2,6 +2,7 @@
 
 use serde_json::{Value, json};
 
+use super::container_probe::ContainerProbe;
 use super::routing::TransportRoute;
 
 /// Whether a tool invocation can degrade to `adb-host` or strictly requires a Strata container.
@@ -30,6 +31,7 @@ pub(super) struct SshAttempt {
     pub(super) exit_code: i32,
     pub(super) stdout_empty: bool,
     pub(super) has_json: bool,
+    pub(super) pre_exec_failed: bool,
     pub(super) stderr: String,
     pub(super) payload: Value,
 }
@@ -79,7 +81,8 @@ pub(super) fn should_failover(attempt: &SshAttempt, policy: RetryPolicy) -> bool
         255 => match policy {
             RetryPolicy::Idempotent => true,
             RetryPolicy::SideEffect => {
-                attempt.stdout_empty && is_pre_exec_ssh_error(&attempt.stderr)
+                attempt.pre_exec_failed
+                    || (attempt.stdout_empty && is_pre_exec_ssh_error(&attempt.stderr))
             }
         },
         124 => matches!(policy, RetryPolicy::Idempotent),
@@ -95,6 +98,12 @@ pub(super) trait RouteRunner {
     async fn ensure_forward(&self, route: &TransportRoute) -> Result<(), String>;
     async fn run_once(&self, route: &TransportRoute) -> SshAttempt;
     async fn reset_control(&self, route: &TransportRoute);
+    async fn cached_probe(&self, _serial: &str) -> Option<ContainerProbe> {
+        None
+    }
+    async fn probe_containers(&self, serial: &str) -> ContainerProbe {
+        super::probe_containers_via_adb(serial, false).await
+    }
 }
 
 pub(super) struct RouteExecOutcome {
@@ -185,6 +194,7 @@ mod tests {
             exit_code: 0,
             stdout_empty: false,
             has_json: true,
+            pre_exec_failed: false,
             stderr: String::new(),
             payload: json!({"ok": true, "gesture": "swipe", "route": "ssh"}),
         };
@@ -195,6 +205,7 @@ mod tests {
             exit_code: 124,
             stdout_empty: true,
             has_json: false,
+            pre_exec_failed: false,
             stderr: "ssh timed out after 25s".to_owned(),
             payload: json!({"ok": false, "rc": 124}),
         };
@@ -205,11 +216,22 @@ mod tests {
             exit_code: 255,
             stdout_empty: true,
             has_json: false,
+            pre_exec_failed: false,
             stderr: "ssh: connect to host 192.0.2.10 port 2222: Connection refused".to_owned(),
             payload: json!({"ok": false, "rc": 255}),
         };
         assert!(should_failover(&connect_refused, RetryPolicy::Idempotent));
         assert!(should_failover(&connect_refused, RetryPolicy::SideEffect));
+
+        let pre_connect_eof = SshAttempt {
+            exit_code: 255,
+            stdout_empty: true,
+            has_json: false,
+            pre_exec_failed: true,
+            stderr: "serve-rpc pipe closed (EOF)".to_owned(),
+            payload: json!({"ok": false, "rc": 255}),
+        };
+        assert!(should_failover(&pre_connect_eof, RetryPolicy::SideEffect));
 
         for ambiguous_err in [
             "client_loop: send disconnect: Broken pipe",
@@ -221,6 +243,7 @@ mod tests {
                 exit_code: 255,
                 stdout_empty: true,
                 has_json: false,
+                pre_exec_failed: false,
                 stderr: ambiguous_err.to_owned(),
                 payload: json!({"ok": false, "rc": 255}),
             };
@@ -268,6 +291,7 @@ mod tests {
                         exit_code: 0,
                         stdout_empty: false,
                         has_json: true,
+                        pre_exec_failed: false,
                         stderr: String::new(),
                         payload: json!({"ok": true, "gesture": "swipe", "route": route.kind}),
                     }
@@ -276,6 +300,7 @@ mod tests {
                     exit_code: 124,
                     stdout_empty: true,
                     has_json: false,
+                    pre_exec_failed: false,
                     stderr: "ssh timed out".to_owned(),
                     payload: json!({"ok": false, "rc": 124, "route": route.kind}),
                 },
@@ -283,6 +308,7 @@ mod tests {
                     exit_code: 255,
                     stdout_empty: true,
                     has_json: false,
+                    pre_exec_failed: false,
                     stderr: "ssh: connect to host 192.0.2.10 port 2222: Connection refused"
                         .to_owned(),
                     payload: json!({"ok": false, "rc": 255, "route": route.kind}),
@@ -291,6 +317,7 @@ mod tests {
                     exit_code: 0,
                     stdout_empty: false,
                     has_json: true,
+                    pre_exec_failed: false,
                     stderr: String::new(),
                     payload: json!({"ok": true, "gesture": "swipe", "route": route.kind}),
                 },

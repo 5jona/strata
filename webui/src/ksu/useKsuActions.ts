@@ -12,6 +12,12 @@ import { invokeStrataKsuRpc, startStrataDaemonViaKsu } from './ksuStrataClient.t
 
 export type KsuMaintenanceOp = 'dns' | 'compact' | 'fsck' | 'backup';
 
+export interface CreateContainerOptions {
+  sshPort?: number;
+  imageSizeGb?: number;
+  setDefault?: boolean;
+}
+
 export interface UseKsuActionsOptions {
   bridge: BridgeClient;
   activeContainer: ContainerStatusSnapshot | null;
@@ -218,16 +224,18 @@ export function useKsuActions({
     }
   };
 
-  const createContainer = async (containerId: string) => {
+  const createContainer = async (containerId: string, options?: CreateContainerOptions) => {
     setBusyKey(`container:create:${containerId}`);
     try {
+      const sizeMb = Math.round((options?.imageSizeGb ?? 4) * 1024);
       const res = await invokeStrataKsuRpc(bridge, STRATA_METHODS.CONTAINER_CREATE, {
         id: containerId,
         distroId: 'debian-12',
-        sizeMb: 4096,
+        sizeMb,
         enableSsh: true,
+        ...(options?.sshPort !== undefined ? { sshPort: options.sshPort } : {}),
         autoStart: true,
-        setDefault: true,
+        setDefault: options?.setDefault ?? activeContainer === null,
         hostBridge: true,
         l5DiagnosticMounts: false,
         syncAndroidDns: true,
