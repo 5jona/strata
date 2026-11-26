@@ -227,13 +227,9 @@ impl PtyRegistry {
             .try_clone()
             .map_err(|e| format!("dup pty slave stderr: {e}"))?;
 
-        let command = shell.unwrap_or_else(|| {
-            vec![
-                "/bin/sh".to_owned(),
-                "-c".to_owned(),
-                "if [ -x /bin/bash ]; then exec /bin/bash -l; else exec /bin/sh -l; fi".to_owned(),
-            ]
-        });
+        let command = shell.unwrap_or_else(|| crate::web::pty_codec::build_pty_shell_command(None));
+        let mut pty_env = std::collections::BTreeMap::new();
+        pty_env.insert("COLORTERM".to_owned(), "truecolor".to_owned());
         let spec = EnterSpec {
             container_id: container_id.clone(),
             ns_pid,
@@ -241,7 +237,7 @@ impl PtyRegistry {
             command,
             workdir: Some(DEFAULT_CONTAINER_WORKDIR.to_owned()),
             term: Some("xterm-256color".to_owned()),
-            env: std::collections::BTreeMap::new(),
+            env: pty_env,
             pty_ctty: true,
             new_session: true,
         };
@@ -295,7 +291,7 @@ impl PtyRegistry {
         let pidfd = PidFd::open(pid).map_err(|e| format!("pidfd_open({pid}): {e}"))?;
         let session_id = format!("pty-{}", self.next_id.fetch_add(1, Ordering::Relaxed));
         let (stdin_tx, stdin_rx) = mpsc::channel::<Vec<u8>>(64);
-        let (out_tx, _) = broadcast::channel::<Vec<u8>>(128);
+        let (out_tx, _) = broadcast::channel::<Vec<u8>>(512);
         let master = Arc::new(pair.master);
 
         let session = Arc::new(PtySession {

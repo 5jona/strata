@@ -106,10 +106,10 @@ if [ "$SKIP_BOOT_WAIT" -eq 0 ]; then
     done
 fi
 
-"$MKDIR_BIN" -p "$STATE_DIR" "$RUN_DIR" "${RUN_DIR}/logs" /data/local/strata/containers/main/mnt
+"$MKDIR_BIN" -p "$STATE_DIR" "$RUN_DIR" "${RUN_DIR}/logs" /data/local/strata/containers
 "$CHOWN_BIN" 0:0 "$STATE_DIR" "$RUN_DIR" "${RUN_DIR}/logs"
 "$CHMOD_BIN" 0700 "$STATE_DIR" "$RUN_DIR" "${RUN_DIR}/logs"
-"$CHMOD_BIN" 0755 /data/local/strata /data/local/strata/containers /data/local/strata/containers/main /data/local/strata/containers/main/mnt 2>/dev/null || true
+"$CHMOD_BIN" 0755 /data/local/strata /data/local/strata/containers 2>/dev/null || true
 
 if [ -d "$KSU_BIN_DIR" ] && [ -x "$CLI_BIN" ]; then
     "$LN_BIN" -sf "$CLI_BIN" "${KSU_BIN_DIR}/strata"

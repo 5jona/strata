@@ -243,9 +243,19 @@ where
     let _ = selinux::set_file_context(image_path, SELINUX_IMAGE_CONTEXT);
 
     on_progress("provisioning", bytes_done);
-    if storage::mount_rootfs(cfg, module_dir).is_ok() {
-        let _ = provision_container_rootfs(Path::new(&cfg.mount_dir), cfg, ssh_keys, module_dir);
-        let _ = storage::teardown_container(container_id, cfg, None, None);
+    storage::mount_rootfs(cfg, module_dir)?;
+    let prov_res = provision_container_rootfs(Path::new(&cfg.mount_dir), cfg, ssh_keys, module_dir);
+    let dropbear_missing = cfg.ssh.enabled
+        && cfg.init_command.is_empty()
+        && !Path::new(&cfg.mount_dir)
+            .join("usr/sbin/dropbear")
+            .is_file();
+    let _ = storage::teardown_container(container_id, cfg, None, None);
+    prov_res?;
+    if dropbear_missing {
+        eprintln!(
+            "stratad: imported image for '{container_id}' has enableSsh=true but /usr/sbin/dropbear is missing; disable ssh.enabled or install dropbear-bin before starting"
+        );
     }
     Ok(())
 }

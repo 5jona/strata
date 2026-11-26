@@ -2,6 +2,7 @@ import { Badge, Button, Card, StatusBanner } from '@gojona/ui';
 import { AlertTriangle, CheckCircle2, RefreshCw, Stethoscope, XCircle } from 'lucide-react';
 import { useState } from 'react';
 import type { ToolDiagnosticStatus, ToolsDoctorResult } from '../../types/protocol.ts';
+import { DOCTOR_ITEM_TITLES } from './toolHelpers.ts';
 
 function statusMeta(status: ToolDiagnosticStatus): {
   label: string;
@@ -34,7 +35,7 @@ export function ToolsDoctorTab({ doctor, busy, onRunDoctor }: ToolsDoctorTabProp
       <StatusBanner
         tone="info"
         title="尚未运行环境体检"
-        description="点击下方刷新按钮检查 4 路径标准布局、PATH/XDG、APT 沙盒及 Dropbear 状态。"
+        description="点击下方按钮检查容器目录布局、环境变量、包管理配置及工具链健康状态。"
         action={
           <Button size="sm" variant="primary" disabled={busy} onClick={onRunDoctor}>
             <Stethoscope className="size-3.5" />
@@ -59,7 +60,7 @@ export function ToolsDoctorTab({ doctor, busy, onRunDoctor }: ToolsDoctorTabProp
               ? warnCount === 0
                 ? '容器工具环境体检全部通过'
                 : `容器基础可用（${warnCount} 项警告）`
-              : `检测到 ${errCount} 项异常，需要修复`
+              : `检测到 ${errCount} 项异常，建议按下方指引修复`
           }
           description={`共检测 ${doctor.items.length} 项（容器 ${doctor.container}）`}
         />
@@ -72,6 +73,7 @@ export function ToolsDoctorTab({ doctor, busy, onRunDoctor }: ToolsDoctorTabProp
       <div className="flex flex-col gap-2">
         {doctor.items.map((item) => {
           const meta = statusMeta(item.status);
+          const localized = DOCTOR_ITEM_TITLES[item.id];
           return (
             <Card key={item.id} className="flex flex-col gap-1.5 p-3.5">
               <div className="flex items-center justify-between gap-2">
@@ -83,17 +85,17 @@ export function ToolsDoctorTab({ doctor, busy, onRunDoctor }: ToolsDoctorTabProp
                   ) : (
                     <XCircle className="size-4 text-[var(--danger)]" />
                   )}
-                  <span className="font-mono text-xs font-semibold text-[var(--text-primary)]">
-                    {item.id}
+                  <span className="text-xs font-semibold text-[var(--text-primary)]">
+                    {localized?.title ?? item.id}
                   </span>
-                  <Badge variant="neutral">{item.category}</Badge>
+                  <Badge variant="neutral">{localized?.category ?? item.category}</Badge>
                 </div>
                 <Badge variant={meta.variant}>{meta.label}</Badge>
               </div>
               <p className="text-xs text-[var(--text-primary)]">{item.summary}</p>
               {item.remediation && (
                 <div className="rounded-md border border-[var(--border-hairline)] bg-[var(--surface-elevated)] px-2.5 py-1.5 font-mono text-[11px] text-[var(--text-secondary)]">
-                  修复指引：{item.remediation}
+                  修复建议：{item.remediation}
                 </div>
               )}
             </Card>
@@ -105,10 +107,10 @@ export function ToolsDoctorTab({ doctor, busy, onRunDoctor }: ToolsDoctorTabProp
         <Card className="flex flex-col gap-2 p-3.5">
           <div className="flex items-center justify-between">
             <span className="font-mono text-xs font-semibold text-[var(--text-primary)]">
-              mise doctor --json
+              mise doctor 原始诊断报告
             </span>
             <Button size="sm" variant="ghost" onClick={() => setShowRawMise((v) => !v)}>
-              {showRawMise ? '收起 JSON' : '展开 JSON'}
+              {showRawMise ? '收起详情' : '查看详情'}
             </Button>
           </div>
           {showRawMise && (

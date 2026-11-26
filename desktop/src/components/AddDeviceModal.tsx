@@ -1,11 +1,13 @@
-import { Badge, Button, Card, Input, SegmentedControl, StatusBanner } from '@gojona/ui';
-import { RefreshCw, Smartphone, Wifi, X } from 'lucide-react';
-import { useState } from 'react';
+import { Button, Card, Input, SegmentedControl, StatusBanner } from '@gojona/ui';
+import { Smartphone, Wifi, X } from 'lucide-react';
+import { useEffect, useState } from 'react';
 import { tauriDeviceBridge } from '../transport/tauriBridge.ts';
 import type { AdbDevice, DeviceProfile, EndpointProbeResult } from '../types/device.ts';
+import { AdbDeviceDiscoveryPanel } from './AdbDeviceDiscoveryPanel.tsx';
 
 export interface AddDeviceModalProps {
   open: boolean;
+  editingDevice?: DeviceProfile | null;
   adbDevices: AdbDevice[];
   scanningAdb: boolean;
   onClose: () => void;
@@ -15,11 +17,12 @@ export interface AddDeviceModalProps {
 }
 
 /**
- * Multi-device onboarding modal supporting automatic ADB discovery/forwarding
- * and manual LAN/SSH Bearer-token endpoints.
+ * Multi-device onboarding and profile editor modal supporting ADB discovery/forwarding
+ * and manual LAN/SSH endpoints with pairing token entry.
  */
 export function AddDeviceModal({
   open,
+  editingDevice = null,
   adbDevices,
   scanningAdb,
   onClose,
@@ -39,7 +42,32 @@ export function AddDeviceModal({
   const [probeResult, setProbeResult] = useState<EndpointProbeResult | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
+  useEffect(() => {
+    if (!open) return;
+    setProbeResult(null);
+    if (editingDevice) {
+      setMode('manual');
+      setLabel(editingDevice.label);
+      setHost(editingDevice.host);
+      setPort(String(editingDevice.port));
+      setToken(editingDevice.token ?? '');
+      setSshPort(String(editingDevice.sshPort ?? 2222));
+      setKind(editingDevice.kind === 'ssh' ? 'ssh' : 'lan');
+    } else {
+      setMode('adb');
+      setLabel('');
+      setHost('192.168.1.');
+      setPort('7681');
+      setToken('');
+      setSshPort('2222');
+      setKind('lan');
+    }
+  }, [editingDevice, open]);
+
   if (!open) return null;
+
+  const isEditing = editingDevice !== null;
+  const isEditingAdbLike = editingDevice?.kind === 'adb' || editingDevice?.kind === 'mock';
 
   const handleProbe = async () => {
     setProbing(true);
@@ -55,23 +83,35 @@ export function AddDeviceModal({
     }
   };
 
-  const handleManualSubmit = async () => {
-    const cleanHost = host.trim();
+  const handleSaveProfile = async () => {
+    const cleanHost = host.trim() || '127.0.0.1';
     const cleanLabel = label.trim() || cleanHost;
-    if (!cleanHost) return;
+    if (!isEditingAdbLike && !host.trim()) return;
     setSubmitting(true);
     try {
-      const safeId = `${kind}-${cleanHost.replace(/[^a-zA-Z0-9._-]/g, '-')}-${port}`;
-      await onSaveManual({
-        id: safeId,
-        label: cleanLabel,
-        kind,
-        host: cleanHost,
-        port: Number(port) || 7681,
-        ...(token.trim() ? { token: token.trim() } : {}),
-        sshUser: 'root',
-        sshPort: Number(sshPort) || 2222,
-      });
+      const trimmedToken = token.trim();
+      const profile: DeviceProfile = editingDevice
+        ? {
+            ...editingDevice,
+            label: cleanLabel,
+            kind: isEditingAdbLike ? editingDevice.kind : kind,
+            host: isEditingAdbLike ? editingDevice.host : cleanHost,
+            port: Number(port) || 7681,
+            sshUser: editingDevice.sshUser ?? 'root',
+            sshPort: Number(sshPort) || 2222,
+            ...(trimmedToken ? { token: trimmedToken } : { token: undefined }),
+          }
+        : {
+            id: `${kind}-${cleanHost.replace(/[^a-zA-Z0-9._-]/g, '-')}-${port}`,
+            label: cleanLabel,
+            kind,
+            host: cleanHost,
+            port: Number(port) || 7681,
+            ...(trimmedToken ? { token: trimmedToken } : {}),
+            sshUser: 'root',
+            sshPort: Number(sshPort) || 2222,
+          };
+      await onSaveManual(profile);
       onClose();
     } finally {
       setSubmitting(false);
@@ -83,16 +123,18 @@ export function AddDeviceModal({
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-4 backdrop-blur-xs"
       role="dialog"
       aria-modal="true"
-      aria-label="添加或扫描 Android 设备"
+      aria-label={isEditing ? '编辑设备配置' : '添加或扫描 Android 设备'}
     >
       <Card className="flex w-full max-w-lg flex-col gap-4 p-5">
         <div className="flex items-center justify-between gap-2">
           <div>
             <h2 className="text-base font-semibold text-[var(--text-primary)]">
-              连接 Android 设备
+              {isEditing ? `编辑设备 · ${editingDevice.label}` : '连接 Android 设备'}
             </h2>
             <p className="text-xs text-[var(--text-secondary)]">
-              支持 USB / 无线 ADB 自动转发并读取 Token，或手动添加局域网 / SSH 隧道设备
+              {isEditing
+                ? '更新连接端口或补充配对密钥 (Token)，保存后立即重新连接'
+                : '请先在手机 KernelSU 安装并激活 Strata 模块，再通过 USB ADB 或局域网配对连接'}
             </p>
           </div>
           <Button size="icon-sm" variant="ghost" aria-label="关闭弹窗" onClick={onClose}>
@@ -100,85 +142,28 @@ export function AddDeviceModal({
           </Button>
         </div>
 
-        <SegmentedControl
-          value={mode}
-          onValueChange={setMode}
-          fullWidth
-          options={[
-            { value: 'adb', label: 'ADB 自动发现', icon: <Smartphone className="size-3.5" /> },
-            { value: 'manual', label: '手动 LAN / SSH', icon: <Wifi className="size-3.5" /> },
-          ]}
-        />
+        {!isEditing && (
+          <SegmentedControl
+            value={mode}
+            onValueChange={setMode}
+            fullWidth
+            options={[
+              { value: 'adb', label: 'ADB 自动发现', icon: <Smartphone className="size-3.5" /> },
+              { value: 'manual', label: '手动局域网 / SSH', icon: <Wifi className="size-3.5" /> },
+            ]}
+          />
+        )}
 
-        {mode === 'adb' ? (
-          <div className="flex flex-col gap-3">
-            <div className="flex items-center justify-between gap-2">
-              <div className="flex items-center gap-2 text-xs text-[var(--text-secondary)]">
-                <span>设备端 API 端口：</span>
-                <Input
-                  mono
-                  className="w-24"
-                  value={adbPort}
-                  onChange={(e) => setAdbPort(e.target.value)}
-                  aria-label="ADB 远端 API 端口"
-                />
-              </div>
-              <Button
-                size="sm"
-                variant="secondary"
-                disabled={scanningAdb}
-                onClick={() => void onScanAdb()}
-              >
-                <RefreshCw className={`size-3.5 ${scanningAdb ? 'animate-spin' : ''}`} />
-                重新扫描
-              </Button>
-            </div>
-
-            {adbDevices.length === 0 ? (
-              <StatusBanner
-                tone="info"
-                title="未检测到在线 ADB 设备"
-                description="请确认已开启 USB 调试或无线调试，并检查电脑 PATH 中已安装 adb。"
-              />
-            ) : (
-              <div className="flex max-h-60 flex-col gap-2 overflow-y-auto strata-scroll">
-                {adbDevices.map((adb) => {
-                  const ready = adb.state === 'device';
-                  return (
-                    <div
-                      key={adb.serial}
-                      className="flex items-center justify-between gap-3 rounded-lg border border-[var(--border-hairline)] bg-[var(--surface-elevated)] px-3 py-2.5"
-                    >
-                      <div className="min-w-0">
-                        <div className="flex items-center gap-2">
-                          <span className="truncate text-sm font-medium text-[var(--text-primary)]">
-                            {adb.model ?? adb.serial}
-                          </span>
-                          <Badge variant={ready ? 'success' : 'warning'}>
-                            {ready ? (adb.isWireless ? '无线 ADB' : 'USB ADB') : adb.state}
-                          </Badge>
-                        </div>
-                        <div className="truncate font-mono text-[11px] text-[var(--text-secondary)]">
-                          {adb.serial} {adb.device ? `· ${adb.device}` : ''}
-                        </div>
-                      </div>
-                      <Button
-                        size="sm"
-                        variant="primary"
-                        disabled={!ready}
-                        onClick={async () => {
-                          await onConnectAdb(adb, Number(adbPort) || 7681);
-                          onClose();
-                        }}
-                      >
-                        一键连接
-                      </Button>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </div>
+        {!isEditing && mode === 'adb' ? (
+          <AdbDeviceDiscoveryPanel
+            adbPort={adbPort}
+            onAdbPortChange={setAdbPort}
+            adbDevices={adbDevices}
+            scanningAdb={scanningAdb}
+            onScanAdb={onScanAdb}
+            onConnectAdb={onConnectAdb}
+            onClose={onClose}
+          />
         ) : (
           <div className="flex flex-col gap-3">
             <div className="grid grid-cols-2 gap-2.5">
@@ -190,45 +175,51 @@ export function AddDeviceModal({
                   onChange={(e) => setLabel(e.target.value)}
                 />
               </div>
-              <div className="flex flex-col gap-1">
-                <span className="text-xs text-[var(--text-secondary)]">连接方式</span>
-                <SegmentedControl
-                  value={kind}
-                  onValueChange={setKind}
-                  size="sm"
-                  fullWidth
-                  options={[
-                    { value: 'lan', label: 'LAN 直连' },
-                    { value: 'ssh', label: 'SSH 转发' },
-                  ]}
-                />
-              </div>
+              {!isEditingAdbLike ? (
+                <div className="flex flex-col gap-1">
+                  <span className="text-xs text-[var(--text-secondary)]">连接方式</span>
+                  <SegmentedControl
+                    value={kind}
+                    onValueChange={setKind}
+                    size="sm"
+                    fullWidth
+                    options={[
+                      { value: 'lan', label: '局域网直连' },
+                      { value: 'ssh', label: 'SSH 转发' },
+                    ]}
+                  />
+                </div>
+              ) : (
+                <div className="flex flex-col gap-1">
+                  <span className="text-xs text-[var(--text-secondary)]">ADB 设备序列号</span>
+                  <Input mono readOnly value={editingDevice?.serial ?? editingDevice?.host ?? ''} />
+                </div>
+              )}
             </div>
-
             <div className="grid grid-cols-3 gap-2.5">
               <div className="col-span-2 flex flex-col gap-1">
                 <span className="text-xs text-[var(--text-secondary)]">主机 IP / 地址</span>
                 <Input
                   mono
+                  readOnly={isEditingAdbLike}
                   value={host}
                   placeholder="192.168.1.100 或 127.0.0.1"
                   onChange={(e) => setHost(e.target.value)}
                 />
               </div>
               <div className="flex flex-col gap-1">
-                <span className="text-xs text-[var(--text-secondary)]">API 端口</span>
+                <span className="text-xs text-[var(--text-secondary)]">服务端口</span>
                 <Input mono value={port} onChange={(e) => setPort(e.target.value)} />
               </div>
             </div>
-
             <div className="grid grid-cols-3 gap-2.5">
               <div className="col-span-2 flex flex-col gap-1">
-                <span className="text-xs text-[var(--text-secondary)]">Bearer Token</span>
+                <span className="text-xs text-[var(--text-secondary)]">配对密钥 (Token)</span>
                 <Input
                   mono
                   type="password"
                   value={token}
-                  placeholder="cat /data/adb/strata/run/web.token"
+                  placeholder="粘贴手机端显示的配对密钥"
                   onChange={(e) => setToken(e.target.value)}
                 />
               </div>
@@ -237,37 +228,41 @@ export function AddDeviceModal({
                 <Input mono value={sshPort} onChange={(e) => setSshPort(e.target.value)} />
               </div>
             </div>
-
+            <p className="text-[11px] text-[var(--text-secondary)]">
+              请在手机 KernelSU → Strata「系统设置 → 电脑端配对连接」中开启局域网配对并复制密钥（USB
+              ADB 连接通常会自动读取）。
+            </p>
             {probeResult && (
               <StatusBanner
                 tone={probeResult.reachable && probeResult.authenticated ? 'success' : 'warning'}
                 title={
                   probeResult.reachable
                     ? probeResult.authenticated
-                      ? `连通正常 (${probeResult.latencyMs}ms · stratad ${probeResult.version ?? ''})`
-                      : `端口可达 (${probeResult.latencyMs}ms)，但鉴权未通过`
-                    : '无法连接目标端点'
+                      ? `连通正常 (${probeResult.latencyMs}ms · 服务版本 ${probeResult.version ?? ''})`
+                      : `端口可达 (${probeResult.latencyMs}ms)，但配对密钥鉴权未通过`
+                    : '无法连接目标设备'
                 }
                 description={probeResult.error}
               />
             )}
-
             <div className="flex items-center justify-end gap-2 pt-1">
-              <Button
-                size="sm"
-                variant="secondary"
-                disabled={probing}
-                onClick={() => void handleProbe()}
-              >
-                {probing ? '探测中…' : '测试连通性'}
-              </Button>
+              {!isEditingAdbLike && (
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  disabled={probing}
+                  onClick={() => void handleProbe()}
+                >
+                  {probing ? '探测中…' : '测试连通性'}
+                </Button>
+              )}
               <Button
                 size="sm"
                 variant="primary"
-                disabled={submitting || !host.trim()}
-                onClick={() => void handleManualSubmit()}
+                disabled={submitting || (!isEditingAdbLike && !host.trim())}
+                onClick={() => void handleSaveProfile()}
               >
-                保存并连接
+                {isEditing ? '保存并重连' : '保存并连接'}
               </Button>
             </div>
           </div>

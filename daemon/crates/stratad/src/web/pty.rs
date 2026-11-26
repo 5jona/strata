@@ -2,6 +2,7 @@
 
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Duration;
 
 use axum::Json;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
@@ -12,17 +13,23 @@ use futures_util::{SinkExt, StreamExt};
 use serde::Deserialize;
 use serde_json::json;
 use tokio::sync::broadcast::error::RecvError;
+use tokio::time::MissedTickBehavior;
 
 use crate::web::WebAppState;
+use crate::web::pty_codec::build_pty_shell_command;
 use crate::web::pty_session::{
     ClientPtyFrame, PtySession, WatermarkFlow, decode_client_frame, encode_data_frame,
     encode_exit_frame,
 };
 
+const PTY_PING_INTERVAL: Duration = Duration::from_secs(25);
+const SGR_RESET: &[u8] = b"\x1b[0m";
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct PtyConnectQuery {
     pub(super) session: Option<String>,
+    pub(super) shell: Option<String>,
     #[serde(default = "default_cols")]
     pub(super) cols: u16,
     #[serde(default = "default_rows")]
@@ -82,7 +89,7 @@ pub(super) async fn handle_pty_ws(
                 cfg.cap_profile(),
                 q.cols,
                 q.rows,
-                None,
+                Some(build_pty_shell_command(q.shell.as_deref())),
             )
             .await
         {
@@ -177,6 +184,10 @@ async fn run_pty_socket(socket: WebSocket, session: Arc<PtySession>, state: Arc<
         }
     }
 
+    let mut ping_interval = tokio::time::interval(PTY_PING_INTERVAL);
+    ping_interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
+    ping_interval.tick().await;
+
     loop {
         if !session.is_current_generation(my_gen) {
             let _ = sink.send(Message::Close(None)).await;
@@ -190,6 +201,11 @@ async fn run_pty_socket(socket: WebSocket, session: Arc<PtySession>, state: Arc<
         }
 
         tokio::select! {
+            _ = ping_interval.tick() => {
+                if sink.send(Message::Ping(Vec::new().into())).await.is_err() {
+                    break;
+                }
+            }
             _ = epoch_rx.changed() => {
                 let _ = sink.send(Message::Close(None)).await;
                 break;
@@ -236,7 +252,11 @@ async fn run_pty_socket(socket: WebSocket, session: Arc<PtySession>, state: Arc<
                             break;
                         }
                     }
-                    Err(RecvError::Lagged(_)) => {}
+                    Err(RecvError::Lagged(_)) => {
+                        if sink.send(Message::Binary(encode_data_frame(SGR_RESET).into())).await.is_err() {
+                            break;
+                        }
+                    }
                     Err(RecvError::Closed) => break,
                 }
             }

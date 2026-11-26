@@ -184,6 +184,10 @@ fn manager_label(m: ToolManagerKind) -> &'static str {
         ToolManagerKind::Uv => "uv",
         ToolManagerKind::Bundle => "bundle",
         ToolManagerKind::System => "system",
+        ToolManagerKind::Apk => "apk",
+        ToolManagerKind::Pacman => "pacman",
+        ToolManagerKind::Dnf => "dnf",
+        ToolManagerKind::Manual => "manual",
     }
 }
 
@@ -194,5 +198,7 @@ fn group_label(g: ToolGroupKind) -> &'static str {
         ToolGroupKind::CliDev => "cli-dev",
         ToolGroupKind::DebugL3L5 => "debug-l3-l5",
         ToolGroupKind::PythonUv => "python-uv",
+        ToolGroupKind::Shell => "shell",
+        ToolGroupKind::Discovered => "discovered",
     }
 }

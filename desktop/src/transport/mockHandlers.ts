@@ -1,7 +1,6 @@
 import type {
   ContainerConfig,
   ContainerJobProgressPayload,
-  ContainerServiceRuntime,
   ContainerStatusSnapshot,
 } from '../types/protocol.ts';
 import {
@@ -55,39 +54,90 @@ export function setMockContainerPhase(
   return rec.snapshot;
 }
 
+export interface RegisterMockContainerOpts {
+  id: string;
+  sizeMb: number;
+  hostname?: string;
+  enableSsh: boolean;
+  sshPort?: number;
+  sshPublicKeys?: string[];
+  autoStart: boolean;
+  setDefault: boolean;
+  hostBridge: boolean;
+  extraCharDevs?: string[];
+  l5DiagnosticMounts: boolean;
+  syncAndroidDns: boolean;
+  noatime: boolean;
+}
+
 export function registerNewMockContainer(
   ctx: MockRuntimeContext,
-  id: string,
-  sizeMb: number,
-  autoStart: boolean,
-  sshPort?: number,
+  opts: RegisterMockContainerOpts,
 ): void {
   const base = structuredClone(requireMockContainer(ctx.dataset));
-  base.snapshot.id = id;
-  base.snapshot.isDefault = false;
-  base.snapshot.autoStart = autoStart;
-  base.snapshot.phase = autoStart ? 'running' : 'stopped';
-  base.snapshot.mounted = autoStart;
-  base.snapshot.hostname = id;
-  base.snapshot.sshPort = sshPort ?? 2224;
-  base.snapshot.disk = {
-    imageExists: true,
-    imageAllocatedBytes: 420 * 1024 * 1024,
-    imageVirtualBytes: sizeMb * 1024 * 1024,
-  };
-  base.config.hostname = id;
-  base.config.autoStart = autoStart;
-  base.config.ssh.port = base.snapshot.sshPort;
-  base.config.services = [];
+  if (opts.setDefault) {
+    for (const item of Object.values(ctx.dataset.containers)) {
+      item.snapshot.isDefault = false;
+    }
+  }
+  const effectivePort = opts.enableSsh ? (opts.sshPort ?? 2224) : 0;
+  const hostname = opts.hostname?.trim() || opts.id;
+  Object.assign(base.snapshot, {
+    id: opts.id,
+    isDefault: opts.setDefault,
+    autoStart: opts.autoStart,
+    phase: opts.autoStart ? 'running' : 'stopped',
+    mounted: opts.autoStart,
+    hostname,
+    sshEnabled: opts.enableSsh,
+    sshPort: effectivePort,
+    hostBridge: opts.hostBridge,
+    disk: {
+      imageExists: true,
+      imageAllocatedBytes: 420 * 1024 * 1024,
+      imageVirtualBytes: opts.sizeMb * 1024 * 1024,
+    },
+  });
+  Object.assign(base.config, {
+    hostname,
+    autoStart: opts.autoStart,
+    hostBridge: opts.hostBridge,
+    syncAndroidDns: opts.syncAndroidDns,
+    noatime: opts.noatime,
+    extraCharDevs: opts.extraCharDevs ?? (opts.hostBridge ? ['uinput'] : []),
+    services: [],
+    extraMounts: opts.l5DiagnosticMounts
+      ? ['/sys/fs/pstore', '/sys/kernel/tracing', '/sys/fs/bpf'].map((p) => ({
+          hostPath: p,
+          containerPath: p,
+          readOnly: true,
+        }))
+      : [],
+  });
+  base.config.ssh.enabled = opts.enableSsh;
+  base.config.ssh.port = effectivePort;
   base.services = [];
   base.serviceLogs = {};
-  ctx.dataset.containers[id] = base;
+  base.sshKeys = opts.enableSsh ? [...(opts.sshPublicKeys ?? [])] : [];
+  ctx.dataset.containers[opts.id] = base;
   ctx.emit(STRATA_EVENTS.CONTAINER_STATE_CHANGED, {
-    container: id,
+    container: opts.id,
     previous: 'stopped',
     current: base.snapshot.phase,
     snapshot: structuredClone(base.snapshot),
   });
+}
+
+export function setMockDefaultContainer(ctx: MockRuntimeContext, id: string) {
+  const target = requireMockContainer(ctx.dataset, id);
+  const prev = Object.values(ctx.dataset.containers).find((c) => c.snapshot.isDefault)?.snapshot.id;
+  for (const c of Object.values(ctx.dataset.containers)) {
+    c.snapshot.isDefault = c.snapshot.id === target.snapshot.id;
+  }
+  return {
+    defaultContainer: target.snapshot.id,
+    ...(prev ? { previousDefaultContainer: prev } : {}),
+  };
 }
 
 export function startMockCreateJob(ctx: MockRuntimeContext, p: Record<string, unknown>) {
@@ -106,35 +156,46 @@ export function startMockCreateJob(ctx: MockRuntimeContext, p: Record<string, un
     bytesDone: 0,
     bytesTotal: 120 * 1024 * 1024,
     percent: 8,
-    message: '正在从镜像站拉取 ARM64 RootFS…',
+    message: p.sourceUrl ? '正在从直链下载镜像…' : '正在从镜像站拉取 ARM64 RootFS…',
     startedAtMs: now,
     updatedAtMs: now,
   };
   ctx.jobs.set(jobId, job);
   ctx.emit(STRATA_EVENTS.CONTAINER_JOB_PROGRESS, { ...job });
 
+  const str = (v: unknown) => (typeof v === 'string' ? v : undefined);
   const steps = [
     { delay: 450, stage: 'extracting', percent: 55, message: '正在创建 ext4 稀疏镜像并解压…' },
-    { delay: 950, stage: 'provisioning', percent: 85, message: '配置 Dropbear SSH 与 DNS…' },
-    { delay: 1400, stage: 'done', percent: 100, message: '容器初始化完成' },
+    { delay: 950, stage: 'provisioning', percent: 85, message: '初始化容器运行环境…' },
+    { delay: 1400, stage: 'completed', percent: 100, message: '容器初始化完成' },
   ];
   for (const step of steps) {
     ctx.schedule(step.delay, () => {
       if (job.state === 'cancelled') return;
-      job.stage = step.stage;
-      job.percent = step.percent;
-      job.bytesDone = Math.round((job.bytesTotal ?? 100) * (step.percent / 100));
-      job.message = step.message;
-      job.updatedAtMs = Date.now();
+      Object.assign(job, {
+        stage: step.stage,
+        percent: step.percent,
+        bytesDone: Math.round((job.bytesTotal ?? 100) * (step.percent / 100)),
+        message: step.message,
+        updatedAtMs: Date.now(),
+      });
       if (step.percent === 100) {
         job.state = 'completed';
-        registerNewMockContainer(
-          ctx,
+        registerNewMockContainer(ctx, {
           id,
-          Number(p.sizeMb ?? 16384),
-          Boolean(p.autoStart),
-          p.sshPort as number | undefined,
-        );
+          sizeMb: Number(p.sizeMb ?? 16384),
+          ...(str(p.hostname) ? { hostname: str(p.hostname) } : {}),
+          enableSsh: Boolean(p.enableSsh),
+          ...(typeof p.sshPort === 'number' ? { sshPort: p.sshPort } : {}),
+          sshPublicKeys: Array.isArray(p.sshPublicKeys) ? p.sshPublicKeys.map(String) : [],
+          autoStart: Boolean(p.autoStart),
+          setDefault: Boolean(p.setDefault),
+          hostBridge: p.hostBridge !== false,
+          ...(Array.isArray(p.extraCharDevs) ? { extraCharDevs: p.extraCharDevs.map(String) } : {}),
+          l5DiagnosticMounts: Boolean(p.l5DiagnosticMounts),
+          syncAndroidDns: p.syncAndroidDns !== false,
+          noatime: p.noatime !== false,
+        });
       }
       ctx.emit(STRATA_EVENTS.CONTAINER_JOB_PROGRESS, { ...job });
     });
@@ -150,92 +211,39 @@ export function cloneMockContainer(
   hostname?: string,
 ) {
   const src = requireMockContainer(ctx.dataset, sourceId);
-  if (ctx.dataset.containers[targetId]) {
-    throw new StrataRpcError(-32026, `容器已存在: ${targetId}`);
-  }
+  if (ctx.dataset.containers[targetId]) throw new StrataRpcError(-32026, `容器已存在: ${targetId}`);
   const cloned = structuredClone(src);
-  cloned.snapshot.id = targetId;
-  cloned.snapshot.isDefault = false;
-  cloned.snapshot.phase = 'stopped';
-  cloned.snapshot.mounted = false;
-  cloned.snapshot.hostname = hostname ?? targetId;
-  cloned.snapshot.sshPort = sshPort ?? src.snapshot.sshPort + 1;
-  cloned.snapshot.imagePath = `/data/local/strata/containers/${targetId}/rootfs.img`;
-  cloned.config.hostname = cloned.snapshot.hostname;
-  cloned.config.ssh.port = cloned.snapshot.sshPort;
-  cloned.config.imagePath = cloned.snapshot.imagePath;
+  const nextHostname = hostname ?? targetId;
+  const nextPort = sshPort ?? src.snapshot.sshPort + 1;
+  const imagePath = `/data/local/strata/containers/${targetId}/rootfs.img`;
+  Object.assign(cloned.snapshot, {
+    id: targetId,
+    isDefault: false,
+    phase: 'stopped',
+    mounted: false,
+    hostname: nextHostname,
+    sshPort: nextPort,
+    imagePath,
+  });
+  Object.assign(cloned.config, { hostname: nextHostname, imagePath });
+  cloned.config.ssh.port = nextPort;
   ctx.dataset.containers[targetId] = cloned;
   return {
     sourceId,
     targetId,
-    imagePath: cloned.snapshot.imagePath,
+    imagePath,
     copiedBytes: cloned.snapshot.disk.imageAllocatedBytes,
     virtualBytes: cloned.snapshot.disk.imageVirtualBytes,
   };
 }
 
-export function upsertMockService(
-  ctx: MockRuntimeContext,
-  containerId: string | undefined,
-  spec: ContainerConfig['services'][number],
-): ContainerServiceRuntime {
-  const rec = requireMockContainer(ctx.dataset, containerId);
-  const idx = rec.config.services.findIndex((s) => s.id === spec.id);
-  if (idx >= 0) rec.config.services[idx] = spec;
-  else rec.config.services.push(spec);
-
-  let runtime = rec.services.find((s) => s.id === spec.id);
-  if (!runtime) {
-    runtime = {
-      id: spec.id,
-      name: spec.name,
-      status: 'stopped',
-      uptimeMs: 0,
-      restartCount: 0,
-      autoStart: spec.autoStart,
-    };
-    rec.services.push(runtime);
-    rec.serviceLogs[spec.id] = [`[service:${spec.id}] 已注册服务，等待启动`];
-  } else {
-    runtime.name = spec.name;
-    runtime.autoStart = spec.autoStart;
-  }
-  return runtime;
-}
-
-export function setMockServiceStatus(
-  ctx: MockRuntimeContext,
-  containerId: string | undefined,
-  serviceId: string,
-  next: 'running' | 'stopped',
-  incrementRestart = false,
-): ContainerServiceRuntime {
-  const rec = requireMockContainer(ctx.dataset, containerId);
-  const svc = rec.services.find((s) => s.id === serviceId);
-  if (!svc) throw new StrataRpcError(-32028, `服务不存在: ${serviceId}`);
-  const prev = svc.status;
-  svc.status = next;
-  svc.pid = next === 'running' ? 20_000 + Math.floor(Math.random() * 900) : undefined;
-  svc.uptimeMs = next === 'running' ? 1000 : 0;
-  if (incrementRestart) svc.restartCount += 1;
-  const line = `${new Date().toISOString()} [${serviceId}] transitioned ${prev} -> ${next}`;
-  rec.serviceLogs[serviceId] = [...(rec.serviceLogs[serviceId] ?? []), line];
-  ctx.emit(STRATA_EVENTS.SERVICE_STATE_CHANGED, {
-    container: rec.snapshot.id,
-    serviceId,
-    prevStatus: prev,
-    status: next,
-    pid: svc.pid,
-    restartCount: svc.restartCount,
-  });
-  return svc;
-}
-
 export function patchMockContainerConfig(dataset: MockDeviceDataset, p: Record<string, unknown>) {
   const rec = requireMockContainer(dataset, p.container as string | undefined);
-  if (typeof p.enabled === 'boolean') {
-    rec.config.enabled = p.enabled;
-    rec.snapshot.enabled = p.enabled;
+  for (const k of ['enabled', 'autoStart', 'hostBridge', 'hostRuntime'] as const) {
+    if (typeof p[k] === 'boolean') {
+      rec.config[k] = p[k];
+      rec.snapshot[k] = p[k];
+    }
   }
   if (typeof p.hostname === 'string') {
     rec.config.hostname = p.hostname;
@@ -245,25 +253,10 @@ export function patchMockContainerConfig(dataset: MockDeviceDataset, p: Record<s
     rec.config.ssh.port = p.sshPort;
     rec.snapshot.sshPort = p.sshPort;
   }
-  if (typeof p.autoStart === 'boolean') {
-    rec.config.autoStart = p.autoStart;
-    rec.snapshot.autoStart = p.autoStart;
-  }
-  if (typeof p.hostBridge === 'boolean') {
-    rec.config.hostBridge = p.hostBridge;
-    rec.snapshot.hostBridge = p.hostBridge;
-  }
-  if (typeof p.hostRuntime === 'boolean') {
-    rec.config.hostRuntime = p.hostRuntime;
-    rec.snapshot.hostRuntime = p.hostRuntime;
-  }
   if (typeof p.noatime === 'boolean') rec.config.noatime = p.noatime;
-  if (Array.isArray(p.extraCharDevs)) {
-    rec.config.extraCharDevs = p.extraCharDevs.map(String);
-  }
-  if (Array.isArray(p.extraMounts)) {
+  if (Array.isArray(p.extraCharDevs)) rec.config.extraCharDevs = p.extraCharDevs.map(String);
+  if (Array.isArray(p.extraMounts))
     rec.config.extraMounts = p.extraMounts as ContainerConfig['extraMounts'];
-  }
   return { container: rec.snapshot.id, config: rec.config };
 }
 
@@ -271,16 +264,17 @@ export function deleteMockContainer(dataset: MockDeviceDataset, id: string, dele
   if (!dataset.containers[id]) throw new StrataRpcError(-32021, `容器不存在: ${id}`);
   delete dataset.containers[id];
   const remaining = Object.keys(dataset.containers);
+  const cleanup = {
+    drainedPids: 0,
+    unmountedPaths: 0,
+    detachedLoops: 0,
+    residualMounts: 0,
+    residualLoops: 0,
+  };
   return {
     container: id,
     imageDeleted: deleteImage,
-    cleanup: {
-      drainedPids: 0,
-      unmountedPaths: 0,
-      detachedLoops: 0,
-      residualMounts: 0,
-      residualLoops: 0,
-    },
+    cleanup,
     ...(remaining[0] ? { newDefaultContainer: remaining[0] } : {}),
   };
 }

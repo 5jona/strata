@@ -1,0 +1,87 @@
+/* Bundled Maple Mono NF CN (OFL-1.1) — Nerd Font icons + 2:1 CJK alignment */
+@font-face {
+  font-family: "Maple Mono NF CN";
+  src: url("../assets/fonts/MapleMono-NF-CN-Regular.woff2") format("woff2");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Maple Mono NF CN";
+  src: url("../assets/fonts/MapleMono-NF-CN-Bold.woff2") format("woff2");
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+/* Terminal canvas & scrollbar polish */
+.strata-xterm-host {
+  font-family:
+    "Maple Mono NF CN", "JetBrains Mono", "Cascadia Code", "Noto Sans Mono CJK SC", "PingFang SC",
+    "Microsoft YaHei", monospace;
+  font-variant-ligatures: contextual;
+}
+
+.strata-xterm-host .xterm {
+  height: 100%;
+  padding: 8px 10px;
+}
+
+.strata-xterm-host .xterm-viewport {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(148, 163, 184, 0.35) transparent;
+}
+
+.strata-xterm-host .xterm-viewport::-webkit-scrollbar {
+  width: 6px;
+}
+
+.strata-xterm-host .xterm-viewport::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.35);
+  border-radius: 9999px;
+}
+
+.strata-xterm-host .xterm-viewport::-webkit-scrollbar-thumb:hover {
+  background: rgba(148, 163, 184, 0.6);
+}
+
+/* Split pane draggable resizer handle */
+.strata-split-divider {
+  flex: none;
+  position: relative;
+  background-color: var(--border-hairline);
+  transition: background-color 140ms ease;
+  z-index: 10;
+}
+
+.strata-split-divider:hover,
+.strata-split-divider[data-dragging="true"] {
+  background-color: var(--accent);
+}
+
+.strata-split-divider-horizontal {
+  width: 3px;
+  cursor: col-resize;
+}
+
+.strata-split-divider-vertical {
+  height: 3px;
+  cursor: row-resize;
+}
+
+/* Subtle entrance animation for context menu and tooltips */
+@keyframes strata-term-pop {
+  from {
+    opacity: 0;
+    transform: scale(0.97) translateY(-2px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+.strata-term-menu {
+  animation: strata-term-pop 110ms ease-out;
+}

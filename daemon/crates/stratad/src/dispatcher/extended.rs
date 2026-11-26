@@ -5,11 +5,12 @@ use serde::de::DeserializeOwned;
 use serde_json::Value;
 use strata_protocol::rpc::{
     ContainerCloneParams, ContainerCreateParams, ContainerDeleteParams, ContainerJobSelectorParams,
-    ContainerResizeParams, ContainerSelectorParams, DaemonLogsParams, DistroCatalogParams,
-    ServiceLogsParams, ServiceSelectorParams, ServiceUpsertParams, SshKeyRemoveParams,
-    ToolsBootstrapParams, ToolsCacheCleanParams, ToolsCatalogParams, ToolsConfigGetParams,
-    ToolsConfigSetParams, ToolsDoctorParams, ToolsInstallParams, ToolsListParams,
-    ToolsStatusParams, ToolsUninstallParams, ToolsUpgradeParams, WebConfigureParams, methods,
+    ContainerResizeParams, ContainerSelectorParams, ContainerSetDefaultParams, DaemonLogsParams,
+    DistroCatalogParams, ServiceLogsParams, ServiceSelectorParams, ServiceUpsertParams,
+    SshKeyRemoveParams, ToolsBootstrapParams, ToolsCacheCleanParams, ToolsCatalogParams,
+    ToolsConfigGetParams, ToolsConfigSetParams, ToolsDoctorParams, ToolsInstallParams,
+    ToolsListParams, ToolsStatusParams, ToolsUninstallParams, ToolsUpgradeParams, ToolsUseParams,
+    ToolsVersionsParams, WebConfigureParams, methods,
 };
 use strata_sys::kernel_caps;
 
@@ -52,6 +53,10 @@ impl Dispatcher {
             methods::CONTAINER_DELETE => {
                 let p: ContainerDeleteParams = parse_required_params(params)?;
                 to_json(self.manager.delete_container(p).await?)?
+            }
+            methods::CONTAINER_SET_DEFAULT => {
+                let p: ContainerSetDefaultParams = parse_required_params(params)?;
+                to_json(self.manager.set_default_container(p).await?)?
             }
             methods::CONTAINER_RESIZE => {
                 let p: ContainerResizeParams = parse_required_params(params)?;
@@ -112,6 +117,14 @@ impl Dispatcher {
             methods::TOOLS_CATALOG => {
                 let p: ToolsCatalogParams = parse_optional_params(params)?;
                 to_json(self.tools.catalog(p).await?)?
+            }
+            methods::TOOLS_VERSIONS => {
+                let p: ToolsVersionsParams = parse_required_params(params)?;
+                to_json(self.tools.versions(p).await?)?
+            }
+            methods::TOOLS_USE => {
+                let p: ToolsUseParams = parse_required_params(params)?;
+                to_json(self.tools.use_tool(p).await?)?
             }
             methods::TOOLS_CONFIG_GET => {
                 let p: ToolsConfigGetParams = parse_optional_params(params)?;

@@ -20,6 +20,7 @@ pub(crate) struct AppState {
 /// Initializes and runs the Strata Desktop Tauri v2 application.
 pub fn run() {
     let builder = tauri::Builder::default()
+        .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_shell::init())
         .setup(|app| {
             let store_path = resolve_device_store_path(app);

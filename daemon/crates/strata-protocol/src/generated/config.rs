@@ -164,8 +164,8 @@ pub struct ContainerConfig {
 pub struct StrataConfig {
     #[serde(default = "default_strata_config_version")]
     pub version: u32,
-    #[serde(default = "default_strata_config_default_container")]
-    pub default_container: String,
+    #[serde(default)]
+    pub default_container: Option<String>,
     #[serde(default)]
     pub sideveil: SideVeilBridgeConfig,
     #[serde(default)]
@@ -190,6 +190,9 @@ pub struct ContainerConfigPatchParams {
     pub mount_dir: Option<String>,
     #[serde(default)]
     pub hostname: Option<String>,
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ssh_enabled: Option<bool>,
     #[serde(default)]
     pub ssh_port: Option<u16>,
     #[serde(default)]
@@ -424,8 +427,4 @@ fn default_container_config_noatime() -> bool {
 
 fn default_strata_config_version() -> u32 {
     1
-}
-
-fn default_strata_config_default_container() -> String {
-    String::from("main")
 }

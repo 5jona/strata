@@ -202,12 +202,14 @@ export class HttpWsTransport implements StrataTransport {
     rows: number,
     handlers: PtyConnectionHandlers,
     resumeSessionId?: string,
+    shell?: string,
   ): PtySessionHandle {
     const query = new URLSearchParams({
       cols: String(Math.max(2, Math.floor(cols))),
       rows: String(Math.max(2, Math.floor(rows))),
     });
     if (resumeSessionId) query.set('session', resumeSessionId);
+    if (shell) query.set('shell', shell);
     const url = this.toWsUrl(`/ws/pty/${encodeURIComponent(containerId)}?${query.toString()}`);
     const ws = new WebSocket(url, this.wsSubprotocols());
     ws.binaryType = 'arraybuffer';

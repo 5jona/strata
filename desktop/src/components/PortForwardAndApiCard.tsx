@@ -88,7 +88,7 @@ export function PortForwardAndApiCard({
           <div className="flex items-center gap-2">
             <Cable className="size-4 text-[var(--accent)]" />
             <span className="text-sm font-semibold text-[var(--text-primary)]">
-              USB ADB 容器端口转发
+              USB ADB 端口转发
             </span>
           </div>
           <div className="flex items-center gap-1.5">
@@ -206,7 +206,7 @@ export function PortForwardAndApiCard({
           <div className="flex items-center gap-2">
             <Wifi className="size-4 text-[var(--accent)]" />
             <span className="text-sm font-semibold text-[var(--text-primary)]">
-              设备端控制面 API 与 Bearer Token
+              设备端远程配对与密钥 (Token)
             </span>
           </div>
           {webStatus && (
@@ -218,8 +218,8 @@ export function PortForwardAndApiCard({
 
         <SettingRow
           variant="plain"
-          title="允许局域网 (RFC1918) 访问"
-          description="关闭时仅监听 127.0.0.1（通过 ADB 隧道访问）；开启后允许内网 IP 携带 Bearer Token 直连"
+          title="允许局域网 Wi-Fi 访问"
+          description="关闭时仅通过 USB ADB 隧道访问；开启后允许同一局域网设备凭配对密钥直连"
           control={
             <Switch
               checked={Boolean(webStatus?.lanEnabled)}
@@ -231,7 +231,10 @@ export function PortForwardAndApiCard({
                   transport.invoke(STRATA_METHODS.WEB_CONFIGURE, { lanEnabled: checked }),
                 );
                 await onRefresh();
-                pushToast(checked ? '已开启 RFC1918 局域网访问' : '已切换为仅本机回环监听', 'info');
+                pushToast(
+                  checked ? '已开启局域网 Wi-Fi 访问' : '已切换为仅本机与 ADB 隧道访问',
+                  'info',
+                );
                 setBusy(false);
               }}
             />
@@ -240,7 +243,7 @@ export function PortForwardAndApiCard({
 
         <div className="flex flex-wrap items-center justify-between gap-2 border-t border-[var(--border-hairline)] pt-3">
           <div className="text-xs text-[var(--text-secondary)]">
-            Token 文件路径：
+            密钥路径：
             <span className="font-mono">
               {webStatus?.tokenPath ?? STRATA_PATHS.DEFAULT_WEB_TOKEN_PATH}
             </span>
@@ -252,34 +255,34 @@ export function PortForwardAndApiCard({
             onClick={async () => {
               if (!transport) return;
               setBusy(true);
-              const res = await runAction('轮换 Bearer Token', () =>
+              const res = await runAction('刷新配对密钥', () =>
                 transport.invoke(STRATA_METHODS.WEB_ROTATE_TOKEN),
               );
               if (res) {
                 setRotatedToken(res.token);
-                pushToast('Token 已轮换，旧会话已吊销，请及时保存新 Token', 'warning');
+                pushToast('配对密钥已刷新，旧连接已断开，请及时保存新密钥', 'warning');
               }
               setBusy(false);
             }}
           >
             <RefreshCw className="size-3.5" />
-            轮换 Bearer Token
+            刷新配对密钥
           </Button>
         </div>
 
         {rotatedToken && (
           <StatusBanner
             tone="warning"
-            title="新生成的 Bearer Token（仅显示一次）"
+            title="新生成的配对密钥（仅显示一次）"
             description={rotatedToken}
             action={
               <Button
                 size="sm"
                 variant="secondary"
-                onClick={() => onCopyText(rotatedToken, '新 Bearer Token')}
+                onClick={() => onCopyText(rotatedToken, '新配对密钥')}
               >
                 <ShieldAlert className="size-3.5" />
-                复制 Token
+                复制密钥
               </Button>
             }
           />

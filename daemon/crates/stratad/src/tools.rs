@@ -1,15 +1,26 @@
-//! Hybrid container toolchain manager (`mise`, `uv`, `apt`, core bridges, layout doctor).
+//! Hybrid container toolchain manager (`mise`, `uv`, system package managers, core bridges, layout doctor).
 
 mod action_cmds;
+mod action_cmds_mut;
 mod actions;
+mod cache;
 mod catalog;
+mod catalog_bundles;
 mod catalog_data;
 mod config;
 mod config_patch;
+mod config_presets;
+mod discovery;
 mod doctor;
 mod exec;
+mod list;
+mod list_sys;
+mod shell_presets;
 mod status;
 mod status_parsers;
+mod status_parsers_sys;
+mod versions;
+mod versions_parse;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -21,7 +32,8 @@ use strata_protocol::rpc::{
     ToolsCatalogParams, ToolsCatalogResult, ToolsConfigGetParams, ToolsConfigResult,
     ToolsConfigSetParams, ToolsDoctorParams, ToolsDoctorResult, ToolsInstallParams,
     ToolsListParams, ToolsListResult, ToolsStateChangedPayload, ToolsStatusParams,
-    ToolsStatusResult, ToolsUninstallParams, ToolsUpgradeParams, events,
+    ToolsStatusResult, ToolsUninstallParams, ToolsUpgradeParams, ToolsUseParams,
+    ToolsVersionsParams, ToolsVersionsResult, events,
 };
 use tokio::sync::{Mutex, OwnedMutexGuard};
 
@@ -65,18 +77,25 @@ impl ToolsManager {
     }
 
     pub(crate) async fn list(&self, params: ToolsListParams) -> DaemonResult<ToolsListResult> {
-        status::query_list(self, params).await
+        list::query_list(self, params).await
     }
 
     pub(crate) async fn catalog(
         &self,
         params: ToolsCatalogParams,
     ) -> DaemonResult<ToolsCatalogResult> {
-        let (container, _, _) = self
-            .manager
-            .resolve_container(params.container.as_deref())
-            .await?;
-        Ok(catalog::build_catalog(container, &params))
+        catalog::query_catalog(self, params).await
+    }
+
+    pub(crate) async fn versions(
+        &self,
+        params: ToolsVersionsParams,
+    ) -> DaemonResult<ToolsVersionsResult> {
+        versions::query_versions(self, params).await
+    }
+
+    pub(crate) async fn use_tool(&self, params: ToolsUseParams) -> DaemonResult<TaskRunResult> {
+        versions::use_version(self, params).await
     }
 
     pub(crate) async fn config_get(
@@ -133,7 +152,7 @@ impl ToolsManager {
         &self,
         params: ToolsCacheCleanParams,
     ) -> DaemonResult<ToolsCacheCleanResult> {
-        doctor::clean_cache(self, params).await
+        cache::clean_cache(self, params).await
     }
 
     pub(super) async fn try_acquire_write_lock(

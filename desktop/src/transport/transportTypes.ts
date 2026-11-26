@@ -42,6 +42,7 @@ export interface StrataTransport {
     rows: number,
     handlers: PtyConnectionHandlers,
     resumeSessionId?: string,
+    shell?: string,
   ): PtySessionHandle;
   killPty(sessionId: string): Promise<void>;
   uploadImage(options: ImportUploadOptions): Promise<ContainerJobProgressPayload>;

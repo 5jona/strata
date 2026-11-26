@@ -33,9 +33,9 @@ export const STRATA_PROTOCOL = {
   /** Official LinuxContainers Simplestreams fallback mirror. */
   DEFAULT_DISTRO_MIRROR_OFFICIAL: 'https://images.linuxcontainers.org',
   /** Canonical in-container directory and env layout schema version. */
-  CONTAINER_LAYOUT_SCHEMA_VERSION: 1,
-  /** Unified container PATH across PTY, exec, TaskRunner, services, and Dropbear SSH. */
-  DEFAULT_CONTAINER_PATH: '/opt/strata/mise/shims:/opt/strata/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
+  CONTAINER_LAYOUT_SCHEMA_VERSION: 2,
+  /** Unified container PATH prioritizing user-installed runtimes with legacy /opt/strata fallback. */
+  DEFAULT_CONTAINER_PATH: '/root/.local/share/mise/shims:/root/.local/bin:/root/.cargo/bin:/opt/strata/mise/shims:/opt/strata/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
   /** Canonical default working directory inside Strata containers. */
   DEFAULT_CONTAINER_WORKDIR: '/workspace',
 } as const;

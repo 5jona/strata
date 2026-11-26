@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use strata_protocol::ContainerStatusSnapshot;
-use strata_protocol::constants::{DEFAULT_CONTAINER_ID, DEFAULT_SOCKET_PATH};
+use strata_protocol::constants::DEFAULT_SOCKET_PATH;
 use strata_protocol::rpc::{
     BackupParams, BackupResult, CompactResult, ContainerLogsParams, ContainerLogsResult,
     ContainerSelectorParams, FsckResult, StorageCleanupReport, methods,
@@ -105,7 +105,7 @@ fn run_cli(args: &[String]) -> Result<i32, String> {
         }
         "stop" => {
             let val = rpc_or_err(client.call(methods::CONTAINER_STOP, selector()))?;
-            let target = container.as_deref().unwrap_or(DEFAULT_CONTAINER_ID);
+            let target = container.as_deref().unwrap_or("default");
             emit_typed::<StorageCleanupReport>(&val, json_mode, |r| {
                 format::print_cleanup(target, r);
             })?;

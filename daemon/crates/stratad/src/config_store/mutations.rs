@@ -8,23 +8,28 @@ use crate::error::{DaemonError, DaemonResult};
 
 impl ConfigStore {
     /// Registers a newly created or cloned container atomically in `config.json`.
+    /// Promotes `id` to `defaultContainer` when `set_default` is true or no default exists yet.
     pub(crate) async fn add_container(
         &self,
         id: String,
         cfg: ContainerConfig,
+        set_default: bool,
     ) -> DaemonResult<StrataConfig> {
         let _write_guard = self.write_lock.lock().await;
         let mut candidate = self.inner.read().await.clone();
         if candidate.containers.contains_key(&id) {
             return Err(DaemonError::ContainerAlreadyExists(id));
         }
+        if set_default || candidate.default_container.is_none() {
+            candidate.default_container = Some(id.clone());
+        }
         candidate.containers.insert(id, cfg);
         candidate.validate()?;
         self.commit_candidate(candidate).await
     }
 
-    /// Removes a container from `config.json`, switching `defaultContainer` when needed.
-    /// Refuses removing the last configured container so `StrataConfig` always stays valid.
+    /// Removes a container from `config.json`, switching `defaultContainer` to the next
+    /// remaining container or clearing it to `None` when the container map becomes empty.
     pub(crate) async fn remove_container(
         &self,
         id: &str,
@@ -35,13 +40,8 @@ impl ConfigStore {
         if !candidate.containers.contains_key(id) {
             return Err(DaemonError::ContainerNotFound(id.to_owned()));
         }
-        if candidate.containers.len() <= 1 {
-            return Err(DaemonError::InvalidParams(
-                "cannot delete the only configured container".to_owned(),
-            ));
-        }
         let mut new_default = None;
-        if candidate.default_container == id {
+        if candidate.default_container.as_deref() == Some(id) {
             if !force {
                 return Err(DaemonError::InvalidParams(format!(
                     "container '{id}' is the defaultContainer; pass force=true to delete and reassign default"
@@ -51,15 +51,27 @@ impl ConfigStore {
                 .containers
                 .keys()
                 .find(|k| k.as_str() != id)
-                .cloned()
-                .ok_or_else(|| DaemonError::Internal("missing replacement container".to_owned()))?;
+                .cloned();
             candidate.default_container = replacement.clone();
-            new_default = Some(replacement);
+            new_default = replacement;
         }
         candidate.containers.remove(id);
         candidate.validate()?;
         let _ = self.commit_candidate(candidate).await?;
         Ok(new_default)
+    }
+
+    /// Updates `defaultContainer` to an existing container ID and persists atomically.
+    pub(crate) async fn set_default_container(&self, id: &str) -> DaemonResult<Option<String>> {
+        let _write_guard = self.write_lock.lock().await;
+        let mut candidate = self.inner.read().await.clone();
+        if !candidate.containers.contains_key(id) {
+            return Err(DaemonError::ContainerNotFound(id.to_owned()));
+        }
+        let previous = candidate.default_container.replace(id.to_owned());
+        candidate.validate()?;
+        let _ = self.commit_candidate(candidate).await?;
+        Ok(previous)
     }
 
     /// Patches embedded HTTP/WS control-plane settings atomically.

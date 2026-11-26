@@ -249,6 +249,14 @@ mod tests {
         let _ = std::fs::remove_dir_all(&base);
         std::fs::create_dir_all(&base).expect("create temp dir");
         let store = Arc::new(ConfigStore::load_or_seed(base.join("config.json")).expect("seed"));
+        let _ = store
+            .add_container(
+                "main".to_owned(),
+                strata_protocol::ContainerConfig::default_for_id("main"),
+                true,
+            )
+            .await
+            .expect("add main");
         let manager = Arc::new(ContainerManager::new(
             store,
             Arc::new(EventHub::new()),

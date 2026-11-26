@@ -1,297 +1,181 @@
-import {
-  Badge,
-  Button,
-  Card,
-  Input,
-  SegmentedControl,
-  SettingRow,
-  Slider,
-  StatusBanner,
-  Switch,
-  useToast,
-} from '@gojona/ui';
-import { Download, FolderUp, Globe, RefreshCw } from 'lucide-react';
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { formatBytes } from '../lib/format.ts';
+import { Button } from '@gojona/ui';
+import { ArrowLeft, Copy, Download, FolderUp, Link2 } from 'lucide-react';
+import { useMemo } from 'react';
 import type { StrataTransport } from '../transport/httpWsTransport.ts';
-import type { ContainerJobProgressPayload, DistroEntry, DistroMirror } from '../types/protocol.ts';
-import { STRATA_METHODS } from '../types/rpc.ts';
-import { LocalImportDropzone } from './LocalImportDropzone.tsx';
+import type { ContainerJobProgressPayload, ContainerStatusSnapshot } from '../types/protocol.ts';
+import { InstallConfigForm } from './install/InstallConfigForm.tsx';
+import { InstallSourceSelector } from './install/InstallSourceSelector.tsx';
+import { suggestContainerId } from './install/installHelpers.ts';
+import { useInstallWorkflow } from './install/useInstallWorkflow.ts';
 import { ProvisionJobsBanner } from './ProvisionJobsBanner.tsx';
 
 export interface InstallViewProps {
   transport: StrataTransport | null;
+  containers?: ContainerStatusSnapshot[];
   activeJobs: ContainerJobProgressPayload[];
-  onRefresh: () => Promise<void>;
-  runAction: <T>(label: string, fn: () => Promise<T>) => Promise<T | null>;
+  onDismissJob?: (jobId: string) => void;
+  onRefresh: () => Promise<void> | void;
+  onBackToContainers?: () => void;
+  onOpenTerminal?: (containerId: string) => void;
+  onOpenTools?: (containerId: string) => void;
+  runAction: <T>(
+    label: string,
+    action: () => Promise<T>,
+    successMessage?: string,
+  ) => Promise<T | null>;
 }
 
-/**
- * Unified container provisioning screen: Online ARM64 Distro Gallery (TUNA / Official)
- * plus Drag-and-Drop streaming local archive/image import.
- */
-export function InstallView({ transport, activeJobs, onRefresh, runAction }: InstallViewProps) {
-  const { pushToast } = useToast();
-  const [sourceMode, setSourceMode] = useState<'online' | 'local'>('online');
-  const [mirror, setMirror] = useState<DistroMirror>('tuna');
-  const [catalog, setCatalog] = useState<DistroEntry[]>([]);
-  const [loadingCatalog, setLoadingCatalog] = useState(false);
-  const [selectedDistro, setSelectedDistro] = useState<DistroEntry | null>(null);
+/** Unified 4-source container provisioning screen with validation, error recovery & post-install actions. */
+export function InstallView({
+  transport,
+  containers = [],
+  activeJobs,
+  onDismissJob,
+  onRefresh,
+  onBackToContainers,
+  onOpenTerminal,
+  onOpenTools,
+  runAction,
+}: InstallViewProps) {
+  const wf = useInstallWorkflow(transport, containers, onRefresh, runAction);
 
-  const [containerId, setContainerId] = useState('ubuntu-dev');
-  const [sizeGb, setSizeGb] = useState(16);
-  const [sshPort, setSshPort] = useState('2224');
-  const [autoStart, setAutoStart] = useState(true);
-  const [hostBridge, setHostBridge] = useState(true);
-  const [injectKey, setInjectKey] = useState(false);
-  const [sshPubKey, setSshPubKey] = useState('');
-
-  const [selectedFile, setSelectedFile] = useState<File | null>(null);
-  const [uploadProgress, setUploadProgress] = useState<{ loaded: number; total: number } | null>(
-    null,
-  );
-  const abortRef = useRef<AbortController | null>(null);
-
-  const loadCatalog = useCallback(
-    async (refresh = false) => {
-      if (!transport) return;
-      setLoadingCatalog(true);
-      try {
-        const res = await transport.invoke(STRATA_METHODS.DISTRO_CATALOG, { mirror, refresh });
-        setCatalog(res.entries);
-        if (!selectedDistro && res.entries[0]) setSelectedDistro(res.entries[0]);
-      } catch (err) {
-        pushToast(
-          `加载发行版目录失败: ${err instanceof Error ? err.message : String(err)}`,
-          'warning',
-        );
-      } finally {
-        setLoadingCatalog(false);
-      }
-    },
-    [mirror, pushToast, selectedDistro, transport],
-  );
-
-  useEffect(() => {
-    void loadCatalog(false);
-  }, [loadCatalog]);
-
-  const handleInstallOnline = async () => {
-    if (!transport || !selectedDistro || !containerId.trim()) return;
-    await runAction('创建容器任务', async () => {
-      await transport.invoke(STRATA_METHODS.CONTAINER_CREATE, {
-        id: containerId.trim(),
-        distroId: selectedDistro.id,
-        mirror,
-        sizeMb: sizeGb * 1024,
-        hostname: containerId.trim(),
-        sshPort: Number(sshPort) || 2224,
-        sshPublicKeys: injectKey && sshPubKey.trim() ? [sshPubKey.trim()] : [],
-        autoStart,
-        hostBridge,
-        noatime: true,
-      });
-      pushToast(`已提交安装任务：${containerId.trim()}`, 'info');
-    });
-  };
-
-  const handleUploadLocal = async () => {
-    if (!transport || !selectedFile || !containerId.trim()) return;
-    const ac = new AbortController();
-    abortRef.current = ac;
-    setUploadProgress({ loaded: 0, total: selectedFile.size });
-    try {
-      await transport.uploadImage({
-        containerId: containerId.trim(),
-        file: selectedFile,
-        sizeMb: sizeGb * 1024,
-        hostname: containerId.trim(),
-        sshPort: Number(sshPort) || 2224,
-        autoStart,
-        hostBridge,
-        noatime: true,
-        signal: ac.signal,
-        onProgress: (loaded, total) => setUploadProgress({ loaded, total }),
-      });
-      pushToast(`镜像导入完成：${containerId.trim()}`, 'success');
-      setSelectedFile(null);
-      await onRefresh();
-    } catch (err) {
-      pushToast(err instanceof Error ? err.message : String(err), 'warning');
-    } finally {
-      abortRef.current = null;
-      setUploadProgress(null);
+  const combinedJobs = useMemo(() => {
+    if (!wf.localDoneJob || activeJobs.some((j) => j.jobId === wf.localDoneJob?.jobId)) {
+      return activeJobs;
     }
-  };
+    return [wf.localDoneJob, ...activeJobs];
+  }, [activeJobs, wf.localDoneJob]);
+
+  const commonInvalid = Boolean(!transport || wf.idError || wf.sshPortError || wf.urlOrShaError);
 
   return (
     <div className="flex h-full flex-col gap-4 overflow-y-auto p-5 strata-scroll">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="text-lg font-semibold text-[var(--text-primary)]">安装与导入容器</h1>
-          <p className="text-xs text-[var(--text-secondary)]">
-            从清华 TUNA / LinuxContainers 镜像站一键拉取 ARM64 发行版，或拖拽流式上传本地包
-          </p>
+        <div className="flex items-center gap-3">
+          {onBackToContainers && (
+            <Button size="sm" variant="ghost" onClick={onBackToContainers}>
+              <ArrowLeft className="size-3.5" />
+              返回容器列表
+            </Button>
+          )}
+          <div>
+            <h1 className="text-lg font-semibold text-[var(--text-primary)]">安装与导入容器</h1>
+            <p className="text-xs text-[var(--text-secondary)]">
+              支持在线发行版商店、HTTPS 直链、本地压缩归档 / .img 镜像与现有容器克隆
+            </p>
+          </div>
         </div>
-        <SegmentedControl
-          value={sourceMode}
-          onValueChange={setSourceMode}
-          options={[
-            { value: 'online', label: '在线发行版商店', icon: <Globe className="size-3.5" /> },
-            { value: 'local', label: '本地镜像导入', icon: <FolderUp className="size-3.5" /> },
-          ]}
-        />
       </div>
 
-      <ProvisionJobsBanner transport={transport} jobs={activeJobs} />
+      <ProvisionJobsBanner
+        transport={transport}
+        jobs={combinedJobs}
+        onRetryJob={() => {
+          if (wf.sourceMode === 'local' && wf.selectedFile) void wf.handleUploadLocal();
+          else if (wf.sourceMode === 'clone') void wf.handleSubmitClone();
+          else void wf.handleSubmitOnlineOrUrl();
+        }}
+        onDismissJob={(jobId) => {
+          if (wf.localDoneJob?.jobId === jobId) wf.setLocalDoneJob(null);
+          else onDismissJob?.(jobId);
+        }}
+        {...(onOpenTerminal ? { onOpenTerminal } : {})}
+        {...(onOpenTools ? { onOpenTools } : {})}
+        {...(onBackToContainers ? { onBackToContainers } : {})}
+      />
 
-      {sourceMode === 'online' ? (
-        <div className="flex flex-col gap-3">
-          <div className="flex items-center justify-between gap-2">
-            <SegmentedControl
-              size="sm"
-              value={mirror}
-              onValueChange={setMirror}
-              options={[
-                { value: 'tuna', label: '清华 TUNA（国内推荐）' },
-                { value: 'official', label: 'LinuxContainers 官方' },
-              ]}
-            />
-            <Button
-              size="sm"
-              variant="secondary"
-              disabled={loadingCatalog}
-              onClick={() => void loadCatalog(true)}
-            >
-              <RefreshCw className={`size-3.5 ${loadingCatalog ? 'animate-spin' : ''}`} />
-              刷新目录
-            </Button>
-          </div>
-          <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2 lg:grid-cols-3">
-            {catalog.map((item) => {
-              const selected = selectedDistro?.id === item.id;
-              return (
-                <button
-                  key={item.id}
-                  type="button"
-                  onClick={() => {
-                    setSelectedDistro(item);
-                    setContainerId(`${item.os.toLowerCase().replace(/\s+/g, '-')}-${item.release}`);
-                  }}
-                  className={`flex flex-col gap-1.5 rounded-xl border p-3.5 text-left transition-colors ${
-                    selected
-                      ? 'border-[var(--accent)] bg-[var(--accent)]/12'
-                      : 'border-[var(--border-hairline)] bg-[var(--surface-card)] hover:border-[var(--accent)]/40'
-                  }`}
-                >
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="text-sm font-semibold text-[var(--text-primary)]">
-                      {item.os}
-                    </span>
-                    <Badge variant={selected ? 'accent' : 'neutral'}>{item.arch}</Badge>
-                  </div>
-                  <div className="text-xs text-[var(--text-secondary)]">{item.releaseTitle}</div>
-                  <div className="mt-1 flex items-center justify-between font-mono text-[11px] text-[var(--text-secondary)]">
-                    <span>v{item.version}</span>
-                    <span>{formatBytes(item.sizeBytes)}</span>
-                  </div>
-                </button>
-              );
-            })}
-          </div>
-        </div>
-      ) : (
-        <LocalImportDropzone
-          selectedFile={selectedFile}
-          uploadProgress={uploadProgress}
-          onSelectFile={(file) => {
-            setSelectedFile(file);
-            setContainerId(file.name.replace(/\.(tar\.(gz|xz|zst)|img(\.gz)?)$/i, '').slice(0, 24));
-          }}
-          onCancelUpload={() => abortRef.current?.abort()}
-        />
-      )}
+      <InstallSourceSelector
+        sourceMode={wf.sourceMode}
+        onSourceModeChange={wf.setSourceMode}
+        mirror={wf.mirror}
+        onMirrorChange={wf.setMirror}
+        customMirrorUrl={wf.customMirrorUrl}
+        onCustomMirrorUrlChange={wf.setCustomMirrorUrl}
+        catalog={wf.catalog}
+        loadingCatalog={wf.loadingCatalog}
+        selectedDistro={wf.selectedDistro}
+        onSelectDistro={(item) => {
+          wf.setSelectedDistro(item);
+          const suggested = suggestContainerId(`${item.os}-${item.release}`, containers);
+          wf.setForm((f) => ({
+            ...f,
+            containerId: suggested,
+            ...(f.hostnameLinked ? { hostname: suggested } : {}),
+          }));
+        }}
+        onRefreshCatalog={() => void wf.loadCatalog(true)}
+        sourceUrl={wf.sourceUrl}
+        onSourceUrlChange={wf.setSourceUrl}
+        expectedSha256={wf.expectedSha256}
+        onExpectedSha256Change={wf.setExpectedSha256}
+        selectedFile={wf.selectedFile}
+        uploadProgress={wf.uploadProgress}
+        onSelectFile={(file) => {
+          wf.setSelectedFile(file);
+          const rawBase = file.name.replace(/\.(tar\.(gz|xz|zst)|tar|img(\.gz)?|ext4)$/i, '');
+          const suggested = suggestContainerId(rawBase, containers);
+          wf.setForm((f) => ({
+            ...f,
+            containerId: suggested,
+            ...(f.hostnameLinked ? { hostname: suggested } : {}),
+          }));
+        }}
+        onCancelUpload={() => wf.abortRef.current?.abort()}
+        containers={containers}
+        cloneSourceId={wf.cloneSourceId}
+        onCloneSourceIdChange={wf.setCloneSourceId}
+      />
 
-      <Card className="flex flex-col gap-3 p-4">
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-          <div className="flex flex-col gap-1">
-            <span className="text-xs text-[var(--text-secondary)]">容器 ID / 主机名</span>
-            <Input mono value={containerId} onChange={(e) => setContainerId(e.target.value)} />
-          </div>
-          <div className="flex flex-col gap-1">
-            <span className="text-xs text-[var(--text-secondary)]">Dropbear SSH 端口</span>
-            <Input mono value={sshPort} onChange={(e) => setSshPort(e.target.value)} />
-          </div>
-          <div className="flex items-end">
-            <Slider
-              className="w-full"
-              label="稀疏镜像上限"
-              min={8}
-              max={128}
-              step={4}
-              unit=" GiB"
-              value={sizeGb}
-              onValueChange={setSizeGb}
-            />
-          </div>
-        </div>
-
-        <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
-          <SettingRow
-            variant="plain"
-            title="开机自启"
-            control={<Switch checked={autoStart} onCheckedChange={setAutoStart} />}
-          />
-          <SettingRow
-            variant="plain"
-            title="宿主机桥接"
-            control={<Switch checked={hostBridge} onCheckedChange={setHostBridge} />}
-          />
-          <SettingRow
-            variant="plain"
-            title="预注入 SSH 公钥"
-            control={<Switch checked={injectKey} onCheckedChange={setInjectKey} />}
-          />
-        </div>
-
-        {injectKey && (
-          <Input
-            mono
-            value={sshPubKey}
-            placeholder="ssh-ed25519 AAAA... user@pc"
-            onChange={(e) => setSshPubKey(e.target.value)}
-          />
-        )}
-
-        <div className="flex items-center justify-between gap-2 pt-1">
-          <StatusBanner
-            className="flex-1"
-            tone="info"
-            title="自动完成 ColorOS 兼容配置（Dropbear 公钥鉴权 + APT::Sandbox::User root）"
-          />
-          {sourceMode === 'online' ? (
+      <InstallConfigForm
+        sourceMode={wf.sourceMode}
+        isRawImg={wf.isRawImg}
+        values={wf.form}
+        idError={wf.idError}
+        sshPortError={wf.sshPortError}
+        urlOrShaError={wf.urlOrShaError}
+        onChange={(patch) => wf.setForm((prev) => ({ ...prev, ...patch }))}
+        submitAction={
+          wf.sourceMode === 'online' ? (
             <Button
               variant="primary"
-              disabled={!transport || !selectedDistro || !containerId.trim()}
-              onClick={() => void handleInstallOnline()}
+              disabled={commonInvalid || !wf.selectedDistro}
+              onClick={() => void wf.handleSubmitOnlineOrUrl()}
             >
               <Download className="size-4" />
               开始安装容器
+            </Button>
+          ) : wf.sourceMode === 'url' ? (
+            <Button
+              variant="primary"
+              disabled={commonInvalid}
+              onClick={() => void wf.handleSubmitOnlineOrUrl()}
+            >
+              <Link2 className="size-4" />
+              从直链拉取并创建
+            </Button>
+          ) : wf.sourceMode === 'local' ? (
+            <Button
+              variant="primary"
+              disabled={commonInvalid || !wf.selectedFile || wf.uploadProgress !== null}
+              onClick={() => void wf.handleUploadLocal()}
+            >
+              <FolderUp className="size-4" />
+              流式上传并创建
             </Button>
           ) : (
             <Button
               variant="primary"
               disabled={
-                !transport || !selectedFile || !containerId.trim() || uploadProgress !== null
+                !transport || !wf.cloneSourceId || Boolean(wf.idError) || Boolean(wf.sshPortError)
               }
-              onClick={() => void handleUploadLocal()}
+              onClick={() => void wf.handleSubmitClone()}
             >
-              <FolderUp className="size-4" />
-              流式上传并创建
+              <Copy className="size-4" />
+              开始克隆容器
             </Button>
-          )}
-        </div>
-      </Card>
+          )
+        }
+      />
     </div>
   );
 }

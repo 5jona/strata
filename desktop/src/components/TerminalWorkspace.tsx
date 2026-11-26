@@ -1,11 +1,20 @@
 import { Button, cn, EmptyState, useToast } from '@gojona/ui';
-import { ExternalLink, Plus, Terminal, X } from 'lucide-react';
+import { Terminal } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { resolveLaunchSshTarget } from '../lib/sshTarget.ts';
+import '../styles/terminal.css';
 import type { StrataTransport } from '../transport/httpWsTransport.ts';
 import { tauriDeviceBridge } from '../transport/tauriBridge.ts';
 import type { DeviceProfile, TerminalTabSpec } from '../types/device.ts';
 import type { ContainerStatusSnapshot } from '../types/protocol.ts';
-import { TerminalPane } from './TerminalPane.tsx';
+import { TerminalStatusStrip } from './TerminalOverlays.tsx';
+import { TerminalPane, type TerminalPaneActions } from './TerminalPane.tsx';
+import { SplitPaneLayout } from './terminal/SplitPaneLayout.tsx';
+import { countLeaves, findLeaf, listLeaves, MAX_SPLIT_PANES } from './terminal/splitTree.ts';
+import { TerminalSettingsModal } from './terminal/TerminalSettingsModal.tsx';
+import { TerminalTabBar } from './terminal/TerminalTabBar.tsx';
+import { type TerminalShellId, useTerminalPrefs } from './terminal/terminalPrefs.ts';
+import { useTabSplits } from './terminal/useTabSplits.ts';
 
 export interface TerminalWorkspaceProps {
   visible: boolean;
@@ -14,6 +23,7 @@ export interface TerminalWorkspaceProps {
   containers: ContainerStatusSnapshot[];
   tabs: TerminalTabSpec[];
   activeTabId: string | null;
+  selectedContainerId?: string;
   onSelectTab: (tabId: string) => void;
   onNewTab: (containerId: string) => void;
   onCloseTab: (tabId: string) => void;
@@ -21,7 +31,8 @@ export interface TerminalWorkspaceProps {
 }
 
 /**
- * Persistent multi-tab xterm.js workspace (lazy-loaded chunk so terminal assets stay off initial load).
+ * Persistent multi-tab, split-pane xterm.js workspace with shell picker,
+ * bundled Maple Mono NF CN font, 16-color themes, and modern status bar.
  */
 export default function TerminalWorkspace({
   visible,
@@ -30,100 +41,142 @@ export default function TerminalWorkspace({
   containers,
   tabs,
   activeTabId,
+  selectedContainerId,
   onSelectTab,
   onNewTab,
   onCloseTab,
   onBindSession,
 }: TerminalWorkspaceProps) {
   const { pushToast } = useToast();
-  const runningContainers = containers.filter((c) => c.phase === 'running');
-  const activeTab = tabs.find((t) => t.id === activeTabId) ?? null;
+  const { prefs, updatePrefs, stepFontSize, resetFontSize } = useTerminalPrefs();
+  const [selectedShell, setSelectedShell] = useState<TerminalShellId>(prefs.defaultShell);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const paneActionsRef = useRef<Map<string, TerminalPaneActions>>(new Map());
 
-  const handleOpenExternal = () => {
-    const cid = activeTab?.containerId ?? runningContainers[0]?.id;
-    const snap = containers.find((c) => c.id === cid);
-    if (!snap) return;
-    void resolveLaunchSshTarget(device, snap)
-      .then(async ({ target, forwardedLocalPort }) => {
-        const prog = await tauriDeviceBridge.openNativeTerminal(target);
-        pushToast(
-          forwardedLocalPort
-            ? `已建立 ADB 转发 (127.0.0.1:${forwardedLocalPort}) 并启动终端: ${prog}`
-            : `已启动外部终端: ${prog}`,
-          'info',
+  const runningContainers = useMemo(
+    () => containers.filter((c) => c.phase === 'running'),
+    [containers],
+  );
+  const preferredContainerId = useMemo(() => {
+    if (selectedContainerId && runningContainers.some((c) => c.id === selectedContainerId)) {
+      return selectedContainerId;
+    }
+    return runningContainers[0]?.id;
+  }, [runningContainers, selectedContainerId]);
+
+  const {
+    splitMap,
+    metricsByPane,
+    requestNewTab,
+    closeTab,
+    splitPane,
+    closePane,
+    focusPane,
+    resizeSplit,
+    bindPaneSession,
+    updatePaneTitle,
+    updatePaneMetrics,
+  } = useTabSplits({
+    tabs,
+    transport,
+    defaultShell: prefs.defaultShell,
+    selectedShell,
+    preferredContainerId,
+    onNewTab,
+    onCloseTab,
+    onBindSession,
+  });
+
+  const activeTab = tabs.find((t) => t.id === activeTabId) ?? null;
+  const activeSplit = activeTab ? splitMap[activeTab.id] : undefined;
+  const activePaneLeaf = activeSplit
+    ? (findLeaf(activeSplit.root, activeSplit.activePaneId) ?? listLeaves(activeSplit.root)[0])
+    : undefined;
+  const activePaneMetrics = activePaneLeaf ? metricsByPane[activePaneLeaf.id] : undefined;
+  const activePaneCount = activeSplit ? countLeaves(activeSplit.root) : 0;
+
+  const handleOpenExternal = useCallback(
+    (explicitContainerId?: string) => {
+      const cid =
+        explicitContainerId ??
+        activePaneLeaf?.containerId ??
+        activeTab?.containerId ??
+        preferredContainerId;
+      const snap = containers.find((c) => c.id === cid);
+      if (!snap) return;
+      void resolveLaunchSshTarget(device, snap)
+        .then(async ({ target, forwardedLocalPort }) => {
+          const prog = await tauriDeviceBridge.openNativeTerminal(target);
+          pushToast(
+            forwardedLocalPort
+              ? `已建立 ADB 转发 (127.0.0.1:${forwardedLocalPort}) 并启动终端: ${prog}`
+              : `已启动外部终端: ${prog}`,
+            'info',
+          );
+        })
+        .catch((err) =>
+          pushToast(
+            `启动系统终端失败: ${err instanceof Error ? err.message : String(err)}`,
+            'warning',
+          ),
         );
-      })
-      .catch((err) =>
-        pushToast(
-          `启动系统终端失败: ${err instanceof Error ? err.message : String(err)}`,
-          'warning',
-        ),
-      );
-  };
+    },
+    [activePaneLeaf, activeTab, containers, device, preferredContainerId, pushToast],
+  );
+
+  // Global shortcuts when workspace is visible (skip keys already handled inside xterm)
+  useEffect(() => {
+    if (!visible) return;
+    const onKeyDown = (ev: KeyboardEvent) => {
+      if (ev.defaultPrevented || ev.isComposing || !ev.ctrlKey || !ev.shiftKey || ev.altKey) return;
+      if (ev.code === 'KeyT') {
+        const cid = activePaneLeaf?.containerId ?? preferredContainerId;
+        if (cid) {
+          ev.preventDefault();
+          requestNewTab(cid);
+        }
+      } else if (ev.code === 'KeyW' && activeTab && activePaneLeaf) {
+        ev.preventDefault();
+        closePane(activeTab.id, activePaneLeaf.id);
+      } else if (ev.code === 'KeyD' && activeTab && activePaneLeaf) {
+        ev.preventDefault();
+        splitPane(activeTab.id, activePaneLeaf.id, 'horizontal');
+      } else if (ev.code === 'KeyE' && activeTab && activePaneLeaf) {
+        ev.preventDefault();
+        splitPane(activeTab.id, activePaneLeaf.id, 'vertical');
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [
+    activePaneLeaf,
+    activeTab,
+    closePane,
+    preferredContainerId,
+    requestNewTab,
+    splitPane,
+    visible,
+  ]);
+
+  const registerPaneActions = useCallback((paneId: string, actions: TerminalPaneActions | null) => {
+    if (actions) paneActionsRef.current.set(paneId, actions);
+    else paneActionsRef.current.delete(paneId);
+  }, []);
 
   return (
     <div className={cn('flex h-full flex-col', !visible && 'hidden')}>
-      {/* Tab Bar */}
-      <div className="flex items-center justify-between gap-2 border-b border-[var(--border-hairline)] bg-[var(--surface-elevated)] px-3 py-1.5">
-        <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto strata-scroll">
-          {tabs.map((tab) => {
-            const active = tab.id === activeTabId;
-            return (
-              <div
-                key={tab.id}
-                className={cn(
-                  'flex shrink-0 items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs transition-colors',
-                  active
-                    ? 'border-[var(--accent)]/50 bg-[var(--accent)]/15 text-[var(--text-primary)]'
-                    : 'border-transparent text-[var(--text-secondary)] hover:bg-[var(--surface-card)]',
-                )}
-              >
-                <button
-                  type="button"
-                  className="flex items-center gap-1.5 font-mono"
-                  onClick={() => onSelectTab(tab.id)}
-                >
-                  <Terminal className="size-3 text-[var(--accent)]" />
-                  <span>{tab.title}</span>
-                </button>
-                <button
-                  type="button"
-                  aria-label={`关闭标签页 ${tab.title}`}
-                  onClick={() => onCloseTab(tab.id)}
-                  className="opacity-70 hover:text-[var(--danger)] hover:opacity-100"
-                >
-                  <X className="size-3" />
-                </button>
-              </div>
-            );
-          })}
+      <TerminalTabBar
+        tabs={tabs}
+        activeTabId={activeTabId}
+        splitMap={splitMap}
+        runningContainers={runningContainers}
+        selectedShell={selectedShell}
+        onSelectShell={setSelectedShell}
+        onSelectTab={onSelectTab}
+        onCloseTab={closeTab}
+        onNewTab={requestNewTab}
+      />
 
-          {runningContainers.map((c) => (
-            <Button
-              key={`new-${c.id}`}
-              size="sm"
-              variant="ghost"
-              className="shrink-0"
-              onClick={() => onNewTab(c.id)}
-            >
-              <Plus className="size-3.5" />
-              {c.id}
-            </Button>
-          ))}
-        </div>
-
-        <Button
-          size="sm"
-          variant="secondary"
-          disabled={runningContainers.length === 0}
-          onClick={handleOpenExternal}
-        >
-          <ExternalLink className="size-3.5" />
-          外部终端 SSH
-        </Button>
-      </div>
-
-      {/* Mounted Terminal Panes (kept alive across tab/route switches) */}
       <div className="relative min-h-0 flex-1">
         {tabs.length === 0 || !transport ? (
           <div className="flex h-full items-center justify-center p-6">
@@ -132,34 +185,97 @@ export default function TerminalWorkspace({
               title="尚未打开终端会话"
               description={
                 runningContainers.length > 0
-                  ? '点击下方按钮在运行中的容器内建立交互式 WebSocket PTY 会话。'
+                  ? '选择右上角 Shell 预设并点击下方按钮，在运行中的容器内启动现代交互终端。'
                   : '请先在「容器」页面启动至少一个容器。'
               }
               action={
-                runningContainers[0] ? (
+                preferredContainerId ? (
                   <Button
                     size="sm"
                     variant="primary"
-                    onClick={() => onNewTab(runningContainers[0].id)}
+                    onClick={() => requestNewTab(preferredContainerId)}
                   >
-                    打开 {runningContainers[0].id} 终端
+                    打开 {preferredContainerId} 终端
                   </Button>
                 ) : undefined
               }
             />
           </div>
         ) : (
-          tabs.map((tab) => (
-            <TerminalPane
-              key={tab.id}
-              transport={transport}
-              containerId={tab.containerId}
-              visible={visible && tab.id === activeTabId}
-              onSessionBound={(sid) => onBindSession(tab.id, sid)}
-            />
-          ))
+          tabs.map((tab) => {
+            const entry = splitMap[tab.id];
+            if (!entry) return null;
+            const tabVisible = visible && tab.id === activeTabId;
+            return (
+              <div key={tab.id} className={cn('h-full w-full', !tabVisible && 'hidden')}>
+                <SplitPaneLayout
+                  root={entry.root}
+                  activePaneId={entry.activePaneId}
+                  onFocusPane={(paneId) => focusPane(tab.id, paneId)}
+                  onSplitPane={(paneId, dir) => splitPane(tab.id, paneId, dir)}
+                  onClosePane={(paneId) => closePane(tab.id, paneId)}
+                  onResizeSplit={(splitId, ratio) => resizeSplit(tab.id, splitId, ratio)}
+                  renderLeaf={(leaf, focused, paneCount) => (
+                    <TerminalPane
+                      key={leaf.id}
+                      transport={transport}
+                      containerId={leaf.containerId}
+                      shell={leaf.shell}
+                      visible={tabVisible}
+                      focused={tabVisible && focused}
+                      canSplit={paneCount < MAX_SPLIT_PANES}
+                      prefs={prefs}
+                      onStepFontSize={stepFontSize}
+                      onResetFontSize={resetFontSize}
+                      onSessionBound={(sid) => bindPaneSession(tab.id, leaf.id, sid)}
+                      onTitleChange={(title) => updatePaneTitle(tab.id, leaf.id, title)}
+                      onMetricsChange={(m) => updatePaneMetrics(leaf.id, m)}
+                      onRegisterActions={(acts) => registerPaneActions(leaf.id, acts)}
+                      onSplitRight={() => splitPane(tab.id, leaf.id, 'horizontal')}
+                      onSplitDown={() => splitPane(tab.id, leaf.id, 'vertical')}
+                      onNewTabShortcut={() => requestNewTab(leaf.containerId)}
+                      onClosePaneShortcut={() => closePane(tab.id, leaf.id)}
+                      onOpenExternalSsh={() => handleOpenExternal(leaf.containerId)}
+                    />
+                  )}
+                />
+              </div>
+            );
+          })
         )}
       </div>
+
+      {activeTab && activePaneLeaf && (
+        <TerminalStatusStrip
+          status={activePaneMetrics?.status ?? 'connecting'}
+          containerId={activePaneMetrics?.containerId ?? activePaneLeaf.containerId}
+          shell={activePaneMetrics?.activeShell ?? activePaneLeaf.shell}
+          cols={activePaneMetrics?.cols ?? 0}
+          rows={activePaneMetrics?.rows ?? 0}
+          fontSize={prefs.fontSize}
+          rendererKind={activePaneMetrics?.rendererKind ?? 'dom'}
+          backpressured={activePaneMetrics?.backpressured}
+          canSplit={activePaneCount < MAX_SPLIT_PANES}
+          canExternalSsh={runningContainers.length > 0}
+          onStepFontSize={stepFontSize}
+          onResetFontSize={resetFontSize}
+          onSplitRight={() => splitPane(activeTab.id, activePaneLeaf.id, 'horizontal')}
+          onSplitDown={() => splitPane(activeTab.id, activePaneLeaf.id, 'vertical')}
+          onToggleSearch={() => paneActionsRef.current.get(activePaneLeaf.id)?.toggleSearch()}
+          onOpenSettings={() => setSettingsOpen(true)}
+          onOpenExternalSsh={() => handleOpenExternal(activePaneLeaf.containerId)}
+        />
+      )}
+
+      <TerminalSettingsModal
+        open={settingsOpen}
+        prefs={prefs}
+        onUpdate={(patch) => {
+          updatePrefs(patch);
+          if (patch.defaultShell) setSelectedShell(patch.defaultShell);
+        }}
+        onClose={() => setSettingsOpen(false)}
+      />
     </div>
   );
 }

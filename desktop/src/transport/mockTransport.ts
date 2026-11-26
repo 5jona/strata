@@ -190,6 +190,7 @@ export class MockStrataTransport implements StrataTransport {
     _rows: number,
     handlers: PtyConnectionHandlers,
     resumeSessionId?: string,
+    _shell?: string,
   ): PtySessionHandle {
     const hostname = this.dataset.containers[containerId]?.snapshot.hostname ?? containerId;
     return createMockPtySession(containerId, hostname, handlers, resumeSessionId);
@@ -204,13 +205,21 @@ export class MockStrataTransport implements StrataTransport {
       options.onProgress?.(Math.round(total * ratio), total);
       await new Promise((r) => setTimeout(r, 120));
     }
-    registerNewMockContainer(
-      this.ctx(),
-      options.containerId,
-      options.sizeMb,
-      options.autoStart,
-      options.sshPort,
-    );
+    registerNewMockContainer(this.ctx(), {
+      id: options.containerId,
+      sizeMb: options.sizeMb,
+      ...(options.hostname ? { hostname: options.hostname } : {}),
+      enableSsh: options.enableSsh,
+      ...(options.sshPort !== undefined ? { sshPort: options.sshPort } : {}),
+      ...(options.sshPublicKeys ? { sshPublicKeys: options.sshPublicKeys } : {}),
+      autoStart: options.autoStart,
+      setDefault: options.setDefault,
+      hostBridge: options.hostBridge,
+      ...(options.extraCharDevs ? { extraCharDevs: options.extraCharDevs } : {}),
+      l5DiagnosticMounts: options.l5DiagnosticMounts,
+      syncAndroidDns: options.syncAndroidDns,
+      noatime: options.noatime,
+    });
     const now = Date.now();
     return {
       jobId: `import-${now.toString(36)}`,

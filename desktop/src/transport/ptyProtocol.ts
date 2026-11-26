@@ -23,6 +23,7 @@ const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
 export interface PtyExitEvent {
+  code?: number;
   exitCode: number;
   signal?: number;
 }
@@ -31,6 +32,7 @@ export interface PtySessionMeta {
   sessionId: string;
   container: string;
   pid?: number;
+  shell?: string;
 }
 
 export type DecodedServerPtyFrame =
@@ -82,9 +84,15 @@ export function decodeServerPtyFrame(raw: ArrayBuffer | Uint8Array): DecodedServ
   if (opcode === PTY_FRAME_EXIT) {
     try {
       const parsed = JSON.parse(decoder.decode(body)) as Partial<PtyExitEvent>;
+      const resolvedCode =
+        typeof parsed.code === 'number'
+          ? parsed.code
+          : typeof parsed.exitCode === 'number'
+            ? parsed.exitCode
+            : 0;
       return {
         type: 'exit',
-        exitCode: typeof parsed.exitCode === 'number' ? parsed.exitCode : 0,
+        exitCode: resolvedCode,
         ...(typeof parsed.signal === 'number' ? { signal: parsed.signal } : {}),
       };
     } catch {
@@ -103,6 +111,7 @@ export function parsePtySessionMeta(text: string): PtySessionMeta | null {
         sessionId: parsed.sessionId,
         container: parsed.container,
         ...(typeof parsed.pid === 'number' ? { pid: parsed.pid } : {}),
+        ...(typeof parsed.shell === 'string' && parsed.shell ? { shell: parsed.shell } : {}),
       };
     }
   } catch {

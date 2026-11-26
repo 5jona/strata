@@ -163,9 +163,12 @@ impl ProvisionJobManager {
         }
 
         let snapshot = self.config_store.snapshot().await;
-        let (ssh_port, reservation) =
-            self.manager
-                .reserve_provision(&params.id, &snapshot, params.ssh_port)?;
+        let (ssh_port, reservation) = self.manager.reserve_provision(
+            &params.id,
+            &snapshot,
+            params.ssh_port,
+            params.enable_ssh,
+        )?;
 
         let mut cfg = ContainerConfig::default_for_id(&params.id);
         let base_dir = self.containers_root.join(&params.id);
@@ -176,10 +179,25 @@ impl ProvisionJobManager {
         {
             cfg.hostname = h.trim().to_owned();
         }
-        cfg.ssh.port = ssh_port;
+        cfg.ssh.enabled = params.enable_ssh;
+        cfg.ssh.port = if params.enable_ssh {
+            ssh_port
+        } else {
+            params.ssh_port.unwrap_or(0)
+        };
         cfg.auto_start = params.auto_start;
         cfg.host_bridge = params.host_bridge;
+        cfg.sync_android_dns = params.sync_android_dns;
         cfg.noatime = params.noatime;
+        cfg.extra_char_devs = match &params.extra_char_devs {
+            Some(devs) => devs.clone(),
+            None if params.host_bridge => cfg.extra_char_devs,
+            None => Vec::new(),
+        };
+        if params.l5_diagnostic_mounts {
+            cfg.extra_mounts = strata_protocol::config::l5_diag_mounts();
+        }
+        strata_protocol::config::validate_container_config(&params.id, &cfg)?;
         Ok((params.id.clone(), cfg, reservation))
     }
 
@@ -311,7 +329,7 @@ impl ProvisionJobManager {
         let rollback_cfg = cfg.clone();
         if let Err(err) = self
             .config_store
-            .add_container(container_id.to_owned(), cfg)
+            .add_container(container_id.to_owned(), cfg, params.set_default)
             .await
         {
             let cid = container_id.to_owned();

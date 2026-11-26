@@ -139,6 +139,23 @@ impl ContainerManager {
             return Err(daemon_err);
         }
 
+        if cfg.ssh.enabled && cfg.init_command.is_empty() {
+            let dropbear_bin = std::path::Path::new(&cfg.mount_dir).join("usr/sbin/dropbear");
+            if !dropbear_bin.is_file() {
+                let cid = id.to_owned();
+                let cleanup_cfg = cfg.clone();
+                let _ = tokio::task::spawn_blocking(move || {
+                    storage::teardown_container(&cid, &cleanup_cfg, None, None)
+                })
+                .await;
+                let msg = format!(
+                    "Dropbear SSH is enabled for '{id}' but /usr/sbin/dropbear is missing in rootfs. Disable ssh.enabled to boot as a clean container and install dropbear-bin + host keys via terminal, or recreate without enableSsh."
+                );
+                self.mark_failed(id, slot, &msg).await;
+                return Err(DaemonError::InvalidState(msg));
+            }
+        }
+
         let spec = build_stage2_spec(id, cfg);
         let self_exe = self.self_exe.clone();
         let log_path = self.log_file_path(id);

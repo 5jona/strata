@@ -22,8 +22,8 @@ export function formatUptime(ms: number): string {
   const hours = Math.floor((totalSecs % 86400) / 3600);
   const mins = Math.floor((totalSecs % 3600) / 60);
   const secs = totalSecs % 60;
-  if (days > 0) return `${days}天 ${hours}时`;
-  if (hours > 0) return `${hours}时 ${mins}分`;
+  if (days > 0) return `${days}天 ${hours}小时`;
+  if (hours > 0) return `${hours}小时 ${mins}分`;
   if (mins > 0) return `${mins}分 ${secs}秒`;
   return `${secs}秒`;
 }
@@ -58,10 +58,31 @@ export function serviceStatusMeta(status: ServiceStatus): {
     case 'crashed':
       return { label: '已崩溃', variant: 'danger' };
     case 'circuit-open':
-      return { label: '熔断暂停', variant: 'warning' };
+      return { label: '已熔断（连续失败过多）', variant: 'warning' };
     case 'stopped':
       return { label: '已停止', variant: 'neutral' };
   }
+}
+
+const MAINTENANCE_OP_LABELS: Readonly<Record<string, string>> = {
+  backup: '后台备份',
+  compact: '回收磁盘空间',
+  fsck: '磁盘修复检查',
+  dns: '同步 DNS',
+};
+
+/** Maps a maintenance operation id to a localized Chinese label. */
+export function formatMaintenanceOpLabel(op: string): string {
+  return MAINTENANCE_OP_LABELS[op] ?? op;
+}
+
+/** Parses and validates a TCP port string within the inclusive `[min, max]` range. */
+export function parsePortInRange(raw: string, min = 1024, max = 65535): number | null {
+  const trimmed = raw.trim();
+  if (!/^\d+$/.test(trimmed)) return null;
+  const parsed = Number.parseInt(trimmed, 10);
+  if (!Number.isSafeInteger(parsed) || parsed < min || parsed > max) return null;
+  return parsed;
 }
 
 /** Builds a copyable SSH CLI command for a container. */

@@ -1,6 +1,7 @@
 import { Button, Card, Input, SettingRow, Slider, StatusBanner, Switch } from '@gojona/ui';
 import { X } from 'lucide-react';
 import { useEffect, useState } from 'react';
+import { parsePortInRange } from '../lib/format.ts';
 import type { ContainerStatusSnapshot } from '../types/protocol.ts';
 
 export type ContainerModalMode =
@@ -32,11 +33,13 @@ export function ContainerModals({
   const [sizeGb, setSizeGb] = useState(32);
   const [cloneId, setCloneId] = useState('');
   const [clonePort, setClonePort] = useState('2224');
+  const [clonePortError, setClonePortError] = useState<string | null>(null);
   const [confirmName, setConfirmName] = useState('');
   const [deleteImage, setDeleteImage] = useState(false);
 
   useEffect(() => {
     if (!modal) return;
+    setClonePortError(null);
     if (modal.kind === 'resize') {
       const currentGb = Math.max(
         8,
@@ -90,7 +93,7 @@ export function ContainerModals({
               onValueChange={setSizeGb}
             />
             <p className="text-xs text-[var(--text-secondary)]">
-              ext4 稀疏镜像按需占用实际空间，扩容期间容器将短暂重启并执行 `resize2fs`。
+              ext4 稀疏镜像按需占用实际空间，扩容期间容器将短暂重启并自动调整文件系统大小。
             </p>
             <div className="flex justify-end gap-2">
               <Button size="sm" variant="secondary" onClick={onClose}>
@@ -118,9 +121,27 @@ export function ContainerModals({
               <Input mono value={cloneId} onChange={(e) => setCloneId(e.target.value)} />
             </div>
             <div className="flex flex-col gap-1">
-              <span className="text-xs text-[var(--text-secondary)]">新容器 SSH 端口</span>
-              <Input mono value={clonePort} onChange={(e) => setClonePort(e.target.value)} />
+              <span className="text-xs text-[var(--text-secondary)]">
+                新容器 SSH 端口 (1024–65535)
+              </span>
+              <Input
+                mono
+                inputMode="numeric"
+                value={clonePort}
+                aria-invalid={clonePortError !== null}
+                onChange={(e) => {
+                  setClonePort(e.target.value);
+                  if (clonePortError && parsePortInRange(e.target.value, 1024, 65535) !== null) {
+                    setClonePortError(null);
+                  }
+                }}
+              />
             </div>
+            {clonePortError && (
+              <p role="alert" className="text-xs text-[var(--danger)]">
+                {clonePortError}
+              </p>
+            )}
             <div className="flex justify-end gap-2">
               <Button size="sm" variant="secondary" onClick={onClose}>
                 取消
@@ -131,7 +152,12 @@ export function ContainerModals({
                 disabled={busy || !cloneId.trim()}
                 onClick={async () => {
                   const id = cloneId.trim();
-                  await onClone(modal.container.id, id, Number(clonePort) || 2224, id);
+                  const parsedPort = parsePortInRange(clonePort, 1024, 65535);
+                  if (parsedPort === null) {
+                    setClonePortError('SSH 端口须为 1024–65535 之间的整数');
+                    return;
+                  }
+                  await onClone(modal.container.id, id, parsedPort, id);
                   onClose();
                 }}
               >

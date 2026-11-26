@@ -9,7 +9,6 @@ import {
   type DaemonSummarySnapshot,
   type KernelCapabilitiesResult,
   STRATA_METHODS,
-  STRATA_PROTOCOL,
   type WebStatusResult,
 } from '../types.ts';
 import { invokeStrataKsuRpc } from './ksuStrataClient.ts';
@@ -26,8 +25,8 @@ export function useKsuStrataRuntime() {
   const [lastError, setLastError] = useState<string | null>(null);
   const [daemon, setDaemon] = useState<DaemonSummarySnapshot | null>(null);
   const [containers, setContainers] = useState<ContainerStatusSnapshot[]>([]);
-  const [selectedId, setSelectedId] = useState<string>(STRATA_PROTOCOL.DEFAULT_CONTAINER_ID);
-  const selectedIdRef = useRef<string>(selectedId);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const selectedIdRef = useRef<string | null>(selectedId);
   selectedIdRef.current = selectedId;
 
   const [services, setServices] = useState<ContainerServiceRuntime[]>([]);
@@ -63,11 +62,16 @@ export function useKsuStrataRuntime() {
   );
 
   const refreshDiagnostics = useCallback(
-    async (containerId?: string) => {
+    async (containerId?: string | null) => {
       const cid = containerId ?? selectedIdRef.current;
       const [dLogsRes, cLogsRes, capsRes] = await Promise.allSettled([
         invokeStrataKsuRpc(bridge, STRATA_METHODS.DAEMON_LOGS, { lines: 120 }),
-        invokeStrataKsuRpc(bridge, STRATA_METHODS.CONTAINER_LOGS, { container: cid, lines: 120 }),
+        cid
+          ? invokeStrataKsuRpc(bridge, STRATA_METHODS.CONTAINER_LOGS, {
+              container: cid,
+              lines: 120,
+            })
+          : Promise.resolve({ lines: [] as string[] }),
         invokeStrataKsuRpc(bridge, STRATA_METHODS.DAEMON_CAPABILITIES),
       ]);
       if (dLogsRes.status === 'fulfilled')
@@ -100,10 +104,17 @@ export function useKsuStrataRuntime() {
         list.find((c) => c.id === selectedIdRef.current)?.id ??
         list.find((c) => c.isDefault)?.id ??
         list[0]?.id ??
-        STRATA_PROTOCOL.DEFAULT_CONTAINER_ID;
+        null;
       selectedIdRef.current = nextId;
       setSelectedId(nextId);
-      await refreshContainerDetails(nextId);
+      if (nextId) {
+        await refreshContainerDetails(nextId);
+      } else {
+        setServices([]);
+        setContainerConfig(null);
+        setSshKeys([]);
+        setDropbearLogs([]);
+      }
     } catch (err) {
       setDaemon(null);
       setLastError(err instanceof Error ? err.message : String(err));

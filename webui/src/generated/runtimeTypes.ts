@@ -38,9 +38,28 @@ export type TaskStream = 'stdout' | 'stderr';
 export const TASK_STREAM_VALUES = ['stdout', 'stderr'] as const;
 
 /** Package or runtime manager backend inside a Strata container. */
-export type ToolManagerKind = 'mise' | 'apt' | 'uv' | 'bundle' | 'system';
+export type ToolManagerKind =
+  | 'mise'
+  | 'apt'
+  | 'uv'
+  | 'bundle'
+  | 'system'
+  | 'apk'
+  | 'pacman'
+  | 'dnf'
+  | 'manual';
 
-export const TOOL_MANAGER_KIND_VALUES = ['mise', 'apt', 'uv', 'bundle', 'system'] as const;
+export const TOOL_MANAGER_KIND_VALUES = [
+  'mise',
+  'apt',
+  'uv',
+  'bundle',
+  'system',
+  'apk',
+  'pacman',
+  'dnf',
+  'manual',
+] as const;
 
 /** Logical category of container tools. */
 export type ToolGroupKind =
@@ -48,7 +67,9 @@ export type ToolGroupKind =
   | 'mise-runtimes'
   | 'cli-dev'
   | 'debug-l3-l5'
-  | 'python-uv';
+  | 'python-uv'
+  | 'shell'
+  | 'discovered';
 
 export const TOOL_GROUP_KIND_VALUES = [
   'core-bridge',
@@ -56,7 +77,19 @@ export const TOOL_GROUP_KIND_VALUES = [
   'cli-dev',
   'debug-l3-l5',
   'python-uv',
+  'shell',
+  'discovered',
 ] as const;
+
+/** Provenance of a discovered tool manager or binary inside a container. */
+export type ToolInstallSource = 'user-installed' | 'strata-managed' | 'system';
+
+export const TOOL_INSTALL_SOURCE_VALUES = ['user-installed', 'strata-managed', 'system'] as const;
+
+/** Configuration scope when pinning/activating a tool version via tools.use. */
+export type ToolUseScope = 'global' | 'workspace';
+
+export const TOOL_USE_SCOPE_VALUES = ['global', 'workspace'] as const;
 
 /** Mirror configuration preset for mise, apt, uv, npm, and cargo. */
 export type ToolMirrorPreset = 'tuna' | 'official' | 'custom';
@@ -72,6 +105,17 @@ export const TOOL_DIAGNOSTIC_STATUS_VALUES = ['ok', 'warn', 'error'] as const;
 export type ToolsBootstrapProfile = 'minimal' | 'dev' | 'debug';
 
 export const TOOLS_BOOTSTRAP_PROFILE_VALUES = ['minimal', 'dev', 'debug'] as const;
+
+/** Parameters for container.setDefault. */
+export interface ContainerSetDefaultParams {
+  id: string;
+}
+
+/** Result returned by container.setDefault. */
+export interface ContainerSetDefaultResult {
+  defaultContainer: string;
+  previousDefaultContainer?: string;
+}
 
 /** Disk allocation and rootfs utilization snapshot. */
 export interface ContainerDiskStats {
@@ -116,7 +160,7 @@ export interface DaemonSummarySnapshot {
   pid: number;
   uid: number;
   uptimeMs: number;
-  defaultContainer: string;
+  defaultContainer?: string;
   totalContainers: number;
   runningContainers: number;
   activeTasks: number;
@@ -422,10 +466,15 @@ export interface ContainerCreateParams {
   expectedSha256?: string;
   sizeMb: number;
   hostname?: string;
+  enableSsh: boolean;
   sshPort?: number;
   sshPublicKeys: string[];
   autoStart: boolean;
+  setDefault: boolean;
   hostBridge: boolean;
+  extraCharDevs?: string[];
+  l5DiagnosticMounts: boolean;
+  syncAndroidDns: boolean;
   noatime: boolean;
 }
 
@@ -532,6 +581,7 @@ export interface ToolManagerHealth {
   installed: boolean;
   version?: string;
   binPath?: string;
+  source?: ToolInstallSource;
 }
 
 /** Fast local-only snapshot of container layout compliance, tool managers, and caches. */
@@ -541,6 +591,10 @@ export interface ToolsStatusResult {
   layoutCompliant: boolean;
   workspaceDir: string;
   miseConfigPath: string;
+  miseDataDir?: string;
+  miseConfigPaths: string[];
+  legacyStrataMiseDetected: boolean;
+  systemPkgManager?: string;
   mise: ToolManagerHealth;
   uv: ToolManagerHealth;
   apt: ToolManagerHealth;
@@ -574,6 +628,7 @@ export interface InstalledToolItem {
   backend?: string;
   installPath?: string;
   sourcePath?: string;
+  source?: ToolInstallSource;
   active: boolean;
   installed: boolean;
   broken: boolean;
@@ -621,6 +676,7 @@ export interface ToolBundleSpec {
 /** Result returned by tools.catalog. */
 export interface ToolsCatalogResult {
   container: string;
+  registryAvailable: boolean;
   entries: ToolCatalogEntry[];
   bundles: ToolBundleSpec[];
 }
@@ -628,11 +684,14 @@ export interface ToolsCatalogResult {
 /** Parameters for tools.configGet. */
 export interface ToolsConfigGetParams {
   container?: string;
+  configPath?: string;
 }
 
 /** Sanitized tool manager mirror, proxy, and mise configuration (never exposes raw secrets). */
 export interface ToolsConfigResult {
   container: string;
+  configPath?: string;
+  configPaths: string[];
   mirrorPreset: ToolMirrorPreset;
   aptMirrorUrl?: string;
   nodeMirrorUrl?: string;
@@ -654,6 +713,7 @@ export interface ToolsConfigResult {
 /** Parameters for tools.configSet. */
 export interface ToolsConfigSetParams {
   container?: string;
+  configPath?: string;
   mirrorPreset?: ToolMirrorPreset;
   aptMirrorUrl?: string;
   nodeMirrorUrl?: string;
@@ -738,6 +798,41 @@ export interface ToolsCacheCleanResult {
   beforeBytes: number;
   afterBytes: number;
   freedBytes: number;
+}
+
+/** Parameters for tools.versions querying remote/installable versions. */
+export interface ToolsVersionsParams {
+  container?: string;
+  manager: ToolManagerKind;
+  name: string;
+  includePrerelease: boolean;
+}
+
+/** Single installable or installed version candidate returned by tools.versions. */
+export interface ToolVersionOption {
+  version: string;
+  createdAt?: string;
+  installed: boolean;
+  active: boolean;
+  prerelease: boolean;
+}
+
+/** Result returned by tools.versions. */
+export interface ToolsVersionsResult {
+  container: string;
+  manager: ToolManagerKind;
+  name: string;
+  versions: ToolVersionOption[];
+}
+
+/** Parameters for tools.use switching or pinning an active tool version. */
+export interface ToolsUseParams {
+  container?: string;
+  manager: ToolManagerKind;
+  name: string;
+  version: string;
+  scope?: ToolUseScope;
+  configPath?: string;
 }
 
 /** Event payload emitted when a container tools mutation task completes. */

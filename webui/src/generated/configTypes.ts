@@ -87,7 +87,7 @@ export interface ContainerConfig {
 /** Top-level multi-container Strata configuration. */
 export interface StrataConfig {
   version: number;
-  defaultContainer: string;
+  defaultContainer?: string;
   sideveil: SideVeilBridgeConfig;
   web: WebConsoleConfig;
   containers: Record<string, ContainerConfig>;
@@ -101,6 +101,7 @@ export interface ContainerConfigPatchParams {
   imagePath?: string;
   mountDir?: string;
   hostname?: string;
+  sshEnabled?: boolean;
   sshPort?: number;
   hostBridge?: boolean;
   hostRuntime?: boolean;

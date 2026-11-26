@@ -98,7 +98,11 @@
         "apt",
         "uv",
         "bundle",
-        "system"
+        "system",
+        "apk",
+        "pacman",
+        "dnf",
+        "manual"
       ],
       "description": "Package or runtime manager backend inside a Strata container."
     },
@@ -109,9 +113,28 @@
         "mise-runtimes",
         "cli-dev",
         "debug-l3-l5",
-        "python-uv"
+        "python-uv",
+        "shell",
+        "discovered"
       ],
       "description": "Logical category of container tools."
+    },
+    "ToolInstallSource": {
+      "type": "string",
+      "enum": [
+        "user-installed",
+        "strata-managed",
+        "system"
+      ],
+      "description": "Provenance of a discovered tool manager or binary inside a container."
+    },
+    "ToolUseScope": {
+      "type": "string",
+      "enum": [
+        "global",
+        "workspace"
+      ],
+      "description": "Configuration scope when pinning/activating a tool version via tools.use."
     },
     "ToolMirrorPreset": {
       "type": "string",
@@ -407,7 +430,14 @@
           "maximum": 4294967295
         },
         "defaultContainer": {
-          "type": "string"
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "sideveil": {
           "$ref": "#/$defs/SideVeilBridgeConfig"
@@ -425,7 +455,6 @@
       "additionalProperties": false,
       "required": [
         "version",
-        "defaultContainer",
         "sideveil",
         "web",
         "containers"
@@ -489,6 +518,16 @@
           "anyOf": [
             {
               "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "sshEnabled": {
+          "anyOf": [
+            {
+              "type": "boolean"
             },
             {
               "type": "null"
@@ -566,6 +605,42 @@
       },
       "additionalProperties": false,
       "description": "Parameters for container.configPatch."
+    },
+    "ContainerSetDefaultParams": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id"
+      ],
+      "description": "Parameters for container.setDefault."
+    },
+    "ContainerSetDefaultResult": {
+      "type": "object",
+      "properties": {
+        "defaultContainer": {
+          "type": "string"
+        },
+        "previousDefaultContainer": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "defaultContainer"
+      ],
+      "description": "Result returned by container.setDefault."
     },
     "ContainerConfigResult": {
       "type": "object",
@@ -930,7 +1005,14 @@
           "minimum": 0
         },
         "defaultContainer": {
-          "type": "string"
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "totalContainers": {
           "type": "integer",
@@ -953,7 +1035,6 @@
         "pid",
         "uid",
         "uptimeMs",
-        "defaultContainer",
         "totalContainers",
         "runningContainers",
         "activeTasks",
@@ -2116,6 +2197,9 @@
             }
           ]
         },
+        "enableSsh": {
+          "type": "boolean"
+        },
         "sshPort": {
           "anyOf": [
             {
@@ -2137,7 +2221,29 @@
         "autoStart": {
           "type": "boolean"
         },
+        "setDefault": {
+          "type": "boolean"
+        },
         "hostBridge": {
+          "type": "boolean"
+        },
+        "extraCharDevs": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "l5DiagnosticMounts": {
+          "type": "boolean"
+        },
+        "syncAndroidDns": {
           "type": "boolean"
         },
         "noatime": {
@@ -2148,9 +2254,13 @@
       "required": [
         "id",
         "sizeMb",
+        "enableSsh",
         "sshPublicKeys",
         "autoStart",
+        "setDefault",
         "hostBridge",
+        "l5DiagnosticMounts",
+        "syncAndroidDns",
         "noatime"
       ],
       "description": "Parameters for container.create."
@@ -2792,6 +2902,16 @@
               "type": "null"
             }
           ]
+        },
+        "source": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ToolInstallSource"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "additionalProperties": false,
@@ -2826,6 +2946,35 @@
         },
         "miseConfigPath": {
           "type": "string"
+        },
+        "miseDataDir": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "miseConfigPaths": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "legacyStrataMiseDetected": {
+          "type": "boolean"
+        },
+        "systemPkgManager": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "mise": {
           "$ref": "#/$defs/ToolManagerHealth"
@@ -2878,6 +3027,8 @@
         "layoutCompliant",
         "workspaceDir",
         "miseConfigPath",
+        "miseConfigPaths",
+        "legacyStrataMiseDetected",
         "mise",
         "uv",
         "apt",
@@ -2989,6 +3140,16 @@
           "anyOf": [
             {
               "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "source": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ToolInstallSource"
             },
             {
               "type": "null"
@@ -3186,6 +3347,9 @@
         "container": {
           "type": "string"
         },
+        "registryAvailable": {
+          "type": "boolean"
+        },
         "entries": {
           "type": "array",
           "items": {
@@ -3202,6 +3366,7 @@
       "additionalProperties": false,
       "required": [
         "container",
+        "registryAvailable",
         "entries",
         "bundles"
       ],
@@ -3211,6 +3376,16 @@
       "type": "object",
       "properties": {
         "container": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "configPath": {
           "anyOf": [
             {
               "type": "string"
@@ -3229,6 +3404,22 @@
       "properties": {
         "container": {
           "type": "string"
+        },
+        "configPath": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "configPaths": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
         },
         "mirrorPreset": {
           "$ref": "#/$defs/ToolMirrorPreset"
@@ -3364,6 +3555,7 @@
       "additionalProperties": false,
       "required": [
         "container",
+        "configPaths",
         "mirrorPreset",
         "urlReplacements",
         "jobs",
@@ -3376,6 +3568,16 @@
       "type": "object",
       "properties": {
         "container": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "configPath": {
           "anyOf": [
             {
               "type": "string"
@@ -3833,6 +4035,151 @@
         "freedBytes"
       ],
       "description": "Result returned by tools.cacheClean."
+    },
+    "ToolsVersionsParams": {
+      "type": "object",
+      "properties": {
+        "container": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "manager": {
+          "$ref": "#/$defs/ToolManagerKind"
+        },
+        "name": {
+          "type": "string"
+        },
+        "includePrerelease": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "manager",
+        "name",
+        "includePrerelease"
+      ],
+      "description": "Parameters for tools.versions querying remote/installable versions."
+    },
+    "ToolVersionOption": {
+      "type": "object",
+      "properties": {
+        "version": {
+          "type": "string"
+        },
+        "createdAt": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "installed": {
+          "type": "boolean"
+        },
+        "active": {
+          "type": "boolean"
+        },
+        "prerelease": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "installed",
+        "active",
+        "prerelease"
+      ],
+      "description": "Single installable or installed version candidate returned by tools.versions."
+    },
+    "ToolsVersionsResult": {
+      "type": "object",
+      "properties": {
+        "container": {
+          "type": "string"
+        },
+        "manager": {
+          "$ref": "#/$defs/ToolManagerKind"
+        },
+        "name": {
+          "type": "string"
+        },
+        "versions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ToolVersionOption"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "container",
+        "manager",
+        "name",
+        "versions"
+      ],
+      "description": "Result returned by tools.versions."
+    },
+    "ToolsUseParams": {
+      "type": "object",
+      "properties": {
+        "container": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "manager": {
+          "$ref": "#/$defs/ToolManagerKind"
+        },
+        "name": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        },
+        "scope": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ToolUseScope"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "configPath": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "manager",
+        "name",
+        "version"
+      ],
+      "description": "Parameters for tools.use switching or pinning an active tool version."
     },
     "ToolsStateChangedPayload": {
       "type": "object",

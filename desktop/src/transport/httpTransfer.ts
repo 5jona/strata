@@ -5,9 +5,16 @@ export interface ImportUploadOptions {
   file: File;
   sizeMb: number;
   hostname?: string;
+  enableSsh: boolean;
   sshPort?: number;
+  sshPublicKeys?: string[];
+  expectedSha256?: string;
   autoStart: boolean;
+  setDefault: boolean;
   hostBridge: boolean;
+  extraCharDevs?: string[];
+  l5DiagnosticMounts: boolean;
+  syncAndroidDns: boolean;
   noatime: boolean;
   onProgress?: (loaded: number, total: number) => void;
   signal?: AbortSignal;
@@ -24,12 +31,27 @@ export function uploadContainerImage(
       id: options.containerId,
       filename: options.file.name,
       sizeMb: String(options.sizeMb),
+      enableSsh: String(options.enableSsh),
       autoStart: String(options.autoStart),
+      setDefault: String(options.setDefault),
       hostBridge: String(options.hostBridge),
+      l5DiagnosticMounts: String(options.l5DiagnosticMounts),
+      syncAndroidDns: String(options.syncAndroidDns),
       noatime: String(options.noatime),
     });
-    if (options.hostname) qs.set('hostname', options.hostname);
-    if (options.sshPort) qs.set('sshPort', String(options.sshPort));
+    if (options.hostname?.trim()) qs.set('hostname', options.hostname.trim());
+    if (options.enableSsh && options.sshPort) qs.set('sshPort', String(options.sshPort));
+    if (options.expectedSha256?.trim()) qs.set('expectedSha256', options.expectedSha256.trim());
+    if (options.extraCharDevs !== undefined) {
+      qs.set(
+        'extraCharDevs',
+        options.extraCharDevs.length > 0 ? options.extraCharDevs.join(',') : 'none',
+      );
+    }
+    const keys = (options.sshPublicKeys ?? []).map((k) => k.trim()).filter(Boolean);
+    if (options.enableSsh && keys.length > 0) {
+      qs.set('sshPublicKeys', JSON.stringify(keys));
+    }
 
     const xhr = new XMLHttpRequest();
     xhr.open('POST', `${baseUrl}/api/images/import?${qs.toString()}`);

@@ -13,25 +13,30 @@ export interface ActiveToolTaskState {
 }
 
 export interface TaskStreamDrawerProps {
-  task: ActiveToolTaskState | null;
+  tasks: ActiveToolTaskState[];
+  activeTaskId: string | null;
   expanded: boolean;
+  onSelectTask: (taskId: string) => void;
   onToggleExpand: () => void;
   onCancel: (taskId: string) => void;
-  onClear: () => void;
+  onClearFinished: () => void;
 }
 
 /**
- * Collapsible live task output drawer subscribing to `task.output` and `task.exit`.
+ * Collapsible multi-task output drawer retaining recent task history across actions.
  */
 export function TaskStreamDrawer({
-  task,
+  tasks,
+  activeTaskId,
   expanded,
+  onSelectTask,
   onToggleExpand,
   onCancel,
-  onClear,
+  onClearFinished,
 }: TaskStreamDrawerProps) {
   const scrollRef = useRef<HTMLDivElement | null>(null);
-  const entryCount = task?.entries.length ?? 0;
+  const current = tasks.find((t) => t.taskId === activeTaskId) ?? tasks[0] ?? null;
+  const entryCount = current?.entries.length ?? 0;
 
   useEffect(() => {
     if (expanded && entryCount > 0 && scrollRef.current) {
@@ -39,17 +44,19 @@ export function TaskStreamDrawer({
     }
   }, [entryCount, expanded]);
 
-  if (!task) return null;
+  if (!current) return null;
 
-  const statusBadge = task.running ? (
+  const statusBadge = current.running ? (
     <Badge variant="accent">执行中</Badge>
-  ) : task.exit?.exitCode === 0 && !task.exit.timedOut ? (
+  ) : current.exit?.exitCode === 0 && !current.exit.timedOut ? (
     <Badge variant="success">已完成 (exit 0)</Badge>
   ) : (
     <Badge variant="danger">
-      {task.exit?.timedOut ? '执行超时' : `退出码 ${task.exit?.exitCode ?? '?'}`}
+      {current.exit?.timedOut ? '执行超时' : `退出码 ${current.exit?.exitCode ?? '?'}`}
     </Badge>
   );
+
+  const hasFinished = tasks.some((t) => !t.running);
 
   return (
     <Card className="shrink-0 overflow-hidden border-[var(--border-hairline)] p-0">
@@ -61,23 +68,43 @@ export function TaskStreamDrawer({
         >
           <Terminal className="size-3.5 shrink-0 text-[var(--accent)]" />
           <span className="truncate text-xs font-semibold text-[var(--text-primary)]">
-            {task.label} · {task.container}
+            {current.label} · {current.container}
           </span>
           <span className="font-mono text-[11px] text-[var(--text-secondary)]">
-            ({task.taskId})
+            ({current.taskId})
           </span>
           {statusBadge}
         </button>
 
         <div className="flex items-center gap-1.5">
-          {task.running && (
-            <Button size="sm" variant="danger" onClick={() => onCancel(task.taskId)}>
+          {tasks.length > 1 && (
+            <div className="flex items-center gap-1">
+              {tasks.slice(0, 4).map((t) => (
+                <Button
+                  key={t.taskId}
+                  size="sm"
+                  variant={t.taskId === current.taskId ? 'pill' : 'ghost'}
+                  onClick={() => onSelectTask(t.taskId)}
+                >
+                  {t.label.slice(0, 10)}
+                </Button>
+              ))}
+            </div>
+          )}
+          {current.running && (
+            <Button size="sm" variant="danger" onClick={() => onCancel(current.taskId)}>
               <XCircle className="size-3.5" />
               取消任务
             </Button>
           )}
-          {!task.running && (
-            <Button size="icon-sm" variant="ghost" aria-label="清除任务日志" onClick={onClear}>
+          {hasFinished && (
+            <Button
+              size="icon-sm"
+              variant="ghost"
+              title="清除已结束任务记录"
+              aria-label="清除任务日志"
+              onClick={onClearFinished}
+            >
               <Trash2 className="size-3.5" />
             </Button>
           )}
@@ -97,10 +124,10 @@ export function TaskStreamDrawer({
           ref={scrollRef}
           className="max-h-52 overflow-y-auto border-t border-[var(--border-hairline)] bg-[var(--surface-canvas)] p-3 font-mono text-xs leading-relaxed strata-scroll"
         >
-          {task.entries.length === 0 ? (
+          {current.entries.length === 0 ? (
             <span className="text-[var(--text-secondary)]">等待任务输出…</span>
           ) : (
-            task.entries.map((entry) => (
+            current.entries.map((entry) => (
               <div
                 key={`${entry.taskId}-${entry.seq}`}
                 className={

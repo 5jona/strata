@@ -33,12 +33,22 @@ pub(super) struct ImportQuery {
     #[serde(default = "default_size_mb")]
     pub(super) size_mb: u64,
     pub(super) hostname: Option<String>,
+    #[serde(default)]
+    pub(super) enable_ssh: bool,
     pub(super) ssh_port: Option<u16>,
+    pub(super) ssh_public_keys: Option<String>,
     pub(super) expected_sha256: Option<String>,
     #[serde(default)]
     pub(super) auto_start: bool,
+    #[serde(default)]
+    pub(super) set_default: bool,
     #[serde(default = "default_true")]
     pub(super) host_bridge: bool,
+    pub(super) extra_char_devs: Option<String>,
+    #[serde(default)]
+    pub(super) l5_diagnostic_mounts: bool,
+    #[serde(default = "default_true")]
+    pub(super) sync_android_dns: bool,
     #[serde(default = "default_true")]
     pub(super) noatime: bool,
 }
@@ -60,6 +70,42 @@ fn default_true() -> bool {
 
 fn default_export_format() -> String {
     "tar.gz".to_owned()
+}
+
+fn parse_import_ssh_keys(query_raw: Option<&str>, header_raw: Option<&str>) -> Vec<String> {
+    let mut keys = Vec::new();
+    for src in [query_raw, header_raw].into_iter().flatten() {
+        let trimmed = src.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if trimmed.starts_with('[')
+            && let Ok(parsed) = serde_json::from_str::<Vec<String>>(trimmed)
+        {
+            keys.extend(
+                parsed
+                    .into_iter()
+                    .map(|k| k.trim().to_owned())
+                    .filter(|k| !k.is_empty()),
+            );
+            continue;
+        }
+        for line in trimmed.lines() {
+            let k = line.trim();
+            if !k.is_empty() {
+                keys.push(k.to_owned());
+            }
+        }
+    }
+    keys
+}
+
+fn parse_csv_list(raw: &str) -> Vec<String> {
+    raw.split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty() && !s.eq_ignore_ascii_case("none"))
+        .map(str::to_owned)
+        .collect()
 }
 
 /// Streams an uploaded archive or raw ext4 image directly into a newly created container.
@@ -84,6 +130,14 @@ pub(super) async fn handle_image_import(
         .and_then(|v| v.to_str().ok())
         .and_then(|s| s.parse::<u64>().ok());
 
+    let ssh_public_keys = parse_import_ssh_keys(
+        q.ssh_public_keys.as_deref(),
+        headers
+            .get("x-strata-ssh-keys")
+            .and_then(|v| v.to_str().ok()),
+    );
+    let extra_char_devs = q.extra_char_devs.as_deref().map(parse_csv_list);
+
     let params = ContainerCreateParams {
         id: q.id,
         distro_id: None,
@@ -93,10 +147,15 @@ pub(super) async fn handle_image_import(
         expected_sha256: q.expected_sha256,
         size_mb: q.size_mb,
         hostname: q.hostname,
+        enable_ssh: q.enable_ssh,
         ssh_port: q.ssh_port,
-        ssh_public_keys: Vec::new(),
+        ssh_public_keys,
         auto_start: q.auto_start,
+        set_default: q.set_default,
         host_bridge: q.host_bridge,
+        extra_char_devs,
+        l5_diagnostic_mounts: q.l5_diagnostic_mounts,
+        sync_android_dns: q.sync_android_dns,
         noatime: q.noatime,
     };
 

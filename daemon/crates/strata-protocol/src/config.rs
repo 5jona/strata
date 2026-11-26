@@ -10,14 +10,14 @@ pub use crate::generated::config::{
     ServiceStateChangedPayload, ServiceStatus, ServiceUpsertParams, SideVeilBridgeConfig,
     SshConfig, StrataConfig, WebConsoleConfig,
 };
-pub use validate::{ConfigValidationError, validate_container_id};
+pub use validate::{ConfigValidationError, validate_container_config, validate_container_id};
 
 use crate::capabilities::CapProfile;
 use crate::constants::{
-    CONFIG_SCHEMA_VERSION, CONTAINER_DROPBEAR_PID_PATH, DEFAULT_CONTAINER_ID,
-    DEFAULT_CONTAINERS_ROOT, DEFAULT_DNS_SERVERS, DEFAULT_EXTRA_CHAR_DEVS, DEFAULT_OOM_SCORE_ADJ,
-    DEFAULT_SIDEVEIL_HUB_SOCK, DEFAULT_SSH_KEEPALIVE_SECS, DEFAULT_SSH_LISTEN_ADDR,
-    DEFAULT_SSH_PORT, DEFAULT_WEB_PORT, L5_DIAG_MOUNT_PATHS, SIDEVEIL_PLUGIN_ID,
+    CONFIG_SCHEMA_VERSION, CONTAINER_DROPBEAR_PID_PATH, DEFAULT_CONTAINERS_ROOT,
+    DEFAULT_DNS_SERVERS, DEFAULT_EXTRA_CHAR_DEVS, DEFAULT_OOM_SCORE_ADJ, DEFAULT_SIDEVEIL_HUB_SOCK,
+    DEFAULT_SSH_KEEPALIVE_SECS, DEFAULT_SSH_LISTEN_ADDR, DEFAULT_SSH_PORT, DEFAULT_WEB_PORT,
+    L5_DIAG_MOUNT_PATHS, SIDEVEIL_PLUGIN_ID,
 };
 
 impl Default for WebConsoleConfig {
@@ -68,10 +68,10 @@ impl Default for StrataConfig {
     fn default() -> Self {
         Self {
             version: CONFIG_SCHEMA_VERSION,
-            default_container: DEFAULT_CONTAINER_ID.to_owned(),
+            default_container: None,
             sideveil: SideVeilBridgeConfig::default(),
             web: WebConsoleConfig::default(),
-            containers: default_containers_map(),
+            containers: BTreeMap::new(),
         }
     }
 }
@@ -156,13 +156,23 @@ impl ContainerConfig {
 }
 
 impl StrataConfig {
-    /// Resolves an optional container ID to the configured default container name.
+    /// Resolves an optional container ID to the configured default container (or first container).
     #[must_use]
-    pub fn resolve_container_id<'a>(&'a self, requested: Option<&'a str>) -> &'a str {
+    pub fn resolve_container_id<'a>(&'a self, requested: Option<&'a str>) -> Option<&'a str> {
         match requested {
-            Some(name) if !name.trim().is_empty() => name.trim(),
-            _ => self.default_container.as_str(),
+            Some(name) if !name.trim().is_empty() => Some(name.trim()),
+            _ => self
+                .default_container
+                .as_deref()
+                .filter(|s| !s.trim().is_empty())
+                .or_else(|| self.containers.keys().next().map(String::as_str)),
         }
+    }
+
+    /// Returns `true` if `id` is currently selected as `defaultContainer`.
+    #[must_use]
+    pub fn is_default_container(&self, id: &str) -> bool {
+        self.default_container.as_deref() == Some(id)
     }
 
     /// Looks up a container configuration by optional ID (defaulting to `default_container`).
@@ -171,7 +181,7 @@ impl StrataConfig {
         &'a self,
         requested: Option<&'a str>,
     ) -> Option<(&'a str, &'a ContainerConfig)> {
-        let id = self.resolve_container_id(requested);
+        let id = self.resolve_container_id(requested)?;
         self.containers
             .get_key_value(id)
             .map(|(k, v)| (k.as_str(), v))
@@ -181,15 +191,6 @@ impl StrataConfig {
     pub fn validate(&self) -> Result<(), ConfigValidationError> {
         validate::validate_strata_config(self)
     }
-}
-
-fn default_containers_map() -> BTreeMap<String, ContainerConfig> {
-    let mut map = BTreeMap::new();
-    map.insert(
-        DEFAULT_CONTAINER_ID.to_owned(),
-        ContainerConfig::default_for_id(DEFAULT_CONTAINER_ID),
-    );
-    map
 }
 
 fn default_dns_list() -> Vec<String> {
@@ -210,12 +211,32 @@ fn default_extra_char_devs() -> Vec<String> {
 mod tests {
     use super::*;
 
+    fn sample_with_main() -> StrataConfig {
+        let mut cfg = StrataConfig {
+            default_container: Some("main".to_owned()),
+            ..StrataConfig::default()
+        };
+        cfg.containers
+            .insert("main".to_owned(), ContainerConfig::default_for_id("main"));
+        cfg
+    }
+
     #[test]
-    fn default_config_is_valid_and_generates_key_only_dropbear() {
+    fn default_config_starts_empty_and_validates() {
         let cfg = StrataConfig::default();
         assert!(cfg.validate().is_ok());
+        assert!(cfg.default_container.is_none());
+        assert!(cfg.containers.is_empty());
+        assert!(cfg.get_container(None).is_none());
+    }
+
+    #[test]
+    fn container_default_config_generates_key_only_dropbear() {
+        let cfg = sample_with_main();
+        assert!(cfg.validate().is_ok());
         let (id, main) = cfg.get_container(None).expect("main container must exist");
-        assert_eq!(id, DEFAULT_CONTAINER_ID);
+        assert_eq!(id, "main");
+        assert!(cfg.is_default_container("main"));
         assert_eq!(main.extra_char_devs, vec!["uinput".to_owned()]);
         let init = main.effective_init_command();
         assert_eq!(init[0], "/usr/sbin/dropbear");
@@ -227,7 +248,7 @@ mod tests {
 
     #[test]
     fn effective_init_command_respects_ssh_disabled_and_custom_init() {
-        let mut cfg = StrataConfig::default();
+        let mut cfg = sample_with_main();
         let main = cfg.containers.get_mut("main").expect("main container");
         main.ssh.enabled = false;
         main.ssh.port = 0;
@@ -262,6 +283,7 @@ mod tests {
         }"#;
         let parsed: StrataConfig = serde_json::from_str(legacy).expect("parse legacy config");
         assert!(parsed.validate().is_ok());
+        assert_eq!(parsed.default_container.as_deref(), Some("main"));
         assert_eq!(parsed.web, WebConsoleConfig::default());
         assert!(parsed.containers["main"].noatime);
     }

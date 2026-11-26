@@ -2,11 +2,11 @@ import { Badge, Button, cn, ThemeSwitcher } from '@gojona/ui';
 import {
   Box,
   Cpu,
-  Download,
   Layers,
   Network,
   PanelLeftClose,
   PanelLeftOpen,
+  Pencil,
   Plus,
   RefreshCw,
   ServerCog,
@@ -31,23 +31,32 @@ export interface SidebarProps {
   terminalTabCount: number;
   runningServiceCount: number;
   onSelectDevice: (id: string) => void;
+  onEditDevice: (device: DeviceProfile) => void;
   onRemoveDevice: (id: string) => void;
   onOpenAddDevice: () => void;
   onScanAdb: () => void;
 }
 
-const NAV_ITEMS: Array<{
-  id: NavViewId;
-  label: string;
-  icon: typeof Box;
+const NAV_GROUPS: Array<{
+  title: string;
+  items: Array<{ id: NavViewId; label: string; icon: typeof Box }>;
 }> = [
-  { id: 'containers', label: '容器', icon: Box },
-  { id: 'tools', label: '工具环境', icon: Wrench },
-  { id: 'services', label: '服务', icon: ServerCog },
-  { id: 'terminal', label: '终端', icon: Terminal },
-  { id: 'install', label: '安装与导入', icon: Download },
-  { id: 'network', label: '网络与端口', icon: Network },
-  { id: 'logs', label: '日志与内核', icon: Cpu },
+  {
+    title: '工作区',
+    items: [
+      { id: 'containers', label: '容器', icon: Box },
+      { id: 'terminal', label: '终端', icon: Terminal },
+      { id: 'services', label: '服务', icon: ServerCog },
+      { id: 'tools', label: '工具环境', icon: Wrench },
+    ],
+  },
+  {
+    title: '连接与运维',
+    items: [
+      { id: 'network', label: '网络与安全', icon: Network },
+      { id: 'logs', label: '日志与内核', icon: Cpu },
+    ],
+  },
 ];
 
 function connectionMeta(phase: ConnectionPhase): {
@@ -67,7 +76,8 @@ function connectionMeta(phase: ConnectionPhase): {
 }
 
 /**
- * Collapsible desktop sidebar featuring multi-device switcher and 7 navigation views.
+ * Collapsible desktop sidebar featuring multi-device switcher (with edit/token action)
+ * and 2-group 6-item workspace navigation.
  */
 export function Sidebar({
   collapsed,
@@ -81,17 +91,19 @@ export function Sidebar({
   terminalTabCount,
   runningServiceCount,
   onSelectDevice,
+  onEditDevice,
   onRemoveDevice,
   onOpenAddDevice,
   onScanAdb,
 }: SidebarProps) {
   const conn = connectionMeta(connectionPhase);
+  const navDisabled = !activeDevice;
 
   return (
     <aside
       className={cn(
         'flex h-full shrink-0 flex-col border-r border-[var(--border-hairline)] bg-[var(--surface-elevated)] transition-[width] duration-150',
-        collapsed ? 'w-[68px]' : 'w-[252px]',
+        collapsed ? 'w-[68px]' : 'w-[256px]',
       )}
     >
       {/* Brand header */}
@@ -131,16 +143,16 @@ export function Sidebar({
               </span>
               <Badge variant={conn.variant}>{conn.label}</Badge>
             </div>
-            <div className="flex max-h-32 flex-col gap-1 overflow-y-auto strata-scroll">
+            <div className="flex max-h-36 flex-col gap-1 overflow-y-auto strata-scroll">
               {devices.map((dev) => {
-                const selected = activeDevice?.id === dev.id;
+                const selected = dev.id === activeDevice?.id;
                 return (
                   <div
                     key={dev.id}
                     className={cn(
-                      'group flex items-center gap-1 rounded-lg border px-2 py-1.5 text-left transition-colors',
+                      'group flex items-center gap-1.5 rounded-lg border px-2 py-1.5 transition-colors',
                       selected
-                        ? 'border-[var(--accent)]/45 bg-[var(--accent)]/12 text-[var(--text-primary)]'
+                        ? 'border-[var(--accent)]/40 bg-[var(--accent)]/10 text-[var(--text-primary)]'
                         : 'border-transparent hover:bg-[var(--surface-card)] text-[var(--text-secondary)]',
                     )}
                   >
@@ -161,12 +173,27 @@ export function Sidebar({
                         </div>
                       </div>
                     </button>
+                    <button
+                      type="button"
+                      title="编辑设备配置 / 补充 Token"
+                      aria-label={`编辑设备 ${dev.label}`}
+                      onClick={() => onEditDevice(dev)}
+                      className={cn(
+                        'transition-opacity hover:text-[var(--accent)]',
+                        selected && connectionPhase === 'error'
+                          ? 'opacity-100 text-[var(--warning)]'
+                          : 'opacity-0 group-hover:opacity-100 focus-visible:opacity-100',
+                      )}
+                    >
+                      <Pencil className="size-3.5" />
+                    </button>
                     {devices.length > 1 && (
                       <button
                         type="button"
+                        title="移除设备"
                         aria-label={`移除设备 ${dev.label}`}
                         onClick={() => onRemoveDevice(dev.id)}
-                        className="opacity-0 transition-opacity hover:text-[var(--danger)] group-hover:opacity-100"
+                        className="opacity-0 transition-opacity hover:text-[var(--danger)] group-hover:opacity-100 focus-visible:opacity-100"
                       >
                         <Trash2 className="size-3.5" />
                       </button>
@@ -205,42 +232,59 @@ export function Sidebar({
         )}
       </div>
 
-      {/* Primary navigation */}
+      {/* Primary grouped navigation (6 items in 2 groups) */}
       <nav
-        className="flex flex-1 flex-col gap-1 overflow-y-auto p-2 strata-scroll"
+        className="flex flex-1 flex-col gap-3 overflow-y-auto p-2 strata-scroll"
         aria-label="主导航"
       >
-        {NAV_ITEMS.map((item) => {
-          const Icon = item.icon;
-          const active = activeView === item.id;
-          const counter =
-            item.id === 'terminal' && terminalTabCount > 0
-              ? terminalTabCount
-              : item.id === 'services' && runningServiceCount > 0
-                ? runningServiceCount
-                : null;
-          return (
-            <button
-              key={item.id}
-              type="button"
-              onClick={() => onSelectView(item.id)}
-              title={collapsed ? item.label : undefined}
-              className={cn(
-                'flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-xs font-medium transition-colors',
-                collapsed && 'justify-center px-0',
-                active
-                  ? 'bg-[var(--accent)]/15 text-[var(--accent)]'
-                  : 'text-[var(--text-secondary)] hover:bg-[var(--surface-card)] hover:text-[var(--text-primary)]',
-              )}
-            >
-              <Icon className="size-4 shrink-0" />
-              {!collapsed && <span className="flex-1 truncate text-left">{item.label}</span>}
-              {!collapsed && counter !== null && (
-                <Badge variant={active ? 'accent' : 'neutral'}>{counter}</Badge>
-              )}
-            </button>
-          );
-        })}
+        {!collapsed && navDisabled && (
+          <div className="rounded-lg border border-dashed border-[var(--border-hairline)] px-2.5 py-2 text-[11px] text-[var(--text-secondary)]">
+            连接 Android 设备后即可启用工作区功能
+          </div>
+        )}
+        {NAV_GROUPS.map((group) => (
+          <div key={group.title} className="flex flex-col gap-1">
+            {!collapsed && (
+              <div className="px-2.5 pt-0.5 text-[10px] font-semibold tracking-wider text-[var(--text-secondary)]/80 uppercase">
+                {group.title}
+              </div>
+            )}
+            {group.items.map((item) => {
+              const Icon = item.icon;
+              const active =
+                activeView === item.id || (item.id === 'containers' && activeView === 'install');
+              const counter =
+                item.id === 'terminal' && terminalTabCount > 0
+                  ? terminalTabCount
+                  : item.id === 'services' && runningServiceCount > 0
+                    ? runningServiceCount
+                    : null;
+              return (
+                <button
+                  key={item.id}
+                  type="button"
+                  disabled={navDisabled}
+                  onClick={() => onSelectView(item.id)}
+                  title={collapsed ? item.label : undefined}
+                  className={cn(
+                    'flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-xs font-medium transition-colors',
+                    collapsed && 'justify-center px-0',
+                    navDisabled && 'cursor-not-allowed opacity-45',
+                    active && !navDisabled
+                      ? 'bg-[var(--accent)]/15 text-[var(--accent)]'
+                      : 'text-[var(--text-secondary)] hover:bg-[var(--surface-card)] hover:text-[var(--text-primary)]',
+                  )}
+                >
+                  <Icon className="size-4 shrink-0" />
+                  {!collapsed && <span className="flex-1 truncate text-left">{item.label}</span>}
+                  {!collapsed && counter !== null && !navDisabled && (
+                    <Badge variant={active ? 'accent' : 'neutral'}>{counter}</Badge>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        ))}
       </nav>
 
       {/* Footer theme controls */}

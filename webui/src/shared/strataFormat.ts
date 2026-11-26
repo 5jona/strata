@@ -36,14 +36,14 @@ export const SERVICE_STATUS_META: Record<
   running: { label: '运行中', variant: 'success' },
   stopped: { label: '已停止', variant: 'neutral' },
   crashed: { label: '已崩溃', variant: 'danger' },
-  'circuit-open': { label: '熔断', variant: 'warning' },
+  'circuit-open': { label: '已熔断（连续失败过多）', variant: 'warning' },
 };
 
 const MAINTENANCE_OP_LABELS: Readonly<Record<string, string>> = {
   backup: '后台备份',
-  compact: '空间回收',
-  fsck: '磁盘检查',
-  dns: 'DNS 同步',
+  compact: '空闲空间回收',
+  fsck: '停机磁盘检查',
+  dns: 'DNS 解析同步',
 };
 
 /** Formats a byte count into a human-readable IEC unit string. */
@@ -64,16 +64,18 @@ export function splitBytes(bytes: number): { value: string; unit: string } {
   return { value: String(Math.round(bytes)), unit: 'B' };
 }
 
-/** Formats container uptime in milliseconds as a concise duration string. */
+/** Formats container uptime in milliseconds as a concise Chinese duration string. */
 export function formatUptime(uptimeMs: number): string {
   if (!Number.isFinite(uptimeMs) || uptimeMs <= 0) return '未运行';
   const totalSecs = Math.floor(uptimeMs / 1000);
-  const hours = Math.floor(totalSecs / 3600);
+  const days = Math.floor(totalSecs / 86400);
+  const hours = Math.floor((totalSecs % 86400) / 3600);
   const mins = Math.floor((totalSecs % 3600) / 60);
   const secs = totalSecs % 60;
-  if (hours > 0) return `${hours}h ${mins}m`;
-  if (mins > 0) return `${mins}m ${secs}s`;
-  return `${secs}s`;
+  if (days > 0) return `${days}天 ${hours}小时`;
+  if (hours > 0) return `${hours}小时 ${mins}分`;
+  if (mins > 0) return `${mins}分 ${secs}秒`;
+  return `${secs}秒`;
 }
 
 /** Builds a ready-to-copy SSH CLI command for connecting to a container. */

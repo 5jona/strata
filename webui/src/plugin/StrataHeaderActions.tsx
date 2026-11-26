@@ -48,7 +48,7 @@ export function StrataHeaderActions({
         <Button
           size="icon-sm"
           variant={clickThrough ? 'pill' : 'ghost'}
-          aria-label={clickThrough ? '退出点击穿透' : '开启浮窗点击穿透'}
+          aria-label={clickThrough ? '关闭浮窗穿透触摸' : '开启浮窗穿透触摸'}
           onClick={onToggleClickThrough}
         >
           {clickThrough ? <Lock className="size-3.5" /> : <Unlock className="size-3.5" />}

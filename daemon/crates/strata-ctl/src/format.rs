@@ -186,7 +186,10 @@ pub(crate) fn print_ssh_keys(r: &SshKeysResult) {
 pub(crate) fn print_daemon_status(d: &DaemonSummarySnapshot) {
     println!("pid               : {} (uid={})", d.pid, d.uid);
     println!("uptime            : {}s", d.uptime_ms / 1000);
-    println!("default_container : {}", d.default_container);
+    println!(
+        "default_container : {}",
+        d.default_container.as_deref().unwrap_or("(none)")
+    );
     println!(
         "containers        : {}/{} running",
         d.running_containers, d.total_containers

@@ -25,6 +25,7 @@ pub(super) struct ExecOutput {
     pub(super) status: i32,
     pub(super) stdout: String,
     pub(super) stderr: String,
+    #[allow(dead_code)]
     pub(super) timed_out: bool,
 }
 

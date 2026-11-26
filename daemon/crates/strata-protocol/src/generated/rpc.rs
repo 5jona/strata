@@ -55,6 +55,10 @@ pub enum ToolManagerKind {
     Uv,
     Bundle,
     System,
+    Apk,
+    Pacman,
+    Dnf,
+    Manual,
 }
 
 /// Logical category of container tools.
@@ -66,6 +70,25 @@ pub enum ToolGroupKind {
     CliDev,
     DebugL3L5,
     PythonUv,
+    Shell,
+    Discovered,
+}
+
+/// Provenance of a discovered tool manager or binary inside a container.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ToolInstallSource {
+    UserInstalled,
+    StrataManaged,
+    System,
+}
+
+/// Configuration scope when pinning/activating a tool version via tools.use.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolUseScope {
+    Global,
+    Workspace,
 }
 
 /// Mirror configuration preset for mise, apt, uv, npm, and cargo.
@@ -93,6 +116,23 @@ pub enum ToolsBootstrapProfile {
     Minimal,
     Dev,
     Debug,
+}
+
+/// Parameters for container.setDefault.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContainerSetDefaultParams {
+    pub id: String,
+}
+
+/// Result returned by container.setDefault.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContainerSetDefaultResult {
+    pub default_container: String,
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub previous_default_container: Option<String>,
 }
 
 /// Shared selector parameter targeting an explicit or default container.
@@ -415,13 +455,24 @@ pub struct ContainerCreateParams {
     #[serde(default)]
     pub hostname: Option<String>,
     #[serde(default)]
+    pub enable_ssh: bool,
+    #[serde(default)]
     pub ssh_port: Option<u16>,
     #[serde(default)]
     pub ssh_public_keys: Vec<String>,
     #[serde(default)]
     pub auto_start: bool,
+    #[serde(default)]
+    pub set_default: bool,
     #[serde(default = "default_container_create_params_host_bridge")]
     pub host_bridge: bool,
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub extra_char_devs: Option<Vec<String>>,
+    #[serde(default)]
+    pub l5_diagnostic_mounts: bool,
+    #[serde(default = "default_container_create_params_sync_android_dns")]
+    pub sync_android_dns: bool,
     #[serde(default = "default_container_create_params_noatime")]
     pub noatime: bool,
 }
@@ -555,6 +606,9 @@ pub struct ToolManagerHealth {
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bin_path: Option<String>,
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source: Option<ToolInstallSource>,
 }
 
 /// Fast local-only snapshot of container layout compliance, tool managers, and caches.
@@ -568,6 +622,16 @@ pub struct ToolsStatusResult {
     pub layout_compliant: bool,
     pub workspace_dir: String,
     pub mise_config_path: String,
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mise_data_dir: Option<String>,
+    #[serde(default)]
+    pub mise_config_paths: Vec<String>,
+    #[serde(default)]
+    pub legacy_strata_mise_detected: bool,
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub system_pkg_manager: Option<String>,
     pub mise: ToolManagerHealth,
     pub uv: ToolManagerHealth,
     pub apt: ToolManagerHealth,
@@ -621,6 +685,9 @@ pub struct InstalledToolItem {
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source_path: Option<String>,
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source: Option<ToolInstallSource>,
     #[serde(default = "default_installed_tool_item_active")]
     pub active: bool,
     #[serde(default = "default_installed_tool_item_installed")]
@@ -686,6 +753,8 @@ pub struct ToolBundleSpec {
 #[serde(rename_all = "camelCase")]
 pub struct ToolsCatalogResult {
     pub container: String,
+    #[serde(default)]
+    pub registry_available: bool,
     pub entries: Vec<ToolCatalogEntry>,
     pub bundles: Vec<ToolBundleSpec>,
 }
@@ -696,6 +765,9 @@ pub struct ToolsCatalogResult {
 pub struct ToolsConfigGetParams {
     #[serde(default)]
     pub container: Option<String>,
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub config_path: Option<String>,
 }
 
 /// Sanitized tool manager mirror, proxy, and mise configuration (never exposes raw secrets).
@@ -703,6 +775,11 @@ pub struct ToolsConfigGetParams {
 #[serde(rename_all = "camelCase")]
 pub struct ToolsConfigResult {
     pub container: String,
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub config_path: Option<String>,
+    #[serde(default)]
+    pub config_paths: Vec<String>,
     pub mirror_preset: ToolMirrorPreset,
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -750,6 +827,9 @@ pub struct ToolsConfigResult {
 pub struct ToolsConfigSetParams {
     #[serde(default)]
     pub container: Option<String>,
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub config_path: Option<String>,
     #[serde(default)]
     pub mirror_preset: Option<ToolMirrorPreset>,
     #[serde(default)]
@@ -889,6 +969,61 @@ pub struct ToolsCacheCleanResult {
     pub freed_bytes: u64,
 }
 
+/// Parameters for tools.versions querying remote/installable versions.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolsVersionsParams {
+    #[serde(default)]
+    pub container: Option<String>,
+    pub manager: ToolManagerKind,
+    pub name: String,
+    #[serde(default)]
+    pub include_prerelease: bool,
+}
+
+/// Single installable or installed version candidate returned by tools.versions.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolVersionOption {
+    pub version: String,
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub created_at: Option<String>,
+    #[serde(default)]
+    pub installed: bool,
+    #[serde(default)]
+    pub active: bool,
+    #[serde(default)]
+    pub prerelease: bool,
+}
+
+/// Result returned by tools.versions.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolsVersionsResult {
+    pub container: String,
+    pub manager: ToolManagerKind,
+    pub name: String,
+    pub versions: Vec<ToolVersionOption>,
+}
+
+/// Parameters for tools.use switching or pinning an active tool version.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolsUseParams {
+    #[serde(default)]
+    pub container: Option<String>,
+    pub manager: ToolManagerKind,
+    pub name: String,
+    pub version: String,
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scope: Option<ToolUseScope>,
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub config_path: Option<String>,
+}
+
 /// Event payload emitted when a container tools mutation task completes.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -905,6 +1040,10 @@ fn default_container_create_params_size_mb() -> u64 {
 }
 
 fn default_container_create_params_host_bridge() -> bool {
+    true
+}
+
+fn default_container_create_params_sync_android_dns() -> bool {
     true
 }
 

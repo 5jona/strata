@@ -4,8 +4,16 @@ use std::collections::BTreeSet;
 
 use thiserror::Error;
 
-use crate::config::{BindMount, ContainerConfig, StrataConfig};
-use crate::constants::{CONFIG_SCHEMA_VERSION, L5_DIAG_MOUNT_PATHS};
+#[path = "validate_helpers.rs"]
+mod helpers;
+
+use helpers::{
+    is_disallowed_mount_host_path, is_safe_char_dev_name, is_valid_hostname, normalize_abs_slashes,
+    validate_abs_path,
+};
+
+use crate::config::{ContainerConfig, StrataConfig};
+use crate::constants::CONFIG_SCHEMA_VERSION;
 
 const MAX_SERVICE_SPEC_BYTES: usize = 32_768;
 
@@ -81,11 +89,13 @@ pub fn validate_strata_config(cfg: &StrataConfig) -> Result<(), ConfigValidation
     if cfg.web.enabled && cfg.web.port == 0 {
         return Err(ConfigValidationError::InvalidWebPort(cfg.web.port));
     }
-    validate_container_id(&cfg.default_container)?;
-    if !cfg.containers.contains_key(&cfg.default_container) {
-        return Err(ConfigValidationError::MissingDefaultContainer(
-            cfg.default_container.clone(),
-        ));
+    if let Some(default_id) = cfg.default_container.as_deref() {
+        validate_container_id(default_id)?;
+        if !cfg.containers.contains_key(default_id) {
+            return Err(ConfigValidationError::MissingDefaultContainer(
+                default_id.to_owned(),
+            ));
+        }
     }
 
     let mut seen_images = BTreeSet::new();
@@ -119,7 +129,11 @@ pub fn validate_strata_config(cfg: &StrataConfig) -> Result<(), ConfigValidation
     Ok(())
 }
 
-fn validate_container_config(id: &str, cfg: &ContainerConfig) -> Result<(), ConfigValidationError> {
+/// Validates a single container's paths, hostname, OOM score, SSH port, char devices, mounts, and services.
+pub fn validate_container_config(
+    id: &str,
+    cfg: &ContainerConfig,
+) -> Result<(), ConfigValidationError> {
     validate_abs_path(id, &cfg.image_path)?;
     validate_abs_path(id, &cfg.mount_dir)?;
     if !is_valid_hostname(&cfg.hostname) {
@@ -244,155 +258,4 @@ pub fn validate_service_spec(
         });
     }
     Ok(())
-}
-
-fn validate_abs_path(container: &str, path: &str) -> Result<(), ConfigValidationError> {
-    if !path.starts_with('/') || path.len() < 2 || normalize_abs_slashes(path) == "/" {
-        return Err(ConfigValidationError::InvalidPath {
-            container: container.to_owned(),
-            path: path.to_owned(),
-            reason: "must be a non-root absolute path",
-        });
-    }
-    if path.contains('\0') || path.split('/').any(|seg| seg == ".." || seg == ".") {
-        return Err(ConfigValidationError::InvalidPath {
-            container: container.to_owned(),
-            path: path.to_owned(),
-            reason: "must not contain NUL bytes or '.'/'..' traversal",
-        });
-    }
-    Ok(())
-}
-
-fn normalize_abs_slashes(path: &str) -> String {
-    let segs: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
-    if segs.is_empty() {
-        "/".to_owned()
-    } else {
-        format!("/{}", segs.join("/"))
-    }
-}
-
-fn is_disallowed_mount_host_path(bm: &BindMount) -> bool {
-    let norm = normalize_abs_slashes(&bm.host_path);
-    if bm.read_only && L5_DIAG_MOUNT_PATHS.contains(&norm.as_str()) {
-        return false;
-    }
-    matches_prefix(&norm, "/dev")
-        || matches_prefix(&norm, "/proc")
-        || matches_prefix(&norm, "/sys")
-        || matches_prefix(&norm, "/data/adb")
-}
-
-fn matches_prefix(norm_path: &str, prefix: &str) -> bool {
-    norm_path == prefix
-        || norm_path
-            .strip_prefix(prefix)
-            .is_some_and(|rest| rest.starts_with('/'))
-}
-
-fn is_valid_hostname(name: &str) -> bool {
-    let bytes = name.as_bytes();
-    if bytes.is_empty() || bytes.len() > 63 {
-        return false;
-    }
-    if !bytes[0].is_ascii_alphanumeric() || !bytes[bytes.len() - 1].is_ascii_alphanumeric() {
-        return false;
-    }
-    bytes
-        .iter()
-        .all(|&b| b.is_ascii_alphanumeric() || b == b'-' || b == b'.')
-}
-
-fn is_safe_char_dev_name(dev: &str) -> bool {
-    if dev.is_empty()
-        || dev.starts_with('/')
-        || dev.starts_with("block")
-        || dev.contains("..")
-        || dev.contains('\\')
-        || dev.contains('\0')
-    {
-        return false;
-    }
-    dev.bytes()
-        .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'.' | b'/'))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn rejects_invalid_ids_traversal_and_port_collisions() {
-        assert!(validate_container_id("main").is_ok());
-        assert!(validate_container_id("dev-box-2").is_ok());
-        assert!(validate_container_id("../evil").is_err());
-        assert!(validate_container_id("Main").is_err());
-        assert!(validate_container_id("a--b").is_err());
-
-        let bad_ver = StrataConfig {
-            version: CONFIG_SCHEMA_VERSION + 1,
-            ..StrataConfig::default()
-        };
-        assert!(matches!(
-            bad_ver.validate(),
-            Err(ConfigValidationError::InvalidSchemaVersion(v)) if v == CONFIG_SCHEMA_VERSION + 1
-        ));
-
-        let mut cfg = StrataConfig::default();
-        let mut second = ContainerConfig::default_for_id("lab");
-        second.ssh.port = 2222;
-        cfg.containers.insert("lab".to_owned(), second);
-        assert!(matches!(
-            cfg.validate(),
-            Err(ConfigValidationError::DuplicateSshPort { port: 2222, .. })
-        ));
-
-        if let Some(lab) = cfg.containers.get_mut("lab") {
-            lab.ssh.port = 2223;
-            lab.extra_char_devs.push("block/sda".to_owned());
-        }
-        assert!(matches!(
-            cfg.validate(),
-            Err(ConfigValidationError::InvalidCharDev { .. })
-        ));
-    }
-
-    #[test]
-    fn validates_extra_char_devs_and_extra_mounts() {
-        use crate::config::{BindMount, l5_diag_mounts};
-
-        let mut cfg = StrataConfig::default();
-        let main = cfg.containers.get_mut("main").expect("main container");
-        main.extra_char_devs = vec!["uinput".to_owned(), "input/event0".to_owned()];
-        main.extra_mounts = l5_diag_mounts();
-        main.extra_mounts.push(BindMount {
-            host_path: "/data/local/tmp/shared".to_owned(),
-            container_path: "/mnt/shared".to_owned(),
-            read_only: true,
-        });
-        assert!(cfg.validate().is_ok());
-
-        for (host, dst) in [
-            ("/dev", "/mnt/d"),
-            ("/dev/block", "/mnt/b"),
-            ("/dev/block/sda", "/mnt/b"),
-            ("/proc", "/mnt/p"),
-            ("/sys", "/mnt/s"),
-            ("/data/adb", "/mnt/adb"),
-            ("/data/adb/strata/run", "/mnt/run"),
-            ("/data/local/tmp", "/"),
-            ("/data/local/tmp", "/mnt/../escape"),
-        ] {
-            cfg.containers.get_mut("main").expect("main").extra_mounts = vec![BindMount {
-                host_path: host.to_owned(),
-                container_path: dst.to_owned(),
-                read_only: true,
-            }];
-            assert!(matches!(
-                cfg.validate(),
-                Err(ConfigValidationError::InvalidPath { .. })
-            ));
-        }
-    }
 }

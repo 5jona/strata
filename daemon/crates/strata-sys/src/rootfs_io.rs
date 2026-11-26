@@ -2,6 +2,7 @@
 //! Prevents malicious symlinks inside an untrusted container rootfs from escaping onto the Android host.
 
 mod raw;
+mod tree;
 
 use std::ffi::CString;
 use std::fs::File;

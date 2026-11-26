@@ -159,7 +159,7 @@ export function ServicesPanel({
 
       {services.length === 0 ? (
         <Card className="p-4 text-center text-xs text-[var(--text-secondary)]">
-          当前容器未配置托管后台服务（可在 Strata Desktop 中添加自启服务）。
+          当前容器尚未配置托管后台服务（可在电脑端 Strata Desktop 中添加自启服务）。
         </Card>
       ) : (
         services.map((svc) => {
@@ -185,7 +185,7 @@ export function ServicesPanel({
                     <span>{svc.id}</span>
                     {svc.pid ? <span>· PID {svc.pid}</span> : null}
                     <span>· {formatUptime(svc.uptimeMs)}</span>
-                    {svc.restartCount > 0 ? <span>· 重启 {svc.restartCount}</span> : null}
+                    {svc.restartCount > 0 ? <span>· 已重启 {svc.restartCount} 次</span> : null}
                   </p>
                   {svc.lastError ? (
                     <p className="mt-1 truncate text-[10px] text-[var(--danger)]">
@@ -196,7 +196,7 @@ export function ServicesPanel({
 
                 {onToggleAutoStart ? (
                   <div className="flex shrink-0 items-center gap-1.5">
-                    <span className="text-[11px] text-[var(--text-secondary)]">自启</span>
+                    <span className="text-[11px] text-[var(--text-secondary)]">开机自启</span>
                     <Switch
                       checked={svc.autoStart}
                       disabled={isBusy}

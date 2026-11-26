@@ -33,6 +33,14 @@ async fn http_and_ws_api_enforces_security_guards_subprotocol_echo_and_revocatio
     let cfg_path = base.join("config.json");
     let token_path = base.join("web.token");
     let config_store = Arc::new(ConfigStore::load_or_seed(cfg_path).expect("seed config"));
+    let _ = config_store
+        .add_container(
+            "main".to_owned(),
+            strata_protocol::ContainerConfig::default_for_id("main"),
+            true,
+        )
+        .await
+        .expect("seed main");
     let event_hub = Arc::new(EventHub::new());
     let sideveil = Arc::new(SideVeilBridgeSeam::new());
     let wakelock = Arc::new(WakeLockManager::new());

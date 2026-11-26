@@ -1,10 +1,9 @@
 //! Reads and updates sanitized container mirror, proxy, mise, and secret configuration.
 
-use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use strata_protocol::ContainerConfig;
-use strata_protocol::constants::CONTAINER_MISE_CONFIG_FILE;
 use strata_protocol::rpc::{
     ToolMirrorPreset, ToolsConfigGetParams, ToolsConfigResult, ToolsConfigSetParams,
 };
@@ -15,12 +14,22 @@ use strata_sys::rootfs_io::RootDir;
 use crate::error::{DaemonError, DaemonResult};
 use crate::tools::ToolsManager;
 use crate::tools::config_patch::{
-    parse_mise_toml_summary, patch_mise_toml, sync_apt_mirror_sources, validate_config_params,
+    is_ubuntu_os_release, parse_mise_toml_summary, patch_mise_toml, sync_apt_mirror_sources,
+    validate_config_params,
 };
+use crate::tools::config_presets::{
+    apply_preset_defaults, non_empty, parse_preset, set_mirror_env, set_opt_env,
+};
+use crate::tools::discovery::discover_runtime_managers;
 use crate::tools::exec::{
-    MISE_MIRRORS_ENV_REL, MISE_SECRETS_ENV_REL, parse_env_assignments, quote_posix_env,
-    read_root_utf8,
+    MISE_MIRRORS_ENV_REL, MISE_SECRETS_ENV_REL, load_container_tool_env_from_mount,
+    parse_env_assignments, quote_posix_env, read_root_utf8,
 };
+use crate::tools::versions_parse::validate_safe_container_path;
+
+pub(super) const DEFAULT_XDG_MISE_CONFIG: &str = "/root/.config/mise/config.toml";
+const LEGACY_MISE_CONFIG: &str = "/etc/strata/mise/config.toml";
+const WORKSPACE_MISE_CONFIG: &str = "/workspace/mise.toml";
 
 pub(super) const KEY_PRESET: &str = "STRATA_MIRROR_PRESET";
 pub(super) const KEY_APT_MIRROR: &str = "STRATA_APT_MIRROR_URL";
@@ -44,6 +53,11 @@ pub(super) async fn get_config(
         .manager
         .resolve_container(params.container.as_deref())
         .await?;
+    let requested_path = match params.config_path.as_deref() {
+        Some(raw) if !raw.trim().is_empty() => Some(validate_safe_container_path(raw)?),
+        _ => None,
+    };
+    let discovered_paths = discover_live_config_paths(tools, &container).await;
     let mount_dir = PathBuf::from(&entry.mount_dir);
     let cid = container.clone();
 
@@ -54,19 +68,24 @@ pub(super) async fn get_config(
             )));
         }
         let root = RootDir::open(&mount_dir).map_err(strata_runtime::RuntimeError::from_sys)?;
-        read_config_from_root(&cid, &root)
+        read_config_from_root(&cid, &root, requested_path.as_deref(), discovered_paths)
     })
     .await
     .map_err(|e| DaemonError::join("tools.configGet join", e))?
 }
 
 pub(super) async fn set_config(
-    _tools: &ToolsManager,
+    tools: &ToolsManager,
     container: &str,
     entry: &ContainerConfig,
     params: ToolsConfigSetParams,
 ) -> DaemonResult<ToolsConfigResult> {
     validate_config_params(&params)?;
+    let requested_path = match params.config_path.as_deref() {
+        Some(raw) if !raw.trim().is_empty() => Some(validate_safe_container_path(raw)?),
+        _ => None,
+    };
+    let discovered_paths = discover_live_config_paths(tools, container).await;
     let mount_dir = PathBuf::from(&entry.mount_dir);
     let cid = container.to_owned();
 
@@ -77,23 +96,88 @@ pub(super) async fn set_config(
             )));
         }
         let root = RootDir::open(&mount_dir).map_err(strata_runtime::RuntimeError::from_sys)?;
-        apply_config_update(&cid, &root, params)?;
-        read_config_from_root(&cid, &root)
+        let active_path =
+            resolve_active_config_path(&root, requested_path.as_deref(), &discovered_paths);
+        apply_config_update_at(&cid, &root, params, &active_path)?;
+        read_config_from_root(&cid, &root, Some(&active_path), discovered_paths)
     })
     .await
     .map_err(|e| DaemonError::join("tools.configSet join", e))?
 }
 
+async fn discover_live_config_paths(tools: &ToolsManager, container: &str) -> Vec<String> {
+    let Ok((_, ns_pid, cfg)) = tools.manager.running_target(Some(container)).await else {
+        return Vec::new();
+    };
+    let mdir = PathBuf::from(&cfg.mount_dir);
+    let env = tokio::task::spawn_blocking(move || load_container_tool_env_from_mount(&mdir))
+        .await
+        .unwrap_or_default();
+    discover_runtime_managers(tools, container, ns_pid, &cfg, &env)
+        .await
+        .mise_config_paths
+}
+
+fn collect_config_paths(root: &RootDir, discovered: &[String]) -> Vec<String> {
+    let mut set = BTreeSet::new();
+    for p in discovered {
+        if validate_safe_container_path(p).is_ok() {
+            set.insert(p.clone());
+        }
+    }
+    for cand in [
+        DEFAULT_XDG_MISE_CONFIG,
+        LEGACY_MISE_CONFIG,
+        WORKSPACE_MISE_CONFIG,
+    ] {
+        if root
+            .open_file_ro_nofollow(Path::new(cand.trim_start_matches('/')))
+            .is_ok()
+        {
+            set.insert(cand.to_owned());
+        }
+    }
+    set.into_iter().collect()
+}
+
+fn resolve_active_config_path(
+    root: &RootDir,
+    requested: Option<&str>,
+    discovered: &[String],
+) -> String {
+    if let Some(req) = requested {
+        return req.to_owned();
+    }
+    for p in discovered {
+        if validate_safe_container_path(p).is_ok() {
+            return p.clone();
+        }
+    }
+    for cand in [DEFAULT_XDG_MISE_CONFIG, LEGACY_MISE_CONFIG] {
+        if root
+            .open_file_ro_nofollow(Path::new(cand.trim_start_matches('/')))
+            .is_ok()
+        {
+            return cand.to_owned();
+        }
+    }
+    DEFAULT_XDG_MISE_CONFIG.to_owned()
+}
+
 pub(super) fn read_config_from_root(
     container: &str,
     root: &RootDir,
+    requested_path: Option<&str>,
+    discovered_paths: Vec<String>,
 ) -> DaemonResult<ToolsConfigResult> {
     let mirrors_raw = read_root_utf8(root, MISE_MIRRORS_ENV_REL).unwrap_or_default();
     let mirrors = parse_env_assignments(&mirrors_raw);
     let secrets_raw = read_root_utf8(root, MISE_SECRETS_ENV_REL).unwrap_or_default();
     let secrets = parse_env_assignments(&secrets_raw);
-    let mise_config_toml = read_root_utf8(root, CONTAINER_MISE_CONFIG_FILE.trim_start_matches('/'))
-        .unwrap_or_default();
+    let config_paths = collect_config_paths(root, &discovered_paths);
+    let active_path = resolve_active_config_path(root, requested_path, &discovered_paths);
+    let mise_config_toml =
+        read_root_utf8(root, active_path.trim_start_matches('/')).unwrap_or_default();
     let toml_summary = parse_mise_toml_summary(&mise_config_toml);
 
     let github_tok = secrets
@@ -121,37 +205,68 @@ pub(super) fn read_config_from_root(
         has_github_token,
         github_token_masked,
         mise_config_toml,
+        config_path: Some(active_path),
+        config_paths,
     })
 }
 
 pub(super) fn apply_config_update(
+    container: &str,
+    root: &RootDir,
+    params: ToolsConfigSetParams,
+) -> DaemonResult<()> {
+    let active_path = resolve_active_config_path(root, params.config_path.as_deref(), &[]);
+    apply_config_update_at(container, root, params, &active_path)
+}
+
+fn apply_config_update_at(
     _container: &str,
     root: &RootDir,
     params: ToolsConfigSetParams,
+    active_toml_path: &str,
 ) -> DaemonResult<()> {
     let mirrors_raw = read_root_utf8(root, MISE_MIRRORS_ENV_REL).unwrap_or_default();
     let mut env = parse_env_assignments(&mirrors_raw);
     let os_rel = read_root_utf8(root, "usr/lib/os-release")
         .or_else(|| read_root_utf8(root, "etc/os-release"))
         .unwrap_or_default();
-    let is_ubuntu = os_rel.to_ascii_lowercase().contains("id=ubuntu");
+    let is_ubuntu = is_ubuntu_os_release(&os_rel);
 
+    let ignore_empty_mirrors = matches!(
+        params.mirror_preset,
+        Some(ToolMirrorPreset::Tuna | ToolMirrorPreset::Official)
+    );
     if let Some(preset) = params.mirror_preset {
         apply_preset_defaults(&mut env, preset, is_ubuntu);
     }
 
-    set_opt_env(&mut env, KEY_APT_MIRROR, params.apt_mirror_url.as_deref());
-    set_opt_env(&mut env, KEY_NODE_MIRROR, params.node_mirror_url.as_deref());
-    if let Some(pypi) = params.pypi_index_url.as_deref() {
+    set_mirror_env(
+        &mut env,
+        KEY_APT_MIRROR,
+        params.apt_mirror_url.as_deref(),
+        ignore_empty_mirrors,
+    );
+    set_mirror_env(
+        &mut env,
+        KEY_NODE_MIRROR,
+        params.node_mirror_url.as_deref(),
+        ignore_empty_mirrors,
+    );
+    if let Some(pypi) = params.pypi_index_url.as_deref()
+        && (!ignore_empty_mirrors || !pypi.trim().is_empty())
+    {
         set_opt_env(&mut env, KEY_UV_INDEX, Some(pypi));
         set_opt_env(&mut env, KEY_PIP_INDEX, Some(pypi));
     }
-    set_opt_env(
+    set_mirror_env(
         &mut env,
         KEY_NPM_REGISTRY,
         params.npm_registry_url.as_deref(),
+        ignore_empty_mirrors,
     );
-    if let Some(rustup) = params.rustup_dist_server.as_deref() {
+    if let Some(rustup) = params.rustup_dist_server.as_deref()
+        && (!ignore_empty_mirrors || !rustup.trim().is_empty())
+    {
         set_opt_env(&mut env, KEY_RUSTUP_DIST, Some(rustup));
         let root_url = rustup.trim().trim_end_matches('/').to_owned();
         if root_url.is_empty() {
@@ -160,11 +275,18 @@ pub(super) fn apply_config_update(
             env.insert(KEY_RUSTUP_ROOT.to_owned(), format!("{root_url}/rustup"));
         }
     }
-    set_opt_env(&mut env, KEY_GOPROXY, params.goproxy.as_deref());
+    set_mirror_env(
+        &mut env,
+        KEY_GOPROXY,
+        params.goproxy.as_deref(),
+        ignore_empty_mirrors,
+    );
     set_opt_env(&mut env, KEY_HTTP_PROXY, params.http_proxy.as_deref());
     set_opt_env(&mut env, KEY_HTTPS_PROXY, params.https_proxy.as_deref());
     set_opt_env(&mut env, KEY_NO_PROXY, params.no_proxy.as_deref());
 
+    root.ensure_dir(Path::new("etc/strata/mise"), 0o755)
+        .map_err(strata_runtime::RuntimeError::from_sys)?;
     let mut rendered = String::from("# Strata managed tool mirror & proxy overrides\n");
     for (k, v) in &env {
         rendered.push_str(&format!("export {k}={}\n", quote_posix_env(v)));
@@ -176,7 +298,7 @@ pub(super) fn apply_config_update(
         sync_apt_mirror_sources(root, env.get(KEY_APT_MIRROR).map(String::as_str));
     }
 
-    if let Some(token_raw) = params.github_token {
+    if let Some(ref token_raw) = params.github_token {
         let trimmed = token_raw.trim();
         let rel = Path::new(MISE_SECRETS_ENV_REL);
         if trimmed.is_empty() {
@@ -192,187 +314,65 @@ pub(super) fn apply_config_update(
         }
     }
 
-    let toml_rel = Path::new(CONTAINER_MISE_CONFIG_FILE.trim_start_matches('/'));
-    if let Some(full_toml) = params.mise_config_toml {
-        root.write_atomic(toml_rel, full_toml.as_bytes(), 0o644)
-            .map_err(strata_runtime::RuntimeError::from_sys)?;
-    } else if params.jobs.is_some()
+    update_mise_toml(root, active_toml_path, &params)?;
+    Ok(())
+}
+
+fn update_mise_toml(
+    root: &RootDir,
+    active_toml_path: &str,
+    params: &ToolsConfigSetParams,
+) -> DaemonResult<()> {
+    let has_structured = params.jobs.is_some()
         || params.minimum_release_age.is_some()
-        || params.url_replacements.is_some()
+        || params.url_replacements.is_some();
+    if params.mise_config_toml.is_none() && !has_structured {
+        return Ok(());
+    }
+
+    let rel_str = active_toml_path.trim_start_matches('/');
+    let toml_rel = Path::new(rel_str);
+    if let Some(parent) = toml_rel.parent()
+        && !parent.as_os_str().is_empty()
     {
-        let existing = read_root_utf8(root, CONTAINER_MISE_CONFIG_FILE.trim_start_matches('/'))
-            .unwrap_or_default();
-        let age_patch = params.minimum_release_age.as_ref().map(|s| {
-            let t = s.trim();
-            (!t.is_empty()).then(|| t.to_owned())
-        });
-        let updated = patch_mise_toml(
+        root.ensure_dir(parent, 0o755)
+            .map_err(strata_runtime::RuntimeError::from_sys)?;
+    }
+
+    let existing = read_root_utf8(root, rel_str).unwrap_or_default();
+    let old_summary = parse_mise_toml_summary(&existing);
+    let age_patch = params.minimum_release_age.as_ref().map(|s| {
+        let t = s.trim();
+        (!t.is_empty()).then(|| t.to_owned())
+    });
+
+    let final_toml = if let Some(ref raw_toml) = params.mise_config_toml {
+        let raw_unchanged = raw_toml.trim() == existing.trim();
+        let jobs_patch = params
+            .jobs
+            .filter(|j| raw_unchanged || *j != old_summary.jobs);
+        let age_eff = age_patch
+            .as_ref()
+            .filter(|a| raw_unchanged || *a != &old_summary.minimum_release_age);
+        let repls_eff = params
+            .url_replacements
+            .as_ref()
+            .filter(|r| raw_unchanged || *r != &old_summary.url_replacements);
+        if jobs_patch.is_some() || age_eff.is_some() || repls_eff.is_some() {
+            patch_mise_toml(raw_toml, jobs_patch, age_eff, repls_eff)
+        } else {
+            raw_toml.clone()
+        }
+    } else {
+        patch_mise_toml(
             &existing,
             params.jobs,
             age_patch.as_ref(),
             params.url_replacements.as_ref(),
-        );
-        root.write_atomic(toml_rel, updated.as_bytes(), 0o644)
-            .map_err(strata_runtime::RuntimeError::from_sys)?;
-    }
+        )
+    };
+
+    root.write_atomic(toml_rel, final_toml.as_bytes(), 0o644)
+        .map_err(strata_runtime::RuntimeError::from_sys)?;
     Ok(())
-}
-
-pub(super) fn apply_preset_defaults(
-    env: &mut BTreeMap<String, String>,
-    preset: ToolMirrorPreset,
-    is_ubuntu: bool,
-) {
-    match preset {
-        ToolMirrorPreset::Tuna => {
-            env.insert(KEY_PRESET.to_owned(), "tuna".to_owned());
-            env.insert(
-                KEY_APT_MIRROR.to_owned(),
-                if is_ubuntu {
-                    "https://mirrors.tuna.tsinghua.edu.cn/ubuntu-ports".to_owned()
-                } else {
-                    "https://mirrors.tuna.tsinghua.edu.cn/debian".to_owned()
-                },
-            );
-            env.insert(
-                KEY_NODE_MIRROR.to_owned(),
-                "https://mirrors.tuna.tsinghua.edu.cn/nodejs-release/".to_owned(),
-            );
-            env.insert(
-                KEY_UV_INDEX.to_owned(),
-                "https://pypi.tuna.tsinghua.edu.cn/simple".to_owned(),
-            );
-            env.insert(
-                KEY_PIP_INDEX.to_owned(),
-                "https://pypi.tuna.tsinghua.edu.cn/simple".to_owned(),
-            );
-            env.insert(
-                KEY_NPM_REGISTRY.to_owned(),
-                "https://registry.npmmirror.com".to_owned(),
-            );
-            env.insert(
-                KEY_RUSTUP_DIST.to_owned(),
-                "https://mirrors.tuna.tsinghua.edu.cn/rustup".to_owned(),
-            );
-            env.insert(
-                KEY_RUSTUP_ROOT.to_owned(),
-                "https://mirrors.tuna.tsinghua.edu.cn/rustup/rustup".to_owned(),
-            );
-            env.insert(
-                KEY_GOPROXY.to_owned(),
-                "https://goproxy.cn,direct".to_owned(),
-            );
-        }
-        ToolMirrorPreset::Official => {
-            env.insert(KEY_PRESET.to_owned(), "official".to_owned());
-            for k in [
-                KEY_APT_MIRROR,
-                KEY_NODE_MIRROR,
-                KEY_UV_INDEX,
-                KEY_PIP_INDEX,
-                KEY_NPM_REGISTRY,
-                KEY_RUSTUP_DIST,
-                KEY_RUSTUP_ROOT,
-                KEY_GOPROXY,
-            ] {
-                env.remove(k);
-            }
-        }
-        ToolMirrorPreset::Custom => {
-            env.insert(KEY_PRESET.to_owned(), "custom".to_owned());
-        }
-    }
-}
-
-pub(super) fn parse_preset(raw: Option<&str>) -> ToolMirrorPreset {
-    match raw {
-        Some("tuna") => ToolMirrorPreset::Tuna,
-        Some("custom") => ToolMirrorPreset::Custom,
-        _ => ToolMirrorPreset::Official,
-    }
-}
-
-fn non_empty(map: &BTreeMap<String, String>, key: &str) -> Option<String> {
-    map.get(key)
-        .map(|s| s.trim().to_owned())
-        .filter(|s| !s.is_empty())
-}
-
-fn set_opt_env(map: &mut BTreeMap<String, String>, key: &str, value: Option<&str>) {
-    if let Some(raw) = value {
-        let trimmed = raw.trim();
-        if trimmed.is_empty() {
-            map.remove(key);
-        } else {
-            map.insert(key.to_owned(), trimmed.to_owned());
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::os::unix::fs::PermissionsExt;
-
-    #[test]
-    fn secret_token_is_written_0600_and_never_returned_plaintext() {
-        let base = std::env::temp_dir().join(format!("strata-tools-cfg-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&base);
-        std::fs::create_dir_all(base.join("etc/strata/mise")).expect("mkdir");
-        std::fs::write(base.join("etc/os-release"), "ID=debian\n").expect("os-release");
-        let root = RootDir::open(&base).expect("open root");
-
-        apply_config_update(
-            "main",
-            &root,
-            ToolsConfigSetParams {
-                mirror_preset: Some(ToolMirrorPreset::Tuna),
-                github_token: Some("ghp_supersecret1234".to_owned()),
-                jobs: Some(6),
-                ..Default::default()
-            },
-        )
-        .expect("apply");
-
-        let meta =
-            std::fs::metadata(base.join("etc/strata/mise/secrets.env")).expect("secret meta");
-        assert_eq!(meta.permissions().mode() & 0o777, 0o600);
-
-        let res = read_config_from_root("main", &root).expect("read config");
-        assert!(res.has_github_token);
-        assert_eq!(res.mirror_preset, ToolMirrorPreset::Tuna);
-        assert_eq!(res.jobs, 6);
-        let serialized = serde_json::to_string(&res).expect("serialize");
-        assert!(!serialized.contains("ghp_supersecret1234"));
-        let _ = std::fs::remove_dir_all(&base);
-    }
-
-    #[test]
-    fn ubuntu_preset_detects_usr_lib_os_release_when_etc_is_symlink() {
-        let base = std::env::temp_dir().join(format!("strata-tools-ubuntu-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&base);
-        std::fs::create_dir_all(base.join("etc/strata/mise")).expect("mkdir etc");
-        std::fs::create_dir_all(base.join("usr/lib")).expect("mkdir usr/lib");
-        std::fs::write(base.join("usr/lib/os-release"), "ID=ubuntu\n").expect("write os-release");
-        std::os::unix::fs::symlink("../usr/lib/os-release", base.join("etc/os-release"))
-            .expect("symlink");
-        let root = RootDir::open(&base).expect("open root");
-
-        apply_config_update(
-            "main",
-            &root,
-            ToolsConfigSetParams {
-                mirror_preset: Some(ToolMirrorPreset::Tuna),
-                ..Default::default()
-            },
-        )
-        .expect("apply");
-
-        let res = read_config_from_root("main", &root).expect("read config");
-        assert_eq!(
-            res.apt_mirror_url.as_deref(),
-            Some("https://mirrors.tuna.tsinghua.edu.cn/ubuntu-ports")
-        );
-        let _ = std::fs::remove_dir_all(&base);
-    }
 }

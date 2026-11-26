@@ -31,7 +31,7 @@ test('formatting helpers format bytes, uptime, SSH, and VS Code URIs accurately'
 
   assert.equal(formatUptime(0), '未运行');
   assert.equal(formatUptime(45_000), '45秒');
-  assert.equal(formatUptime(3_660_000), '1时 1分');
+  assert.equal(formatUptime(3_660_000), '1小时 1分');
 
   const target = {
     user: 'root',

@@ -152,7 +152,13 @@ pub(crate) fn exec_container_command(
     for (key, val) in CANONICAL_CONTAINER_ENV {
         cmd.env(key, val);
     }
-    cmd.env("BASH_ENV", CONTAINER_PROFILE_ENV_PATH)
+    let default_shell = if Path::new("/bin/bash").is_file() {
+        "/bin/bash"
+    } else {
+        "/bin/sh"
+    };
+    cmd.env("SHELL", default_shell)
+        .env("BASH_ENV", CONTAINER_PROFILE_ENV_PATH)
         .env("TERM", term.unwrap_or("xterm-256color"));
     if let Some(vars) = extra_env {
         for (k, v) in vars {

@@ -1,100 +1,25 @@
-//! Filtering, classification, and bundle expansion over the curated ARM64/GKI tool catalog.
+//! Filtering, classification, dynamic `mise registry` search, and bundle expansion.
 
+use std::collections::HashSet;
+use std::path::PathBuf;
+use std::time::Duration;
+
+use serde_json::Value;
 use strata_protocol::rpc::{
-    ToolBundleSpec, ToolCatalogEntry, ToolGroupKind, ToolManagerKind, ToolsBootstrapProfile,
-    ToolsCatalogParams, ToolsCatalogResult,
+    ToolBundleSpec, ToolCatalogEntry, ToolGroupKind, ToolManagerKind, ToolsCatalogParams,
+    ToolsCatalogResult,
 };
 use strata_protocol::tools::validate_package_spec;
 
 use crate::error::{DaemonError, DaemonResult};
+use crate::tools::ToolsManager;
+use crate::tools::catalog_bundles::BUNDLES;
+pub(super) use crate::tools::catalog_bundles::profile_packages;
 use crate::tools::catalog_data::CATALOG_ITEMS;
+use crate::tools::discovery::resolve_live_tool_bins;
+use crate::tools::exec::{load_container_tool_env_from_mount, run_container_command_bounded};
 
-struct StaticBundle {
-    id: &'static str,
-    name: &'static str,
-    summary: &'static str,
-    tools: &'static [&'static str],
-}
-
-const BUNDLES: &[StaticBundle] = &[
-    StaticBundle {
-        id: "core-dev",
-        name: "Core Dev",
-        summary: "Python 3.12, Node LTS, uv, git, curl, tmux, ripgrep, fd, jq",
-        tools: &[
-            "apt:ca-certificates",
-            "apt:curl",
-            "apt:git",
-            "apt:tmux",
-            "mise:python@3.12",
-            "mise:node@lts",
-            "mise:uv@latest",
-            "mise:ripgrep@latest",
-            "mise:fd@latest",
-            "mise:jq@latest",
-        ],
-    },
-    StaticBundle {
-        id: "python-uv",
-        name: "Python + uv",
-        summary: "Python 3.12 managed by mise alongside uv, ruff, and httpie",
-        tools: &["mise:python@3.12", "mise:uv@latest", "uv:ruff", "uv:httpie"],
-    },
-    StaticBundle {
-        id: "node-ts",
-        name: "Node + Bun",
-        summary: "Node.js LTS and Bun TypeScript runtime",
-        tools: &["mise:node@lts", "mise:bun@latest"],
-    },
-    StaticBundle {
-        id: "debug-l3-l5",
-        name: "Debug L3-L5",
-        summary: "Android/GKI container diagnostics: strace, tcpdump, bpftrace, sqlite3",
-        tools: &["apt:strace", "apt:tcpdump", "apt:bpftrace", "apt:sqlite3"],
-    },
-];
-
-/// Returns APT & mise packages added after bootstrap base init for a given profile.
-pub(super) fn profile_packages(
-    profile: ToolsBootstrapProfile,
-) -> (&'static [&'static str], &'static [&'static str]) {
-    match profile {
-        ToolsBootstrapProfile::Minimal => {
-            (&["ca-certificates", "curl", "git", "xz-utils", "zstd"], &[])
-        }
-        ToolsBootstrapProfile::Dev => (
-            &["ca-certificates", "curl", "git", "xz-utils", "zstd", "tmux"],
-            &[
-                "python@3.12",
-                "node@lts",
-                "ripgrep@latest",
-                "fd@latest",
-                "jq@latest",
-            ],
-        ),
-        ToolsBootstrapProfile::Debug => (
-            &[
-                "ca-certificates",
-                "curl",
-                "git",
-                "xz-utils",
-                "zstd",
-                "tmux",
-                "strace",
-                "tcpdump",
-                "bpftrace",
-                "sqlite3",
-            ],
-            &[
-                "python@3.12",
-                "node@lts",
-                "ripgrep@latest",
-                "fd@latest",
-                "jq@latest",
-            ],
-        ),
-    }
-}
+const MAX_REGISTRY_RESULTS: usize = 40;
 
 /// Maps known mise tool identifiers to `ToolGroupKind` cleanly.
 pub(super) fn classify_mise_tool_group(name: &str) -> ToolGroupKind {
@@ -105,14 +30,66 @@ pub(super) fn classify_mise_tool_group(name: &str) -> ToolGroupKind {
         return item.group;
     }
     match name {
-        "python" | "node" | "rust" | "go" | "bun" | "uv" | "ruby" | "java" | "deno" => {
+        "python" | "node" | "rust" | "go" | "bun" | "uv" | "ruby" | "java" | "deno" | "zig" => {
             ToolGroupKind::MiseRuntimes
+        }
+        "zsh" | "fish" | "nu" | "nushell" | "starship" | "zoxide" | "eza" | "carapace" => {
+            ToolGroupKind::Shell
         }
         _ => ToolGroupKind::CliDev,
     }
 }
 
-/// Builds a filtered `tools.catalog` response for `container`.
+/// Builds a filtered `tools.catalog` response, optionally enriching with live `mise registry --json`.
+pub(super) async fn query_catalog(
+    tools: &ToolsManager,
+    params: ToolsCatalogParams,
+) -> DaemonResult<ToolsCatalogResult> {
+    let (container, _, _) = tools
+        .manager
+        .resolve_container(params.container.as_deref())
+        .await?;
+    let mut res = build_catalog(container.clone(), &params);
+
+    let query_lower = params
+        .query
+        .as_deref()
+        .map(str::trim)
+        .filter(|q| !q.is_empty())
+        .map(str::to_ascii_lowercase);
+
+    if let Ok((_, ns_pid, cfg)) = tools.manager.running_target(Some(&container)).await {
+        let mdir = PathBuf::from(&cfg.mount_dir);
+        let env = tokio::task::spawn_blocking(move || load_container_tool_env_from_mount(&mdir))
+            .await
+            .map_err(|e| DaemonError::join("tools.catalog env join", e))?;
+        let bins = resolve_live_tool_bins(tools, &container, ns_pid, &cfg, &env).await;
+        if let Some(mise_bin) = bins.mise {
+            res.registry_available = true;
+            if let Some(q) = query_lower
+                && let Ok(out) = run_container_command_bounded(
+                    &tools.self_exe,
+                    &container,
+                    ns_pid,
+                    &cfg,
+                    vec![mise_bin, "registry".to_owned(), "--json".to_owned()],
+                    env,
+                    Duration::from_secs(5),
+                )
+                .await
+                && out.status == 0
+            {
+                let existing: HashSet<String> = res.entries.iter().map(|e| e.id.clone()).collect();
+                let dynamic = parse_mise_registry_matches(&out.stdout, &q, params.group, &existing);
+                res.entries.extend(dynamic);
+            }
+        }
+    }
+
+    Ok(res)
+}
+
+/// Builds the static curated `tools.catalog` response for `container`.
 pub(super) fn build_catalog(container: String, params: &ToolsCatalogParams) -> ToolsCatalogResult {
     let query = params
         .query
@@ -162,7 +139,80 @@ pub(super) fn build_catalog(container: String, params: &ToolsCatalogParams) -> T
         container,
         entries,
         bundles,
+        registry_available: false,
     }
+}
+
+pub(super) fn parse_mise_registry_matches(
+    raw: &str,
+    query_lower: &str,
+    group_filter: Option<ToolGroupKind>,
+    existing_ids: &HashSet<String>,
+) -> Vec<ToolCatalogEntry> {
+    let Ok(Value::Array(arr)) = serde_json::from_str::<Value>(raw.trim()) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for entry in arr {
+        let Some(short) = entry.get("short").and_then(Value::as_str) else {
+            continue;
+        };
+        if existing_ids.contains(short)
+            || validate_package_spec(ToolManagerKind::Mise, short, true).is_err()
+        {
+            continue;
+        }
+        let desc = entry
+            .get("description")
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        let aliases: Vec<&str> = entry
+            .get("aliases")
+            .and_then(Value::as_array)
+            .map(|a| a.iter().filter_map(Value::as_str).collect())
+            .unwrap_or_default();
+        let matched = short.to_ascii_lowercase().contains(query_lower)
+            || desc.to_ascii_lowercase().contains(query_lower)
+            || aliases
+                .iter()
+                .any(|a| a.to_ascii_lowercase().contains(query_lower));
+        if !matched {
+            continue;
+        }
+        let group = classify_mise_tool_group(short);
+        if group_filter.is_some_and(|g| g != group) {
+            continue;
+        }
+        let backend_hint = entry
+            .get("backends")
+            .and_then(Value::as_array)
+            .and_then(|b| b.first())
+            .and_then(Value::as_str)
+            .unwrap_or("mise")
+            .to_owned();
+        let summary = if desc.trim().is_empty() {
+            format!("mise 注册表工具（{backend_hint}）")
+        } else {
+            desc.trim().to_owned()
+        };
+        out.push(ToolCatalogEntry {
+            id: short.to_owned(),
+            name: short.to_owned(),
+            summary,
+            manager: ToolManagerKind::Mise,
+            group,
+            default_version: "latest".to_owned(),
+            backend_hint,
+            arm64_verified: false,
+            estimated_mb: 0,
+            recommended: false,
+            tags: vec!["mise-registry".to_owned()],
+        });
+        if out.len() >= MAX_REGISTRY_RESULTS {
+            break;
+        }
+    }
+    out
 }
 
 /// Expands bundle IDs into validated `(ToolManagerKind, spec)` installation entries.
@@ -216,10 +266,13 @@ mod tests {
         let expanded = expand_bundle_specs(&all_ids).expect("expand all bundles");
         assert!(!expanded.is_empty());
         assert!(!expanded.iter().any(|(_, s)| s.contains("openssh-server")));
+        assert!(BUNDLES.iter().any(|b| b.id == "shell-zsh"));
+        assert!(BUNDLES.iter().any(|b| b.id == "shell-fish"));
+        assert!(BUNDLES.iter().any(|b| b.id == "shell-nushell"));
     }
 
     #[test]
-    fn catalog_filters_by_group_and_query() {
+    fn catalog_filters_by_group_and_query_and_parses_registry() {
         let res = build_catalog(
             "main".to_owned(),
             &ToolsCatalogParams {
@@ -230,5 +283,11 @@ mod tests {
         );
         assert_eq!(res.entries.len(), 1);
         assert_eq!(res.entries[0].id, "bpftrace");
+
+        let reg = r#"[{"short":"lazygit","backends":["aqua:jesseduffield/lazygit"],"description":"Simple terminal UI for git"}]"#;
+        let matches = parse_mise_registry_matches(reg, "lazygit", None, &HashSet::new());
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].id, "lazygit");
+        assert!(!matches[0].arm64_verified);
     }
 }

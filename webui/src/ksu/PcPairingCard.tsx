@@ -36,7 +36,7 @@ export function PcPairingCard({
         <div className="flex min-w-0 items-center gap-1.5">
           <Laptop className="size-3.5 shrink-0 text-[var(--accent)]" />
           <span className="truncate text-xs font-medium text-[var(--text-primary)]">
-            PC 配对 / 远程控制
+            电脑端配对连接（Desktop）
           </span>
         </div>
         <Badge
@@ -45,21 +45,21 @@ export function PcPairingCard({
         >
           {webStatus?.running
             ? webStatus.lanEnabled
-              ? `LAN :${webStatus.port}`
-              : `本机 :${webStatus.port}`
-            : '未监听'}
+              ? `局域网 :${webStatus.port}`
+              : `仅本机 :${webStatus.port}`
+            : '未开启'}
         </Badge>
       </div>
 
       <SettingRow
         variant="plain"
-        title="允许局域网 (RFC1918) 配对"
-        description="开启后电脑端 Strata Desktop 可直接通过 Wi-Fi + Token 管理"
+        title="允许局域网 Wi-Fi 配对"
+        description="开启后，同一 Wi-Fi 下的电脑端 Strata Desktop 可凭配对密钥连接管理"
         control={
           <Switch
             checked={Boolean(webStatus?.lanEnabled)}
             disabled={busy || !webStatus}
-            aria-label="允许局域网配对"
+            aria-label="允许局域网 Wi-Fi 配对"
             onCheckedChange={(checked) => void onToggleLan(checked)}
           />
         }
@@ -73,8 +73,8 @@ export function PcPairingCard({
           className="shrink-0"
           size="sm"
           variant="ghost"
-          aria-label="复制控制面地址"
-          onClick={() => void onCopyText(endpointUrl, '控制面地址')}
+          aria-label="复制服务地址"
+          onClick={() => void onCopyText(endpointUrl, '服务地址')}
         >
           <Copy className="size-3" />
           复制
@@ -84,17 +84,17 @@ export function PcPairingCard({
       {pairingToken ? (
         <div className="flex items-center justify-between gap-1.5 rounded-[var(--radius-control)] border border-[color-mix(in_oklab,var(--accent)_35%,transparent)] bg-[var(--accent-soft)] px-2.5 py-1.5">
           <span className="truncate font-mono text-[10px] text-[var(--text-primary)]">
-            Token: {`${pairingToken.slice(0, 10)}…${pairingToken.slice(-6)}`}
+            配对密钥：{`${pairingToken.slice(0, 10)}…${pairingToken.slice(-6)}`}
           </span>
           <Button
             className="shrink-0"
             size="sm"
             variant="pill"
-            aria-label="复制 Bearer Token"
-            onClick={() => void onCopyText(pairingToken, 'Bearer Token')}
+            aria-label="复制配对密钥"
+            onClick={() => void onCopyText(pairingToken, '配对密钥')}
           >
             <Copy className="size-3" />
-            复制 Token
+            复制密钥
           </Button>
         </div>
       ) : null}
@@ -105,11 +105,11 @@ export function PcPairingCard({
             size="sm"
             variant="secondary"
             disabled={busy}
-            aria-label="读取当前 Bearer Token"
+            aria-label="读取当前配对密钥"
             onClick={() => void onReadToken()}
           >
             <KeyRound className="size-3.5" />
-            读取当前 Token
+            读取当前密钥
           </Button>
         ) : (
           <span className="truncate font-mono text-[10px] text-[var(--text-secondary)]">
@@ -120,11 +120,11 @@ export function PcPairingCard({
           size="sm"
           variant="secondary"
           disabled={busy || !webStatus}
-          aria-label="轮换并复制新 Bearer Token"
+          aria-label="刷新并轮换配对密钥"
           onClick={() => void onRotateToken()}
         >
           <RefreshCw className="size-3.5" />
-          轮换 Token
+          刷新密钥
         </Button>
       </div>
     </Card>

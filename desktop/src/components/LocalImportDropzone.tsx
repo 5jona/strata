@@ -1,7 +1,8 @@
-import { Button, Card, ProgressBar } from '@gojona/ui';
+import { Badge, Button, Card, ProgressBar } from '@gojona/ui';
 import { FolderUp } from 'lucide-react';
 import { useState } from 'react';
 import { formatBytes } from '../lib/format.ts';
+import { isRawDiskImageFilename } from './install/installHelpers.ts';
 
 export interface LocalImportDropzoneProps {
   selectedFile: File | null;
@@ -21,9 +22,15 @@ export function LocalImportDropzone({
 }: LocalImportDropzoneProps) {
   const [dragActive, setDragActive] = useState(false);
 
+  const isRaw = selectedFile ? isRawDiskImageFilename(selectedFile.name) : false;
+  const uploadPct = uploadProgress
+    ? Math.round((uploadProgress.loaded / Math.max(1, uploadProgress.total)) * 100)
+    : 0;
+  const awaitingServer = uploadProgress !== null && uploadPct >= 100;
+
   return (
     <Card
-      className={`flex flex-col items-center justify-center gap-3 border-2 border-dashed p-8 text-center transition-colors ${
+      className={`flex flex-col items-center justify-center gap-3 border-2 border-dashed p-7 text-center transition-colors ${
         dragActive
           ? 'border-[var(--accent)] bg-[var(--accent)]/10'
           : 'border-[var(--border-hairline)]'
@@ -41,23 +48,30 @@ export function LocalImportDropzone({
       }}
     >
       <FolderUp className="size-9 text-[var(--accent)]" />
-      <div>
-        <div className="text-sm font-medium text-[var(--text-primary)]">
-          {selectedFile
-            ? selectedFile.name
-            : '拖拽 .tar.gz / .tar.xz / .tar.zst / .img / .img.gz 到此处'}
+      <div className="flex flex-col items-center gap-1">
+        <div className="flex flex-wrap items-center justify-center gap-2 text-sm font-medium text-[var(--text-primary)]">
+          <span>
+            {selectedFile
+              ? selectedFile.name
+              : '拖拽 .tar.gz / .tar.xz / .tar.zst / .tar / .img / .img.gz 到此处'}
+          </span>
+          {selectedFile && (
+            <Badge variant={isRaw ? 'warning' : 'accent'}>
+              {isRaw ? '原始磁盘镜像' : 'RootFS 归档包'}
+            </Badge>
+          )}
         </div>
-        <div className="mt-1 text-xs text-[var(--text-secondary)]">
+        <div className="text-xs text-[var(--text-secondary)]">
           {selectedFile
             ? `文件大小 ${formatBytes(selectedFile.size)} · 流式直写，零临时文件占用`
-            : '支持流式上传并自动构建 ext4 稀疏镜像与 Dropbear SSH'}
+            : '归档包将自动创建 ext4 稀疏镜像；.img/.img.gz 将校验超级块并直接导入'}
         </div>
       </div>
       <label className="cursor-pointer">
         <input
           type="file"
           className="hidden"
-          accept=".gz,.xz,.zst,.tar,.img"
+          accept=".gz,.xz,.zst,.tar,.img,.ext4"
           onChange={(e) => {
             const file = e.target.files?.[0];
             if (file) onSelectFile(file);
@@ -70,13 +84,19 @@ export function LocalImportDropzone({
       {uploadProgress && (
         <div className="w-full max-w-md">
           <ProgressBar
-            value={Math.round((uploadProgress.loaded / Math.max(1, uploadProgress.total)) * 100)}
+            value={uploadPct}
             showValue
-            label={`上传中 ${formatBytes(uploadProgress.loaded)} / ${formatBytes(uploadProgress.total)}`}
+            label={
+              awaitingServer
+                ? '文件已发送完毕，服务端正在解压与初始化容器（请留意上方进度）…'
+                : `上传中 ${formatBytes(uploadProgress.loaded)} / ${formatBytes(uploadProgress.total)}`
+            }
           />
-          <Button size="sm" variant="danger" className="mt-2" onClick={onCancelUpload}>
-            取消上传
-          </Button>
+          {!awaitingServer && (
+            <Button size="sm" variant="danger" className="mt-2" onClick={onCancelUpload}>
+              取消上传
+            </Button>
+          )}
         </div>
       )}
     </Card>

@@ -9,8 +9,8 @@ import {
   type HudStateResult,
   STRATA_EVENTS,
   STRATA_METHODS,
-  STRATA_PROTOCOL,
 } from '../types.ts';
+import { isSideveilPermissionError, SIDEVEIL_PERMISSION_GUIDE } from './permissionGuide.ts';
 import { invokeStrataRpc, useStrataEvent } from './strataRpc.ts';
 
 /** Supported container lifecycle commands in the SideVeil quick panel. */
@@ -23,8 +23,8 @@ export function useStrataQuickPanel(isOnline: boolean, isDark: boolean) {
   const { pushToast } = useToast();
 
   const [containers, setContainers] = useState<ContainerStatusSnapshot[]>([]);
-  const [selectedId, setSelectedIdState] = useState<string>(STRATA_PROTOCOL.DEFAULT_CONTAINER_ID);
-  const selectedIdRef = useRef(selectedId);
+  const [selectedId, setSelectedIdState] = useState<string | null>(null);
+  const selectedIdRef = useRef<string | null>(selectedId);
   selectedIdRef.current = selectedId;
 
   const [hudState, setHudState] = useState<HudStateResult>({
@@ -37,6 +37,7 @@ export function useStrataQuickPanel(isOnline: boolean, isDark: boolean) {
   const [loading, setLoading] = useState(true);
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const [lastError, setLastError] = useState<string | null>(null);
+  const [permissionNotice, setPermissionNotice] = useState<string | null>(null);
 
   const notify = useCallback(
     (title: string, tone: 'info' | 'success' | 'danger' = 'info', description?: string) => {
@@ -48,6 +49,18 @@ export function useStrataQuickPanel(isOnline: boolean, isDark: boolean) {
     },
     [bridge, pushToast],
   );
+
+  const showPermissionGuide = useCallback(
+    (title = '权限尚未开启') => {
+      setPermissionNotice(SIDEVEIL_PERMISSION_GUIDE);
+      notify(title, 'danger', SIDEVEIL_PERMISSION_GUIDE);
+    },
+    [notify],
+  );
+
+  const clearPermissionNotice = useCallback(() => {
+    setPermissionNotice(null);
+  }, []);
 
   const refreshServices = useCallback(
     async (containerId: string) => {
@@ -84,10 +97,14 @@ export function useStrataQuickPanel(isOnline: boolean, isDark: boolean) {
         list.find((c) => c.id === selectedIdRef.current)?.id ??
         list.find((c) => c.isDefault)?.id ??
         list[0]?.id ??
-        STRATA_PROTOCOL.DEFAULT_CONTAINER_ID;
+        null;
       selectedIdRef.current = nextId;
       setSelectedIdState(nextId);
-      await refreshServices(nextId);
+      if (nextId) {
+        await refreshServices(nextId);
+      } else {
+        setServices([]);
+      }
     } catch (err) {
       setLastError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -151,6 +168,7 @@ export function useStrataQuickPanel(isOnline: boolean, isDark: boolean) {
   const runLifecycle = useCallback(
     async (action: QuickLifecycleAction) => {
       const cid = selectedIdRef.current;
+      if (!cid) return;
       setBusyAction(action);
       void triggerHaptic(action === 'stop' ? 'heavy' : 'click');
       try {
@@ -191,11 +209,12 @@ export function useStrataQuickPanel(isOnline: boolean, isDark: boolean) {
 
   const syncDns = useCallback(async () => {
     const cid = selectedIdRef.current;
+    if (!cid) return;
     setBusyAction('dns');
     void triggerHaptic('click');
     try {
       await invokeStrataRpc(bridge, STRATA_METHODS.CONTAINER_SYNC_DNS, { container: cid });
-      notify('DNS 与宿主机桥接已同步', 'success', cid);
+      notify('已同步容器 DNS 解析', 'success', cid);
     } catch (err) {
       notify('同步 DNS 失败', 'danger', err instanceof Error ? err.message : String(err));
     } finally {
@@ -209,16 +228,26 @@ export function useStrataQuickPanel(isOnline: boolean, isDark: boolean) {
       try {
         const next = await invokeStrataRpc(bridge, STRATA_METHODS.HUD_SET, { ...patch, isDark });
         setHudState(next);
+        setPermissionNotice(null);
       } catch (err) {
-        notify('HUD 更新失败', 'danger', err instanceof Error ? err.message : String(err));
+        if (isSideveilPermissionError(err)) {
+          showPermissionGuide('桌面悬浮状态条权限尚未开启');
+        } else {
+          notify(
+            '桌面悬浮状态条更新失败',
+            'danger',
+            err instanceof Error ? err.message : String(err),
+          );
+        }
       }
     },
-    [bridge, isDark, notify, triggerHaptic],
+    [bridge, isDark, notify, showPermissionGuide, triggerHaptic],
   );
 
   const controlService = useCallback(
     async (serviceId: string, action: ServiceControlAction) => {
       const cid = selectedIdRef.current;
+      if (!cid) return;
       setBusyAction(`svc:${serviceId}`);
       void triggerHaptic('click');
       try {
@@ -256,6 +285,9 @@ export function useStrataQuickPanel(isOnline: boolean, isDark: boolean) {
     loading,
     busyAction,
     lastError,
+    permissionNotice,
+    showPermissionGuide,
+    clearPermissionNotice,
     refreshAll,
     runLifecycle,
     syncDns,

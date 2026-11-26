@@ -36,6 +36,8 @@ import type {
   ContainerResizeParams,
   ContainerResizeResult,
   ContainerSelectorParams,
+  ContainerSetDefaultParams,
+  ContainerSetDefaultResult,
   ContainerStateChangedPayload,
   ContainerStatusSnapshot,
   DaemonHealthResult,
@@ -84,6 +86,9 @@ import type {
   ToolsStatusResult,
   ToolsUninstallParams,
   ToolsUpgradeParams,
+  ToolsUseParams,
+  ToolsVersionsParams,
+  ToolsVersionsResult,
   WebConfigureParams,
   WebRotateTokenResult,
   WebStatusResult,
@@ -108,6 +113,7 @@ export const STRATA_METHODS = {
   CONTAINER_RESTART: 'container.restart',
   CONTAINER_CREATE: 'container.create',
   CONTAINER_DELETE: 'container.delete',
+  CONTAINER_SET_DEFAULT: 'container.setDefault',
   CONTAINER_RESIZE: 'container.resize',
   CONTAINER_CLONE: 'container.clone',
   CONTAINER_JOB_STATUS: 'container.jobStatus',
@@ -148,6 +154,8 @@ export const STRATA_METHODS = {
   TOOLS_INSTALL: 'tools.install',
   TOOLS_UNINSTALL: 'tools.uninstall',
   TOOLS_UPGRADE: 'tools.upgrade',
+  TOOLS_VERSIONS: 'tools.versions',
+  TOOLS_USE: 'tools.use',
   TOOLS_DOCTOR: 'tools.doctor',
   TOOLS_CACHE_CLEAN: 'tools.cacheClean',
 } as const;
@@ -221,6 +229,10 @@ export interface StrataRpcMethodMap {
   'container.delete': {
     params: ContainerDeleteParams;
     result: ContainerDeleteResult;
+  };
+  'container.setDefault': {
+    params: ContainerSetDefaultParams;
+    result: ContainerSetDefaultResult;
   };
   'container.resize': {
     params: ContainerResizeParams;
@@ -380,6 +392,14 @@ export interface StrataRpcMethodMap {
   };
   'tools.upgrade': {
     params: ToolsUpgradeParams;
+    result: TaskRunResult;
+  };
+  'tools.versions': {
+    params: ToolsVersionsParams;
+    result: ToolsVersionsResult;
+  };
+  'tools.use': {
+    params: ToolsUseParams;
     result: TaskRunResult;
   };
   'tools.doctor': {

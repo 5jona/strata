@@ -1,15 +1,8 @@
-import {
-  Button,
-  EmptyState,
-  ErrorBoundary,
-  StatusBanner,
-  ThemeProvider,
-  ToastProvider,
-} from '@gojona/ui';
-import { Smartphone } from 'lucide-react';
+import { Button, ErrorBoundary, StatusBanner, ThemeProvider, ToastProvider } from '@gojona/ui';
 import { lazy, Suspense, useCallback, useMemo, useState } from 'react';
 import { AddDeviceModal } from './components/AddDeviceModal.tsx';
 import { ContainersView } from './components/ContainersView.tsx';
+import { FirstRunOnboarding } from './components/FirstRunOnboarding.tsx';
 import { InstallView } from './components/InstallView.tsx';
 import { LogsKernelView } from './components/LogsKernelView.tsx';
 import { NetworkSshView } from './components/NetworkSshView.tsx';
@@ -18,22 +11,26 @@ import { Sidebar } from './components/Sidebar.tsx';
 import { ToolsView } from './components/tools/ToolsView.tsx';
 import { useDesktopDevices } from './hooks/useDesktopDevices.ts';
 import { useStrataWorkspace } from './hooks/useStrataWorkspace.ts';
-import type { NavViewId, TerminalTabSpec } from './types/device.ts';
+import type { DeviceProfile, NavViewId, TerminalTabSpec } from './types/device.ts';
+import { STRATA_METHODS } from './types/rpc.ts';
 
 const LazyTerminalWorkspace = lazy(() => import('./components/TerminalWorkspace.tsx'));
 
 function StrataDesktopShell() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [activeView, setActiveView] = useState<NavViewId>('containers');
-  const [addDeviceOpen, setAddDeviceOpen] = useState(false);
+  const [deviceModalOpen, setDeviceModalOpen] = useState(false);
+  const [editingDevice, setEditingDevice] = useState<DeviceProfile | null>(null);
   const [terminalMounted, setTerminalMounted] = useState(false);
   const [tabs, setTabs] = useState<TerminalTabSpec[]>([]);
   const [activeTabId, setActiveTabId] = useState<string | null>(null);
 
   const devicesState = useDesktopDevices();
   const workspace = useStrataWorkspace(devicesState.transport);
+  const activeDevice = devicesState.activeDevice;
+  const activeTransport = devicesState.transport;
 
-  const deviceId = devicesState.activeDevice?.id ?? 'none';
+  const deviceId = activeDevice?.id ?? 'none';
   const deviceTabs = useMemo(() => tabs.filter((t) => t.deviceId === deviceId), [deviceId, tabs]);
   const activeDeviceTabId = useMemo(() => {
     if (activeTabId && deviceTabs.some((t) => t.id === activeTabId)) return activeTabId;
@@ -55,26 +52,25 @@ function StrataDesktopShell() {
         (t) => t.deviceId === deviceId && t.containerId === containerId,
       ).length;
       const title = existingCount === 0 ? containerId : `${containerId} #${existingCount + 1}`;
+      workspace.setSelectedContainerId(containerId);
       setTabs((prev) => [...prev, { id, deviceId, containerId, title }]);
       setActiveTabId(id);
       setTerminalMounted(true);
       setActiveView('terminal');
     },
-    [deviceId, tabs],
+    [deviceId, tabs, workspace],
   );
 
   const handleCloseTab = useCallback(
     (tabId: string) => {
       const target = tabs.find((t) => t.id === tabId);
-      if (target?.sessionId && devicesState.transport) {
-        void devicesState.transport.killPty(target.sessionId).catch(() => {});
+      if (target?.sessionId && activeTransport) {
+        void activeTransport.killPty(target.sessionId).catch(() => {});
       }
       setTabs((prev) => prev.filter((t) => t.id !== tabId));
-      if (activeTabId === tabId) {
-        setActiveTabId(null);
-      }
+      if (activeTabId === tabId) setActiveTabId(null);
     },
-    [activeTabId, devicesState.transport, tabs],
+    [activeTabId, activeTransport, tabs],
   );
 
   const handleBindSession = useCallback((tabId: string, sessionId: string) => {
@@ -89,6 +85,22 @@ function StrataDesktopShell() {
     setActiveView(view);
   }, []);
 
+  const handleStartContainer = useCallback(
+    async (containerId: string) => {
+      if (!activeTransport) return;
+      await workspace.runAction(`启动 ${containerId}`, () =>
+        activeTransport.invoke(STRATA_METHODS.CONTAINER_START, { container: containerId }),
+      );
+      await workspace.refreshAll();
+    },
+    [activeTransport, workspace],
+  );
+
+  const openDeviceModal = (dev: DeviceProfile | null) => {
+    setEditingDevice(dev);
+    setDeviceModalOpen(true);
+  };
+
   return (
     <div className="flex h-full w-full overflow-hidden bg-[var(--surface-canvas)] text-[var(--text-primary)]">
       <Sidebar
@@ -97,14 +109,15 @@ function StrataDesktopShell() {
         activeView={activeView}
         onSelectView={handleSelectView}
         devices={devicesState.devices}
-        activeDevice={devicesState.activeDevice}
+        activeDevice={activeDevice}
         connectionPhase={devicesState.connectionPhase}
         scanningAdb={devicesState.scanningAdb}
         terminalTabCount={deviceTabs.length}
         runningServiceCount={runningServiceCount}
         onSelectDevice={devicesState.selectDevice}
+        onEditDevice={openDeviceModal}
         onRemoveDevice={(id) => void devicesState.removeDevice(id)}
-        onOpenAddDevice={() => setAddDeviceOpen(true)}
+        onOpenAddDevice={() => openDeviceModal(null)}
         onScanAdb={() => void devicesState.scanAdbDevices()}
       />
 
@@ -113,39 +126,46 @@ function StrataDesktopShell() {
           <div className="border-b border-[var(--border-hairline)] p-3">
             <StatusBanner
               tone="danger"
-              title={`无法连接到设备 ${devicesState.activeDevice?.label ?? ''}`}
+              title={`无法连接到设备 ${activeDevice?.label ?? ''}`}
               description={devicesState.connectionError}
               action={
-                <Button size="sm" variant="secondary" onClick={() => setAddDeviceOpen(true)}>
-                  管理设备连接
-                </Button>
+                <div className="flex items-center gap-2">
+                  {activeDevice && (
+                    <Button
+                      size="sm"
+                      variant="primary"
+                      onClick={() => openDeviceModal(activeDevice)}
+                    >
+                      补充 Token / 编辑设备
+                    </Button>
+                  )}
+                  <Button size="sm" variant="secondary" onClick={() => openDeviceModal(null)}>
+                    管理设备连接
+                  </Button>
+                </div>
               }
             />
           </div>
         )}
 
-        {!devicesState.activeDevice ? (
-          <div className="flex flex-1 items-center justify-center p-8">
-            <EmptyState
-              icon={<Smartphone className="size-10" />}
-              title="尚未选择 Android 设备"
-              description="通过 USB / 无线 ADB 自动发现并建立隧道，或手动添加局域网设备。"
-              action={
-                <Button variant="primary" onClick={() => setAddDeviceOpen(true)}>
-                  扫描 ADB / 添加设备
-                </Button>
-              }
-            />
-          </div>
+        {!activeDevice ? (
+          <FirstRunOnboarding
+            scanningAdb={devicesState.scanningAdb}
+            onOpenAdd={() => openDeviceModal(null)}
+            onScanAdb={() => void devicesState.scanAdbDevices()}
+          />
         ) : (
           <div className="relative min-h-0 flex-1">
             {activeView === 'containers' && (
               <ContainersView
-                device={devicesState.activeDevice}
-                transport={devicesState.transport}
+                device={activeDevice}
+                transport={activeTransport}
                 daemonStatus={workspace.daemonStatus}
                 containers={workspace.containers}
+                selectedContainerId={workspace.selectedContainerId}
+                onSelectContainer={workspace.setSelectedContainerId}
                 servicesByContainer={workspace.servicesByContainer}
+                configsByContainer={workspace.configsByContainer}
                 loading={workspace.loading}
                 onRefresh={workspace.refreshAll}
                 onOpenTerminal={handleOpenTerminal}
@@ -156,45 +176,63 @@ function StrataDesktopShell() {
 
             {activeView === 'tools' && (
               <ToolsView
-                transport={devicesState.transport}
+                transport={activeTransport}
                 containers={workspace.containers}
+                selectedContainerId={workspace.selectedContainerId}
+                onSelectContainer={workspace.setSelectedContainerId}
+                onRefresh={workspace.refreshAll}
+                onOpenTerminal={handleOpenTerminal}
                 runAction={workspace.runAction}
               />
             )}
 
             {activeView === 'services' && (
               <ServicesView
-                transport={devicesState.transport}
+                transport={activeTransport}
                 containers={workspace.containers}
+                selectedContainerId={workspace.selectedContainerId}
+                onSelectContainer={workspace.setSelectedContainerId}
                 servicesByContainer={workspace.servicesByContainer}
                 onRefreshServices={workspace.refreshServices}
+                onStartContainer={handleStartContainer}
                 runAction={workspace.runAction}
               />
             )}
 
             {activeView === 'install' && (
               <InstallView
-                transport={devicesState.transport}
+                transport={activeTransport}
+                containers={workspace.containers}
                 activeJobs={workspace.activeJobs}
+                onDismissJob={workspace.dismissJob}
                 onRefresh={workspace.refreshAll}
+                onBackToContainers={() => setActiveView('containers')}
+                onOpenTerminal={handleOpenTerminal}
+                onOpenTools={(id: string) => {
+                  workspace.setSelectedContainerId(id);
+                  setActiveView('tools');
+                }}
                 runAction={workspace.runAction}
               />
             )}
 
             {activeView === 'network' && (
               <NetworkSshView
-                device={devicesState.activeDevice}
-                transport={devicesState.transport}
+                device={activeDevice}
+                transport={activeTransport}
                 containers={workspace.containers}
+                selectedContainerId={workspace.selectedContainerId}
+                onSelectContainer={workspace.setSelectedContainerId}
                 webStatus={workspace.webStatus}
                 onRefresh={workspace.refreshAll}
+                onStartContainer={handleStartContainer}
                 runAction={workspace.runAction}
               />
             )}
 
             {activeView === 'logs' && (
               <LogsKernelView
-                transport={devicesState.transport}
+                transport={activeTransport}
                 capabilities={workspace.capabilities}
                 containers={workspace.containers}
               />
@@ -210,11 +248,12 @@ function StrataDesktopShell() {
               >
                 <LazyTerminalWorkspace
                   visible={activeView === 'terminal'}
-                  device={devicesState.activeDevice}
-                  transport={devicesState.transport}
+                  device={activeDevice}
+                  transport={activeTransport}
                   containers={workspace.containers}
                   tabs={deviceTabs}
                   activeTabId={activeDeviceTabId}
+                  selectedContainerId={workspace.selectedContainerId}
                   onSelectTab={setActiveTabId}
                   onNewTab={handleOpenTerminal}
                   onCloseTab={handleCloseTab}
@@ -227,10 +266,14 @@ function StrataDesktopShell() {
       </main>
 
       <AddDeviceModal
-        open={addDeviceOpen}
+        open={deviceModalOpen}
+        editingDevice={editingDevice}
         adbDevices={devicesState.adbDevices}
         scanningAdb={devicesState.scanningAdb}
-        onClose={() => setAddDeviceOpen(false)}
+        onClose={() => {
+          setDeviceModalOpen(false);
+          setEditingDevice(null);
+        }}
         onScanAdb={devicesState.scanAdbDevices}
         onConnectAdb={devicesState.connectAdbDevice}
         onSaveManual={devicesState.saveManualDevice}

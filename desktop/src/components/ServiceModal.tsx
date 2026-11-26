@@ -110,7 +110,7 @@ export function ServiceModal({
               {initialSpec ? `编辑托管服务 · ${initialSpec.id}` : `新增托管服务 · ${containerId}`}
             </h3>
             <p className="text-xs text-[var(--text-secondary)]">
-              由 stratad 原生守护，支持开机静默自启、崩溃退避重启与独立日志采集
+              由 Strata 后台服务原生守护，支持开机自启、异常自动重启与独立日志采集
             </p>
           </div>
           <Button size="icon-sm" variant="ghost" aria-label="关闭" onClick={onClose}>
@@ -194,8 +194,8 @@ export function ServiceModal({
 
         <SettingRow
           variant="plain"
-          title="随容器开机静默自启"
-          description="容器启动后立即自动拉起该后台服务"
+          title="开机自启"
+          description="容器启动后自动拉起该后台服务"
           control={<Switch checked={autoStart} onCheckedChange={setAutoStart} />}
         />
 

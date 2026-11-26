@@ -19,24 +19,20 @@ pub const L5_DIAG_MOUNT_PATHS: [&str; 3] = [
 
 /// Canonical baseline environment variables applied identically across container init,
 /// `strata enter`/`exec`, `TaskRunner`, `ServiceSupervisor`, and Dropbear SSH.
-pub const CANONICAL_CONTAINER_ENV: [(&str, &str); 19] = [
+/// Uses standard XDG directories without forcing `MISE_*` or `UV_*` path overrides so
+/// user-installed toolchains work seamlessly alongside legacy `/opt/strata` setups.
+pub const CANONICAL_CONTAINER_ENV: [(&str, &str); 13] = [
     ("HOME", "/root"),
     ("USER", "root"),
     ("LOGNAME", "root"),
     ("LANG", "C.UTF-8"),
     ("LC_ALL", "C.UTF-8"),
+    ("COLORTERM", "truecolor"),
     ("PATH", DEFAULT_CONTAINER_PATH),
     ("XDG_CONFIG_HOME", "/root/.config"),
     ("XDG_DATA_HOME", "/root/.local/share"),
     ("XDG_CACHE_HOME", "/root/.cache"),
     ("XDG_STATE_HOME", "/root/.local/state"),
-    ("MISE_DATA_DIR", CONTAINER_MISE_DATA_DIR),
-    ("MISE_CACHE_DIR", CONTAINER_MISE_CACHE_DIR),
-    ("MISE_CONFIG_DIR", CONTAINER_MISE_CONFIG_DIR),
-    ("MISE_GLOBAL_CONFIG_FILE", CONTAINER_MISE_CONFIG_FILE),
-    ("UV_CACHE_DIR", CONTAINER_UV_CACHE_DIR),
-    ("UV_TOOL_DIR", CONTAINER_UV_TOOL_DIR),
-    ("UV_TOOL_BIN_DIR", CONTAINER_OPT_BIN_DIR),
     ("UV_LINK_MODE", "copy"),
     ("PIP_DISABLE_PIP_VERSION_CHECK", "1"),
 ];

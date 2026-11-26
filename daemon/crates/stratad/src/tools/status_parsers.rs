@@ -1,37 +1,17 @@
-//! Inventory JSON/text parsers and recursive directory sizing for `tools.status` & `tools.list`.
+//! Inventory JSON/text parsers for `tools.status` & `tools.list`.
 
-use std::collections::BTreeMap;
-use std::path::Path;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::Value;
-use strata_protocol::rpc::{InstalledToolItem, ToolGroupKind, ToolManagerKind};
+use strata_protocol::rpc::{InstalledToolItem, ToolGroupKind, ToolInstallSource, ToolManagerKind};
 
 use crate::tools::catalog::classify_mise_tool_group;
-use crate::tools::catalog_data::KNOWN_APT_PACKAGES;
+use crate::tools::discovery::classify_source;
 
-pub(super) fn dir_size_bytes(path: &Path) -> u64 {
-    let Ok(meta) = std::fs::symlink_metadata(path) else {
-        return 0;
-    };
-    if meta.file_type().is_symlink() {
-        return 0;
-    }
-    if meta.is_file() {
-        return meta.len();
-    }
-    if !meta.is_dir() {
-        return 0;
-    }
-    let Ok(entries) = std::fs::read_dir(path) else {
-        return 0;
-    };
-    entries
-        .filter_map(Result::ok)
-        .map(|entry| dir_size_bytes(&entry.path()))
-        .sum()
-}
-
-pub(super) fn parse_mise_ls_json(raw: &str) -> Vec<InstalledToolItem> {
+pub(super) fn parse_mise_ls_json(
+    raw: &str,
+    fallback_source: ToolInstallSource,
+) -> Vec<InstalledToolItem> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
         return Vec::new();
@@ -75,6 +55,9 @@ pub(super) fn parse_mise_ls_json(raw: &str) -> Vec<InstalledToolItem> {
                 .get("backend")
                 .and_then(Value::as_str)
                 .map(str::to_owned);
+            let source = install_path
+                .as_deref()
+                .map_or(fallback_source, classify_source);
             out.push(InstalledToolItem {
                 id: format!("mise:{tool_name}@{version}"),
                 name: tool_name.clone(),
@@ -87,6 +70,7 @@ pub(super) fn parse_mise_ls_json(raw: &str) -> Vec<InstalledToolItem> {
                 backend,
                 install_path,
                 source_path,
+                source: Some(source),
                 active,
                 installed,
                 broken: !installed,
@@ -101,11 +85,18 @@ pub(super) fn parse_mise_outdated_json(raw: &str) -> BTreeMap<String, String> {
     let Ok(val) = serde_json::from_str::<Value>(raw.trim()) else {
         return map;
     };
+    let pick_latest = |entry: &Value| {
+        entry
+            .get("bump")
+            .and_then(Value::as_str)
+            .or_else(|| entry.get("latest").and_then(Value::as_str))
+            .map(str::to_owned)
+    };
     match val {
         Value::Object(obj) => {
             for (name, entry) in obj {
-                if let Some(latest) = entry.get("bump").and_then(Value::as_str) {
-                    map.insert(name, latest.to_owned());
+                if let Some(latest) = pick_latest(&entry) {
+                    map.insert(name, latest);
                 }
             }
         }
@@ -113,9 +104,9 @@ pub(super) fn parse_mise_outdated_json(raw: &str) -> BTreeMap<String, String> {
             for entry in arr {
                 if let (Some(name), Some(latest)) = (
                     entry.get("name").and_then(Value::as_str),
-                    entry.get("bump").and_then(Value::as_str),
+                    pick_latest(&entry),
                 ) {
-                    map.insert(name.to_owned(), latest.to_owned());
+                    map.insert(name.to_owned(), latest);
                 }
             }
         }
@@ -124,7 +115,56 @@ pub(super) fn parse_mise_outdated_json(raw: &str) -> BTreeMap<String, String> {
     map
 }
 
-pub(super) fn parse_uv_tool_list(raw: &str) -> Vec<InstalledToolItem> {
+pub(super) fn parse_uv_python_list_json(raw: &str) -> Vec<InstalledToolItem> {
+    let Ok(Value::Array(arr)) = serde_json::from_str::<Value>(raw.trim()) else {
+        return Vec::new();
+    };
+    let mut seen_paths = BTreeSet::new();
+    let mut out = Vec::new();
+    for entry in arr {
+        let Some(path) = entry.get("path").and_then(Value::as_str) else {
+            continue;
+        };
+        if !seen_paths.insert(path.to_owned()) {
+            continue;
+        }
+        let version = entry
+            .get("version")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown")
+            .to_owned();
+        let impl_name = entry
+            .get("implementation")
+            .and_then(Value::as_str)
+            .unwrap_or("cpython");
+        let tool_name = if impl_name.eq_ignore_ascii_case("cpython") {
+            "python".to_owned()
+        } else {
+            impl_name.to_ascii_lowercase()
+        };
+        let source = classify_source(path);
+        out.push(InstalledToolItem {
+            id: format!("uv-python:{impl_name}@{version}:{path}"),
+            name: tool_name,
+            manager: ToolManagerKind::Uv,
+            group: ToolGroupKind::PythonUv,
+            version,
+            requested_version: None,
+            latest_version: None,
+            outdated: false,
+            backend: Some("uv-python".to_owned()),
+            install_path: Some(path.to_owned()),
+            source_path: None,
+            source: Some(source),
+            active: true,
+            installed: true,
+            broken: false,
+        });
+    }
+    out
+}
+
+pub(super) fn parse_uv_tool_list(raw: &str, source: ToolInstallSource) -> Vec<InstalledToolItem> {
     let mut out = Vec::new();
     for line in raw.lines() {
         let trimmed = line.trim();
@@ -138,6 +178,11 @@ pub(super) fn parse_uv_tool_list(raw: &str) -> Vec<InstalledToolItem> {
             .unwrap_or("unknown")
             .trim_start_matches('v')
             .to_owned();
+        let install_path = parts
+            .next()
+            .map(|p| p.trim_matches(|c| c == '(' || c == ')').to_owned())
+            .filter(|p| p.starts_with('/'));
+        let item_source = install_path.as_deref().map_or(source, classify_source);
         out.push(InstalledToolItem {
             id: format!("uv:{name}"),
             name: name.to_owned(),
@@ -148,83 +193,13 @@ pub(super) fn parse_uv_tool_list(raw: &str) -> Vec<InstalledToolItem> {
             latest_version: None,
             outdated: false,
             backend: Some("uv".to_owned()),
-            install_path: None,
+            install_path,
             source_path: None,
+            source: Some(item_source),
             active: true,
             installed: true,
             broken: false,
         });
     }
     out
-}
-
-pub(super) fn parse_dpkg_query(raw: &str) -> Vec<InstalledToolItem> {
-    let mut out = Vec::new();
-    for line in raw.lines() {
-        let parts: Vec<&str> = line.split('\t').collect();
-        if parts.len() != 3 || !parts[1].split_whitespace().any(|w| w == "installed") {
-            continue;
-        }
-        let name = parts[0].trim();
-        let version = parts[2].trim();
-        let group = KNOWN_APT_PACKAGES
-            .iter()
-            .find(|(pkg, _)| *pkg == name)
-            .map_or(ToolGroupKind::CliDev, |(_, g)| *g);
-        out.push(InstalledToolItem {
-            id: format!("apt:{name}"),
-            name: name.to_owned(),
-            manager: ToolManagerKind::Apt,
-            group,
-            version: version.to_owned(),
-            requested_version: None,
-            latest_version: None,
-            outdated: false,
-            backend: Some("apt".to_owned()),
-            install_path: None,
-            source_path: None,
-            active: true,
-            installed: true,
-            broken: false,
-        });
-    }
-    out
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn parsers_handle_mise_uv_and_dpkg_formats() {
-        let mise_json = r#"{
-            "python": [{"version": "3.12.9", "requested_version": "3.12", "installed": true, "active": true, "install_path": "/opt/strata/mise/installs/python/3.12.9", "source": {"path": "/etc/strata/mise/config.toml"}}],
-            "ripgrep": [{"version": "14.1.1", "installed": true, "active": true, "backend": "aqua:BurntSushi/ripgrep"}]
-        }"#;
-        let items = parse_mise_ls_json(mise_json);
-        assert_eq!(items.len(), 2);
-        assert!(
-            items
-                .iter()
-                .any(|i| i.name == "python" && i.group == ToolGroupKind::MiseRuntimes)
-        );
-        assert!(
-            items
-                .iter()
-                .any(|i| i.name == "ripgrep" && i.group == ToolGroupKind::CliDev)
-        );
-
-        let outdated = parse_mise_outdated_json(r#"{"python": {"bump": "3.12.10"}}"#);
-        assert_eq!(outdated.get("python").map(String::as_str), Some("3.12.10"));
-
-        let uv = parse_uv_tool_list("ruff v0.11.2\n- ruff\nhttpie v3.2.4\n");
-        assert_eq!(uv.len(), 2);
-        assert_eq!(uv[0].version, "0.11.2");
-
-        let dpkg = parse_dpkg_query(
-            "git\tinstall ok installed\t1:2.47.2-0.1\nmissing\tdeinstall\t1.0\npython3-venv\tunknown ok not-installed\t\n",
-        );
-        assert_eq!(dpkg.len(), 1);
-        assert_eq!(dpkg[0].name, "git");
-    }
 }

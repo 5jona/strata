@@ -22,6 +22,7 @@ use crate::tools::action_cmds::{
 };
 use crate::tools::catalog::profile_packages;
 use crate::tools::config::apply_config_update;
+use crate::tools::discovery::resolve_live_tool_bins;
 use crate::tools::exec::load_container_tool_env_from_mount;
 
 const TOOLS_TASK_TIMEOUT_SECS: u64 = 600;
@@ -74,16 +75,17 @@ pub(super) async fn install(
     tools: &ToolsManager,
     params: ToolsInstallParams,
 ) -> DaemonResult<TaskRunResult> {
-    let (container, _, cfg) = tools
+    let (container, ns_pid, cfg) = tools
         .manager
         .running_target(params.container.as_deref())
         .await?;
     let lock_guard = tools.try_acquire_write_lock(&container).await?;
-    let command = build_install_command(params.manager, &params.packages, params.pin)?;
     let mount_dir = PathBuf::from(&cfg.mount_dir);
     let env = tokio::task::spawn_blocking(move || load_container_tool_env_from_mount(&mount_dir))
         .await
         .map_err(|e| DaemonError::join("tools.install env", e))?;
+    let bins = resolve_live_tool_bins(tools, &container, ns_pid, &cfg, &env).await;
+    let command = build_install_command(params.manager, &params.packages, params.pin, &bins)?;
 
     launch_locked_task(tools, container, command, env, "install", lock_guard).await
 }
@@ -92,16 +94,17 @@ pub(super) async fn uninstall(
     tools: &ToolsManager,
     params: ToolsUninstallParams,
 ) -> DaemonResult<TaskRunResult> {
-    let (container, _, cfg) = tools
+    let (container, ns_pid, cfg) = tools
         .manager
         .running_target(params.container.as_deref())
         .await?;
     let lock_guard = tools.try_acquire_write_lock(&container).await?;
-    let command = build_uninstall_command(params.manager, &params.packages)?;
     let mount_dir = PathBuf::from(&cfg.mount_dir);
     let env = tokio::task::spawn_blocking(move || load_container_tool_env_from_mount(&mount_dir))
         .await
         .map_err(|e| DaemonError::join("tools.uninstall env", e))?;
+    let bins = resolve_live_tool_bins(tools, &container, ns_pid, &cfg, &env).await;
+    let command = build_uninstall_command(params.manager, &params.packages, &bins)?;
 
     launch_locked_task(tools, container, command, env, "uninstall", lock_guard).await
 }
@@ -110,21 +113,22 @@ pub(super) async fn upgrade(
     tools: &ToolsManager,
     params: ToolsUpgradeParams,
 ) -> DaemonResult<TaskRunResult> {
-    let (container, _, cfg) = tools
+    let (container, ns_pid, cfg) = tools
         .manager
         .running_target(params.container.as_deref())
         .await?;
     let lock_guard = tools.try_acquire_write_lock(&container).await?;
-    let command = build_upgrade_command(params.manager, &params.packages, params.bump)?;
     let mount_dir = PathBuf::from(&cfg.mount_dir);
     let env = tokio::task::spawn_blocking(move || load_container_tool_env_from_mount(&mount_dir))
         .await
         .map_err(|e| DaemonError::join("tools.upgrade env", e))?;
+    let bins = resolve_live_tool_bins(tools, &container, ns_pid, &cfg, &env).await;
+    let command = build_upgrade_command(params.manager, &params.packages, params.bump, &bins)?;
 
     launch_locked_task(tools, container, command, env, "upgrade", lock_guard).await
 }
 
-async fn launch_locked_task(
+pub(super) async fn launch_locked_task(
     tools: &ToolsManager,
     container: String,
     command: Vec<String>,

@@ -165,8 +165,8 @@ export function useDesktopDevices(): UseDesktopDevicesResult {
         setActiveId(profile.id);
         pushToast(
           tunnel.token
-            ? `已连接 ${profile.label}（已自动获取 Bearer Token）`
-            : `已建立 ADB 转发，请在设备配置中补充 Bearer Token`,
+            ? `已连接 ${profile.label}（已自动获取配对密钥）`
+            : '已建立 ADB 转发，请在设备旁点击「编辑」补充配对密钥 (Token)',
           tunnel.token ? 'success' : 'warning',
         );
       } catch (err) {

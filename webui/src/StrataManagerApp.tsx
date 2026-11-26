@@ -9,20 +9,22 @@ import {
 import {
   AppShell,
   Button,
-  Card,
   cn,
-  StatusBanner,
   ThemeProvider,
   ToastProvider,
   useCopyFeedback,
   useToast,
 } from '@gojona/ui';
 import { Layers } from 'lucide-react';
-import { useCallback, useMemo } from 'react';
+import { useCallback, useMemo, useRef } from 'react';
 import { STRATA_MANIFEST, STRATA_PLUGIN_ID } from './manifest.ts';
 import { createMockStrataTransport } from './plugin/mockStrataBridge.ts';
 import { QuickControlSection } from './plugin/QuickControlSection.tsx';
 import { StrataHeaderActions } from './plugin/StrataHeaderActions.tsx';
+import {
+  StrataPanelFallbackCard,
+  StrataPanelPermissionBanner,
+} from './plugin/StrataPanelStateCards.tsx';
 import { useStrataPluginTheme } from './plugin/useStrataPluginTheme.ts';
 import { useStrataQuickPanel } from './plugin/useStrataQuickPanel.ts';
 import { ServicesPanel } from './shared/ServicesPanel.tsx';
@@ -31,7 +33,7 @@ import { buildSshCommand } from './shared/strataFormat.ts';
 const PINNED_DEFAULT_BOUNDS = { widthDp: 344, heightDp: 520 };
 
 function StrataWorkbench() {
-  const { isNativeHost, isDark, copyText } = useStrataPluginTheme();
+  const { isNativeHost, isDark, copyTextDetailed } = useStrataPluginTheme();
   const { dismiss } = useContainerAction();
   const backendState = usePluginBackendState();
   const { mode, isPinned, clickThrough, setMode, setClickThrough } = usePresentationMode('drawer');
@@ -41,7 +43,14 @@ function StrataWorkbench() {
   const backendOnline = !isNativeHost || backendState === 'online';
   const panel = useStrataQuickPanel(backendOnline, isDark);
   const active = panel.activeContainer;
-  const { copyStatus, copyText: copyWithFeedback } = useCopyFeedback({ onCopy: copyText });
+  const lastCopyDeniedRef = useRef(false);
+  const { copyStatus, copyText: copyWithFeedback } = useCopyFeedback({
+    onCopy: async (text) => {
+      const res = await copyTextDetailed(text);
+      lastCopyDeniedRef.current = res.permissionDenied;
+      return res.ok;
+    },
+  });
 
   const handleCycleMode = useCallback(() => {
     void triggerHaptic('click');
@@ -63,8 +72,15 @@ function StrataWorkbench() {
     if (!active) return;
     const cmd = buildSshCommand(active);
     const ok = await copyWithFeedback(cmd);
-    pushToast(ok ? `已复制：${cmd}` : '复制失败，请手动复制', ok ? 'success' : 'danger');
-  }, [active, copyWithFeedback, pushToast]);
+    if (ok) {
+      panel.clearPermissionNotice();
+      pushToast(`已复制：${cmd}`, 'success');
+    } else if (lastCopyDeniedRef.current) {
+      panel.showPermissionGuide('剪贴板权限尚未开启');
+    } else {
+      pushToast('复制失败，请手动复制', 'danger');
+    }
+  }, [active, copyWithFeedback, panel, pushToast]);
 
   return (
     <div
@@ -124,24 +140,12 @@ function StrataWorkbench() {
             </div>
           ) : null}
 
-          {!backendOnline ? (
-            <StatusBanner
-              tone="warning"
-              title="stratad 后端暂不可用"
-              description="请确认 Strata 模块守护进程已启动，或打开 KernelSU WebUI 拉起服务。"
-            />
-          ) : panel.lastError ? (
-            <StatusBanner
-              tone="danger"
-              title="无法连接 stratad"
-              description={panel.lastError}
-              action={
-                <Button size="sm" variant="secondary" onClick={() => void panel.refreshAll()}>
-                  重试
-                </Button>
-              }
-            />
-          ) : active ? (
+          <StrataPanelPermissionBanner
+            notice={panel.permissionNotice}
+            onDismiss={panel.clearPermissionNotice}
+          />
+
+          {backendOnline && !panel.lastError && active ? (
             <>
               <QuickControlSection
                 container={active}
@@ -163,9 +167,12 @@ function StrataWorkbench() {
               />
             </>
           ) : (
-            <Card className="p-4 text-center text-xs text-[var(--text-secondary)]">
-              正在读取 Strata 容器状态…
-            </Card>
+            <StrataPanelFallbackCard
+              backendOnline={backendOnline}
+              lastError={panel.lastError}
+              loading={panel.loading}
+              onRetry={() => void panel.refreshAll()}
+            />
           )}
         </div>
       </AppShell>

@@ -34,9 +34,9 @@ pub mod protocol {
     /// Official LinuxContainers Simplestreams fallback mirror.
     pub const DEFAULT_DISTRO_MIRROR_OFFICIAL: &str = "https://images.linuxcontainers.org";
     /// Canonical in-container directory and env layout schema version.
-    pub const CONTAINER_LAYOUT_SCHEMA_VERSION: u32 = 1;
-    /// Unified container PATH across PTY, exec, TaskRunner, services, and Dropbear SSH.
-    pub const DEFAULT_CONTAINER_PATH: &str = "/opt/strata/mise/shims:/opt/strata/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
+    pub const CONTAINER_LAYOUT_SCHEMA_VERSION: u32 = 2;
+    /// Unified container PATH prioritizing user-installed runtimes with legacy /opt/strata fallback.
+    pub const DEFAULT_CONTAINER_PATH: &str = "/root/.local/share/mise/shims:/root/.local/bin:/root/.cargo/bin:/opt/strata/mise/shims:/opt/strata/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
     /// Canonical default working directory inside Strata containers.
     pub const DEFAULT_CONTAINER_WORKDIR: &str = "/workspace";
 }
@@ -122,6 +122,7 @@ pub mod methods {
     pub const CONTAINER_RESTART: &str = "container.restart";
     pub const CONTAINER_CREATE: &str = "container.create";
     pub const CONTAINER_DELETE: &str = "container.delete";
+    pub const CONTAINER_SET_DEFAULT: &str = "container.setDefault";
     pub const CONTAINER_RESIZE: &str = "container.resize";
     pub const CONTAINER_CLONE: &str = "container.clone";
     pub const CONTAINER_JOB_STATUS: &str = "container.jobStatus";
@@ -162,6 +163,8 @@ pub mod methods {
     pub const TOOLS_INSTALL: &str = "tools.install";
     pub const TOOLS_UNINSTALL: &str = "tools.uninstall";
     pub const TOOLS_UPGRADE: &str = "tools.upgrade";
+    pub const TOOLS_VERSIONS: &str = "tools.versions";
+    pub const TOOLS_USE: &str = "tools.use";
     pub const TOOLS_DOCTOR: &str = "tools.doctor";
     pub const TOOLS_CACHE_CLEAN: &str = "tools.cacheClean";
 }

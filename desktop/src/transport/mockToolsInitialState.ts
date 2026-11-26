@@ -1,43 +1,161 @@
 import type {
   InstalledToolItem,
+  ToolGroupKind,
+  ToolInstallSource,
+  ToolManagerKind,
   ToolsConfigResult,
+  ToolsConfigSetParams,
   ToolsDoctorResult,
   ToolsStatusResult,
 } from '../types/protocol.ts';
 
 const MB = 1024 * 1024;
 
+export const TUNA_MIRRORS = {
+  aptMirrorUrl: 'https://mirrors.tuna.tsinghua.edu.cn/ubuntu-ports',
+  nodeMirrorUrl: 'https://mirrors.tuna.tsinghua.edu.cn/nodejs-release/',
+  pypiIndexUrl: 'https://pypi.tuna.tsinghua.edu.cn/simple',
+  npmRegistryUrl: 'https://registry.npmmirror.com',
+  rustupDistServer: 'https://mirrors.tuna.tsinghua.edu.cn/rustup',
+  goproxy: 'https://goproxy.cn,direct',
+} as const;
+
+const CONFIG_STR_FIELDS = [
+  'aptMirrorUrl',
+  'nodeMirrorUrl',
+  'pypiIndexUrl',
+  'npmRegistryUrl',
+  'rustupDistServer',
+  'goproxy',
+  'httpProxy',
+  'httpsProxy',
+  'noProxy',
+  'minimumReleaseAge',
+] as const;
+
+export function applyMockMirrorPreset(
+  cfg: ToolsConfigResult,
+  preset: 'tuna' | 'official' | 'custom',
+) {
+  cfg.mirrorPreset = preset;
+  if (preset === 'tuna') Object.assign(cfg, TUNA_MIRRORS);
+  else if (preset === 'official') {
+    for (const k of Object.keys(TUNA_MIRRORS) as (keyof typeof TUNA_MIRRORS)[]) {
+      cfg[k] = undefined;
+    }
+  }
+}
+
+export function applyMockToolsConfigSet(state: MockToolsState, params: ToolsConfigSetParams) {
+  const cfg = state.config;
+  if (params.mirrorPreset) {
+    applyMockMirrorPreset(cfg, params.mirrorPreset);
+    state.status.mirrorPreset = params.mirrorPreset;
+  }
+  for (const k of CONFIG_STR_FIELDS) {
+    const val = params[k];
+    if (val === undefined) continue;
+    if (!val.trim() && (params.mirrorPreset === 'tuna' || params.mirrorPreset === 'official'))
+      continue;
+    cfg[k] = val.trim() || undefined;
+  }
+  if (params.urlReplacements !== undefined) cfg.urlReplacements = params.urlReplacements;
+  if (params.jobs !== undefined) cfg.jobs = params.jobs;
+  const targetPath = params.configPath || cfg.configPath || '/root/.config/mise/config.toml';
+  cfg.configPath = targetPath;
+  if (!cfg.configPaths.includes(targetPath)) cfg.configPaths = [...cfg.configPaths, targetPath];
+  if (params.miseConfigToml !== undefined) {
+    cfg.miseConfigToml = params.miseConfigToml;
+    state.configFiles[targetPath] = params.miseConfigToml;
+  }
+  if (params.githubToken !== undefined) {
+    const tok = params.githubToken.trim();
+    cfg.hasGithubToken = Boolean(tok);
+    cfg.githubTokenMasked = tok
+      ? tok.length <= 8
+        ? '****'
+        : `${tok.slice(0, 4)}...${tok.slice(-4)}`
+      : undefined;
+    state.status.hasGithubToken = cfg.hasGithubToken;
+  }
+  return cfg;
+}
+
+const toolItem = (
+  id: string,
+  name: string,
+  manager: ToolManagerKind,
+  group: ToolGroupKind,
+  version: string,
+  installPath: string,
+  source: ToolInstallSource,
+  extra?: Partial<InstalledToolItem>,
+): InstalledToolItem => ({
+  id,
+  name,
+  manager,
+  group,
+  version,
+  installPath,
+  source,
+  outdated: false,
+  active: true,
+  installed: true,
+  broken: false,
+  ...extra,
+});
+
+const mgr = (version: string, binPath: string, source: ToolInstallSource) => ({
+  installed: true,
+  version,
+  binPath,
+  source,
+});
+
+const doc = (id: string, category: string, summary: string) => ({
+  id,
+  category,
+  status: 'ok' as const,
+  summary,
+});
+
 export interface MockToolsState {
   status: ToolsStatusResult;
   items: InstalledToolItem[];
   config: ToolsConfigResult;
+  configFiles: Record<string, string>;
   doctor: ToolsDoctorResult;
 }
 
 export function createInitialToolsState(container: string, running: boolean): MockToolsState {
-  const miseToml = [
+  const userToml = [
     '[settings]',
     'jobs = 4',
-    'idiomatic_version_file_enable_tools = ["python", "node"]',
+    'minimum_release_age = "24h"',
     '',
     '[tools]',
-    'node = "22.14.0"',
-    'python = "3.12.8"',
-    'ripgrep = "latest"',
+    'node = "22"',
+    'python = "3.12"',
   ].join('\n');
+  const strataToml = '# /etc/strata/mise/config.toml\n[settings]\njobs = 4\n\n[tools]\n';
+  const configPaths = ['/root/.config/mise/config.toml', '/etc/strata/mise/config.toml'];
 
   return {
     status: {
       container,
-      layoutSchemaVersion: 1,
+      layoutSchemaVersion: 2,
       layoutCompliant: running,
       workspaceDir: '/workspace',
-      miseConfigPath: '/etc/strata/mise/config.toml',
-      mise: { installed: true, version: '2026.11.0 linux-arm64', binPath: '/opt/strata/bin/mise' },
-      uv: { installed: true, version: 'uv 0.9.12', binPath: '/opt/strata/bin/uv' },
-      apt: { installed: true, version: 'apt 2.8.3 (arm64)', binPath: '/usr/bin/apt-get' },
-      hostExec: { installed: true, version: '1.0', binPath: '/usr/bin/host-exec' },
-      strataDebug: { installed: true, version: '0.2.0', binPath: '/usr/bin/strata-debug' },
+      miseConfigPath: configPaths[0] ?? '/root/.config/mise/config.toml',
+      miseDataDir: '/root/.local/share/mise',
+      miseConfigPaths: configPaths,
+      legacyStrataMiseDetected: true,
+      systemPkgManager: 'apt',
+      mise: mgr('2026.11.0 linux-arm64', '/root/.local/bin/mise', 'user-installed'),
+      uv: mgr('uv 0.9.12', '/root/.local/bin/uv', 'user-installed'),
+      apt: mgr('apt 2.8.3 (arm64)', '/usr/bin/apt-get', 'system'),
+      hostExec: mgr('1.0', '/usr/local/bin/host-exec', 'strata-managed'),
+      strataDebug: mgr('0.2.0', '/usr/local/bin/strata-debug', 'strata-managed'),
       installedToolCount: running ? 7 : 0,
       outdatedToolCount: 1,
       mirrorPreset: 'tuna',
@@ -46,170 +164,115 @@ export function createInitialToolsState(container: string, running: boolean): Mo
       installsBytes: 386 * MB,
     },
     items: [
-      {
-        id: 'host-exec',
-        name: 'host-exec',
-        manager: 'system',
-        group: 'core-bridge',
-        version: '1.0',
-        outdated: false,
-        installPath: '/usr/bin/host-exec',
-        active: true,
-        installed: true,
-        broken: false,
-      },
-      {
-        id: 'strata-debug',
-        name: 'strata-debug',
-        manager: 'system',
-        group: 'core-bridge',
-        version: '0.2.0',
-        outdated: false,
-        installPath: '/usr/bin/strata-debug',
-        active: true,
-        installed: true,
-        broken: false,
-      },
-      {
-        id: 'dropbear-bin',
-        name: 'dropbear-bin',
-        manager: 'apt',
-        group: 'core-bridge',
-        version: '2022.83-4',
-        outdated: false,
-        installPath: '/usr/sbin/dropbear',
-        active: true,
-        installed: true,
-        broken: false,
-      },
-      {
-        id: 'python',
-        name: 'python',
-        manager: 'mise',
-        group: 'mise-runtimes',
-        version: '3.12.8',
-        requestedVersion: '3.12',
-        outdated: false,
-        backend: 'core:python',
-        installPath: '/opt/strata/mise/installs/python/3.12.8',
-        sourcePath: '/etc/strata/mise/config.toml',
-        active: true,
-        installed: true,
-        broken: false,
-      },
-      {
-        id: 'node',
-        name: 'node',
-        manager: 'mise',
-        group: 'mise-runtimes',
-        version: '22.12.0',
-        requestedVersion: 'lts',
-        latestVersion: '22.14.0',
-        outdated: true,
-        backend: 'core:node',
-        installPath: '/opt/strata/mise/installs/node/22.12.0',
-        sourcePath: '/etc/strata/mise/config.toml',
-        active: true,
-        installed: true,
-        broken: false,
-      },
-      {
-        id: 'ripgrep',
-        name: 'ripgrep',
-        manager: 'mise',
-        group: 'cli-dev',
-        version: '14.1.1',
-        requestedVersion: 'latest',
-        outdated: false,
-        backend: 'aqua:BurntSushi/ripgrep',
-        installPath: '/opt/strata/mise/installs/ripgrep/14.1.1',
-        sourcePath: '/etc/strata/mise/config.toml',
-        active: true,
-        installed: true,
-        broken: false,
-      },
-      {
-        id: 'git',
-        name: 'git',
-        manager: 'apt',
-        group: 'cli-dev',
-        version: '1:2.43.0-1',
-        outdated: false,
-        installPath: '/usr/bin/git',
-        active: true,
-        installed: true,
-        broken: false,
-      },
-      {
-        id: 'ruff',
-        name: 'ruff',
-        manager: 'uv',
-        group: 'python-uv',
-        version: '0.9.4',
-        outdated: false,
-        installPath: '/opt/strata/uv/tools/ruff',
-        active: true,
-        installed: true,
-        broken: false,
-      },
-      {
-        id: 'strace',
-        name: 'strace',
-        manager: 'apt',
-        group: 'debug-l3-l5',
-        version: '6.8-1',
-        outdated: false,
-        installPath: '/usr/bin/strace',
-        active: true,
-        installed: true,
-        broken: false,
-      },
+      toolItem(
+        'system:host-exec',
+        'host-exec',
+        'system',
+        'core-bridge',
+        '1.0',
+        '/usr/local/bin/host-exec',
+        'strata-managed',
+      ),
+      toolItem(
+        'apt:dropbear-bin',
+        'dropbear-bin',
+        'apt',
+        'core-bridge',
+        '2022.83-4',
+        '/usr/sbin/dropbear',
+        'system',
+      ),
+      toolItem(
+        'mise:python@3.12.9',
+        'python',
+        'mise',
+        'mise-runtimes',
+        '3.12.9',
+        '/root/.local/share/mise/installs/python/3.12.9',
+        'user-installed',
+        {
+          requestedVersion: '3.12',
+          backend: 'core:python',
+          sourcePath: '/root/.config/mise/config.toml',
+        },
+      ),
+      toolItem(
+        'mise:python@3.11.11',
+        'python',
+        'mise',
+        'mise-runtimes',
+        '3.11.11',
+        '/root/.local/share/mise/installs/python/3.11.11',
+        'user-installed',
+        {
+          backend: 'core:python',
+          active: false,
+        },
+      ),
+      toolItem(
+        'mise:node@22.12.0',
+        'node',
+        'mise',
+        'mise-runtimes',
+        '22.12.0',
+        '/root/.local/share/mise/installs/node/22.12.0',
+        'user-installed',
+        {
+          requestedVersion: '22',
+          latestVersion: '22.14.0',
+          outdated: true,
+          backend: 'core:node',
+          sourcePath: '/root/.config/mise/config.toml',
+        },
+      ),
+      toolItem(
+        'uv:ruff',
+        'ruff',
+        'uv',
+        'python-uv',
+        '0.9.4',
+        '/root/.local/share/uv/tools/ruff',
+        'user-installed',
+      ),
+      toolItem(
+        'manual:custom-cli',
+        'custom-cli',
+        'manual',
+        'discovered',
+        'binary',
+        '/root/.local/bin/custom-cli',
+        'user-installed',
+      ),
     ],
     config: {
       container,
+      configPath: configPaths[0] ?? '/root/.config/mise/config.toml',
+      configPaths,
       mirrorPreset: 'tuna',
-      aptMirrorUrl: 'https://mirrors.tuna.tsinghua.edu.cn/ubuntu-ports',
-      nodeMirrorUrl: 'https://mirrors.tuna.tsinghua.edu.cn/nodejs-release',
-      pypiIndexUrl: 'https://pypi.tuna.tsinghua.edu.cn/simple',
-      npmRegistryUrl: 'https://registry.npmmirror.com',
-      rustupDistServer: 'https://mirrors.tuna.tsinghua.edu.cn/rustup',
-      goproxy: 'https://goproxy.cn,direct',
+      ...TUNA_MIRRORS,
+      noProxy: 'localhost,127.0.0.1',
       urlReplacements: {},
       jobs: 4,
       minimumReleaseAge: '24h',
       hasGithubToken: false,
-      miseConfigToml: miseToml,
+      miseConfigToml: userToml,
+    },
+    configFiles: {
+      '/root/.config/mise/config.toml': userToml,
+      '/etc/strata/mise/config.toml': strataToml,
     },
     doctor: {
       container,
       ok: true,
       items: [
-        {
-          id: 'layout-4path',
-          category: 'layout',
-          status: 'ok',
-          summary:
-            '4 个标准目录（/workspace、/opt/strata、/etc/strata、/var/cache/strata）及 layout.json v1 就绪',
-        },
-        {
-          id: 'path-shims',
-          category: 'environment',
-          status: 'ok',
-          summary:
-            '/etc/profile.d/strata-env.sh 与 /etc/environment 均包含 /opt/strata/mise/shims 与 /opt/strata/bin',
-        },
-        {
-          id: 'apt-sandbox',
-          category: 'apt',
-          status: 'ok',
-          summary: 'APT::Sandbox::User "root" 已配置，兼容 ColorOS / Android GKI 沙盒策略',
-        },
-        {
-          id: 'dropbear-keyonly',
-          category: 'ssh',
-          status: 'ok',
-          summary: 'Dropbear 仅公钥鉴权运行中，未检测到危险的 openssh-server privsep',
-        },
+        doc('canonical-layout', 'layout', '标准目录布局 schema v2 已就绪'),
+        doc(
+          'login-shell-env',
+          'environment',
+          '登录 Shell 已暴露 mise (/root/.local/bin/mise) 与 shims PATH',
+        ),
+        doc('apt-sandbox-root', 'apt', 'APT::Sandbox::User "root" 已配置'),
+        doc('dropbear-env-pass', 'ssh', 'Dropbear 以仅公钥模式运行并保留容器环境变量 (-e)'),
       ],
       miseDoctorJson: JSON.stringify(
         { version: '2026.11.0', os: 'linux', arch: 'arm64', problems: [] },

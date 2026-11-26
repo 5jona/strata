@@ -1,7 +1,9 @@
 import { useToast } from '@gojona/ui';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { formatMaintenanceOpLabel } from '../lib/format.ts';
 import type { StrataTransport } from '../transport/httpWsTransport.ts';
 import type {
+  ContainerConfig,
   ContainerJobProgressPayload,
   ContainerServiceRuntime,
   ContainerStatusSnapshot,
@@ -15,30 +17,48 @@ export interface StrataWorkspaceState {
   loading: boolean;
   daemonStatus: DaemonSummarySnapshot | null;
   containers: ContainerStatusSnapshot[];
+  selectedContainerId: string | undefined;
+  setSelectedContainerId: (id: string | undefined) => void;
   capabilities: KernelCapabilitiesResult | null;
   webStatus: WebStatusResult | null;
   servicesByContainer: Record<string, ContainerServiceRuntime[]>;
+  configsByContainer: Record<string, ContainerConfig>;
   activeJobs: ContainerJobProgressPayload[];
+  dismissJob: (jobId: string) => void;
   refreshAll: () => Promise<void>;
   refreshServices: (containerId: string) => Promise<void>;
   runAction: <T>(label: string, fn: () => Promise<T>) => Promise<T | null>;
 }
 
 /**
- * Synchronizes active device containers, daemon summary, kernel capabilities,
- * managed services, and live WebSocket push events.
+ * Synchronizes active device containers, global selected container context, daemon summary,
+ * kernel capabilities, managed services, container configs, and live WebSocket push events.
  */
 export function useStrataWorkspace(transport: StrataTransport | null): StrataWorkspaceState {
   const { pushToast } = useToast();
   const [loading, setLoading] = useState(false);
   const [daemonStatus, setDaemonStatus] = useState<DaemonSummarySnapshot | null>(null);
   const [containers, setContainers] = useState<ContainerStatusSnapshot[]>([]);
+  const [selectedId, setSelectedId] = useState<string | undefined>(undefined);
   const [capabilities, setCapabilities] = useState<KernelCapabilitiesResult | null>(null);
   const [webStatus, setWebStatus] = useState<WebStatusResult | null>(null);
   const [servicesByContainer, setServicesByContainer] = useState<
     Record<string, ContainerServiceRuntime[]>
   >({});
+  const [configsByContainer, setConfigsByContainer] = useState<Record<string, ContainerConfig>>({});
   const [activeJobs, setActiveJobs] = useState<ContainerJobProgressPayload[]>([]);
+
+  const selectedContainerId = useMemo(() => {
+    if (containers.length === 0) return undefined;
+    if (selectedId && containers.some((c) => c.id === selectedId)) {
+      return selectedId;
+    }
+    const defaultId = daemonStatus?.defaultContainer;
+    if (defaultId && containers.some((c) => c.id === defaultId)) {
+      return defaultId;
+    }
+    return containers.find((c) => c.isDefault)?.id ?? containers[0]?.id;
+  }, [containers, daemonStatus?.defaultContainer, selectedId]);
 
   const refreshServices = useCallback(
     async (containerId: string) => {
@@ -59,9 +79,11 @@ export function useStrataWorkspace(transport: StrataTransport | null): StrataWor
     if (!transport) {
       setDaemonStatus(null);
       setContainers([]);
+      setSelectedId(undefined);
       setCapabilities(null);
       setWebStatus(null);
       setServicesByContainer({});
+      setConfigsByContainer({});
       return;
     }
     setLoading(true);
@@ -77,21 +99,28 @@ export function useStrataWorkspace(transport: StrataTransport | null): StrataWor
       setCapabilities(caps);
       setWebStatus(web);
 
-      const svcEntries = await Promise.all(
+      const detailEntries = await Promise.all(
         list.map(async (c) => {
-          try {
-            const svcs = await transport.invoke(STRATA_METHODS.SERVICE_LIST, {
-              container: c.id,
-            });
-            return [c.id, svcs] as const;
-          } catch {
-            return [c.id, [] as ContainerServiceRuntime[]] as const;
-          }
+          const [svcsRes, cfgRes] = await Promise.allSettled([
+            transport.invoke(STRATA_METHODS.SERVICE_LIST, { container: c.id }),
+            transport.invoke(STRATA_METHODS.CONTAINER_CONFIG_GET, { container: c.id }),
+          ]);
+          return {
+            id: c.id,
+            svcs:
+              svcsRes.status === 'fulfilled' ? svcsRes.value : ([] as ContainerServiceRuntime[]),
+            cfg: cfgRes.status === 'fulfilled' ? cfgRes.value.config : null,
+          };
         }),
       );
-      setServicesByContainer(Object.fromEntries(svcEntries));
+      setServicesByContainer(Object.fromEntries(detailEntries.map((item) => [item.id, item.svcs])));
+      setConfigsByContainer(
+        Object.fromEntries(
+          detailEntries.filter((item) => item.cfg !== null).map((item) => [item.id, item.cfg]),
+        ) as Record<string, ContainerConfig>,
+      );
     } catch (err) {
-      pushToast(`刷新设备状态失败: ${err instanceof Error ? err.message : String(err)}`, 'danger');
+      pushToast(`刷新设备状态失败：${err instanceof Error ? err.message : String(err)}`, 'danger');
     } finally {
       setLoading(false);
     }
@@ -145,12 +174,15 @@ export function useStrataWorkspace(transport: StrataTransport | null): StrataWor
           pushToast(`容器 ${job.container} 准备完成`, 'success');
           void refreshAll();
         } else if (job.state === 'failed') {
-          pushToast(`容器 ${job.container} 任务失败: ${job.error ?? '未知错误'}`, 'danger');
+          pushToast(`容器 ${job.container} 任务失败：${job.error ?? '未知错误'}`, 'danger');
         }
       } else if (envelope.event === STRATA_EVENTS.CONTAINER_MAINTENANCE_DONE) {
         const { container, op, ok, summary, error } = envelope.payload;
+        const opLabel = formatMaintenanceOpLabel(op);
         pushToast(
-          ok ? `${container} ${op}: ${summary}` : `${container} ${op} 失败: ${error ?? summary}`,
+          ok
+            ? `${container} ${opLabel}完成：${summary}`
+            : `${container} ${opLabel}失败：${error ?? summary}`,
           ok ? 'success' : 'danger',
         );
         void refreshAll();
@@ -158,13 +190,17 @@ export function useStrataWorkspace(transport: StrataTransport | null): StrataWor
     });
   }, [pushToast, refreshAll, refreshServices, transport]);
 
+  const dismissJob = useCallback((jobId: string) => {
+    setActiveJobs((prev) => prev.filter((j) => j.jobId !== jobId));
+  }, []);
+
   const runAction = useCallback(
     async <T>(label: string, fn: () => Promise<T>): Promise<T | null> => {
       try {
         const res = await fn();
         return res;
       } catch (err) {
-        pushToast(`${label}失败: ${err instanceof Error ? err.message : String(err)}`, 'danger');
+        pushToast(`${label}失败：${err instanceof Error ? err.message : String(err)}`, 'danger');
         return null;
       }
     },
@@ -175,10 +211,14 @@ export function useStrataWorkspace(transport: StrataTransport | null): StrataWor
     loading,
     daemonStatus,
     containers,
+    selectedContainerId,
+    setSelectedContainerId: setSelectedId,
     capabilities,
     webStatus,
     servicesByContainer,
+    configsByContainer,
     activeJobs,
+    dismissJob,
     refreshAll,
     refreshServices,
     runAction,

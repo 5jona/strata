@@ -32,11 +32,11 @@ fi
 
 STATE_DIR="/data/adb/strata"
 RUN_DIR="${STATE_DIR}/run"
-DEFAULT_MNT="/data/local/strata/containers/main/mnt"
-/system/bin/mkdir -p "$STATE_DIR" "$RUN_DIR" "${RUN_DIR}/logs" "$DEFAULT_MNT"
+CONTAINERS_ROOT="/data/local/strata/containers"
+/system/bin/mkdir -p "$STATE_DIR" "$RUN_DIR" "${RUN_DIR}/logs" "$CONTAINERS_ROOT"
 /system/bin/chown 0:0 "$STATE_DIR" "$RUN_DIR" "${RUN_DIR}/logs"
 /system/bin/chmod 0700 "$STATE_DIR" "$RUN_DIR" "${RUN_DIR}/logs"
-/system/bin/chmod 0755 /data/local/strata /data/local/strata/containers /data/local/strata/containers/main "$DEFAULT_MNT"
+/system/bin/chmod 0755 /data/local/strata "$CONTAINERS_ROOT"
 
 if [ ! -f "${STATE_DIR}/config.json" ] && [ -f "${MODPATH}/config.json" ]; then
     /system/bin/cp "${MODPATH}/config.json" "${STATE_DIR}/config.json"

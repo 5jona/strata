@@ -62,6 +62,12 @@ pub(super) fn validate_config_params(params: &ToolsConfigSetParams) -> DaemonRes
                     "urlReplacements keys and values must be non-empty".to_owned(),
                 ));
             }
+            if k.bytes().any(|b| b.is_ascii_control()) || v.bytes().any(|b| b.is_ascii_control()) {
+                return Err(DaemonError::InvalidParams(
+                    "urlReplacements keys and values must not contain control characters or newlines"
+                        .to_owned(),
+                ));
+            }
         }
     }
     Ok(())
@@ -223,12 +229,19 @@ pub(super) fn patch_mise_toml(
     result
 }
 
+pub(super) fn is_ubuntu_os_release(os_rel: &str) -> bool {
+    os_rel.lines().any(|line| {
+        let trimmed = line.trim();
+        trimmed.eq_ignore_ascii_case("id=ubuntu") || trimmed.eq_ignore_ascii_case("id=\"ubuntu\"")
+    })
+}
+
 /// Updates APT main mirror URIs cleanly in `/etc/apt/sources.list*` without touching `99strata-sandbox`.
 pub(super) fn sync_apt_mirror_sources(root: &RootDir, mirror_url: Option<&str>) {
     let os_rel = read_root_utf8(root, "usr/lib/os-release")
         .or_else(|| read_root_utf8(root, "etc/os-release"))
         .unwrap_or_default();
-    let is_ubuntu = os_rel.to_ascii_lowercase().contains("id=ubuntu");
+    let is_ubuntu = is_ubuntu_os_release(&os_rel);
     let target = mirror_url
         .map(|s| s.trim_end_matches('/').to_owned())
         .unwrap_or_else(|| {
@@ -293,7 +306,12 @@ fn unquote_toml_str(raw: &str) -> String {
 }
 
 fn quote_toml_str(val: &str) -> String {
-    let escaped = val.replace('\\', "\\\\").replace('"', "\\\"");
+    let escaped = val
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
+        .replace('\t', "\\t");
     format!("\"{escaped}\"")
 }
 

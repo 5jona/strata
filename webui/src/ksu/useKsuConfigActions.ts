@@ -101,7 +101,7 @@ export function useKsuConfigActions({
     try {
       const next = await invokeStrataKsuRpc(bridge, STRATA_METHODS.WEB_CONFIGURE, { lanEnabled });
       setWebStatus(next);
-      pushToast(lanEnabled ? '已开启局域网配对' : '已切换为本机回环', 'success');
+      pushToast(lanEnabled ? '已开启局域网配对' : '已关闭局域网配对（仅限本机访问）', 'success');
     } catch (err) {
       pushToast(errMsg(err), 'danger');
     } finally {
@@ -114,7 +114,7 @@ export function useKsuConfigActions({
     try {
       const res = await readStrataKsuWebToken(bridge);
       setPairingToken(res.token);
-      pushToast('已读取当前 Bearer Token', 'success');
+      pushToast('已读取当前配对密钥', 'success');
     } catch (err) {
       pushToast(errMsg(err), 'danger');
     } finally {
@@ -127,7 +127,7 @@ export function useKsuConfigActions({
     try {
       const res = await invokeStrataKsuRpc(bridge, STRATA_METHODS.WEB_ROTATE_TOKEN);
       setPairingToken(res.token);
-      pushToast(`Token 已轮换（已吊销 ${res.sessionsRevoked} 个会话）`, 'success');
+      pushToast(`配对密钥已刷新（已断开 ${res.sessionsRevoked} 个旧连接）`, 'success');
     } catch (err) {
       pushToast(errMsg(err), 'danger');
     } finally {

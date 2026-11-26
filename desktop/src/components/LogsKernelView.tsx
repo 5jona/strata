@@ -26,14 +26,14 @@ const CAP_MATRIX: CapItem[] = [
   { key: 'overlayFs', label: 'OverlayFS', tier: 'stock-gki', hint: '联合挂载层' },
   { key: 'fuseFs', label: 'FUSE 文件系统', tier: 'stock-gki', hint: '用户态挂载' },
   { key: 'cgroupV2', label: 'cgroup v2', tier: 'stock-gki', hint: '资源控制与排空' },
-  { key: 'cgroupBpf', label: 'cgroup BPF', tier: 'stock-gki', hint: 'L5 eBPF 追踪' },
+  { key: 'cgroupBpf', label: 'cgroup BPF', tier: 'stock-gki', hint: '内核级网络与行为追踪' },
   { key: 'ioUring', label: 'io_uring', tier: 'stock-gki', hint: '异步 I/O 加速' },
   { key: 'sysvIpc', label: 'SYSVIPC', tier: 'tier2', hint: 'PostgreSQL / Chromium 共享内存' },
-  { key: 'cgroupPids', label: 'cgroup pids 控制器', tier: 'tier2', hint: '防止 fork 炸弹' },
+  { key: 'cgroupPids', label: 'cgroup pids 控制器', tier: 'tier2', hint: '防止进程过多导致卡死' },
   { key: 'devtmpfs', label: 'devtmpfs', tier: 'tier2', hint: 'systemd / udev 设备树' },
   { key: 'kvm', label: 'KVM 硬件虚拟化', tier: 'tier2', hint: '嵌套虚拟机加速' },
   { key: 'systemdReady', label: 'systemd 就绪', tier: 'tier2', hint: '完整系统初始化栈' },
-  { key: 'dockerReady', label: 'Docker 引擎就绪', tier: 'tier2', hint: 'OCI 守护进程支持' },
+  { key: 'dockerReady', label: 'Docker 引擎就绪', tier: 'tier2', hint: '直接运行容器引擎支持' },
 ];
 
 /**
@@ -85,9 +85,9 @@ export function LogsKernelView({ transport, capabilities, containers }: LogsKern
     <div className="flex h-full flex-col gap-4 overflow-y-auto p-5 strata-scroll">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="text-lg font-semibold text-[var(--text-primary)]">日志与内核能力矩阵</h1>
+          <h1 className="text-lg font-semibold text-[var(--text-primary)]">日志与内核</h1>
           <p className="text-xs text-[var(--text-secondary)]">
-            实时探测 Android GKI 原厂内核与 Tier 2 定制内核特性，并查阅 stratad / 容器运行日志
+            查看当前设备内核对容器特性的支持情况，并实时排查后台服务与容器运行日志
           </p>
         </div>
         <Button size="sm" variant="secondary" disabled={loading} onClick={() => void loadLogs()}>
@@ -101,14 +101,12 @@ export function LogsKernelView({ transport, capabilities, containers }: LogsKern
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="flex items-center gap-2">
             <Cpu className="size-4 text-[var(--accent)]" />
-            <span className="text-sm font-semibold text-[var(--text-primary)]">
-              内核能力矩阵 (`daemon.capabilities`)
-            </span>
+            <span className="text-sm font-semibold text-[var(--text-primary)]">内核支持情况</span>
           </div>
           <div className="flex items-center gap-2">
             <Badge variant="neutral">{capabilities?.kernelRelease ?? '等待探测…'}</Badge>
             <Badge variant={capabilities?.dockerReady ? 'success' : 'accent'}>
-              {capabilities?.dockerReady ? 'Tier 2 完整内核' : '原厂 GKI 兼容模式'}
+              {capabilities?.dockerReady ? '已启用增强内核特性' : '标准 Android GKI 兼容模式'}
             </Badge>
           </div>
         </div>
@@ -127,7 +125,7 @@ export function LogsKernelView({ transport, capabilities, containers }: LogsKern
                       {cap.label}
                     </span>
                     <Badge variant={cap.tier === 'stock-gki' ? 'neutral' : 'accent'}>
-                      {cap.tier === 'stock-gki' ? 'GKI' : 'Tier 2'}
+                      {cap.tier === 'stock-gki' ? '标准 GKI' : '增强特性'}
                     </Badge>
                   </div>
                   <div className="truncate text-[11px] text-[var(--text-secondary)]">
@@ -152,14 +150,14 @@ export function LogsKernelView({ transport, capabilities, containers }: LogsKern
           value={logSource}
           onValueChange={setLogSource}
           options={[
-            { value: 'daemon', label: 'stratad 守护进程' },
+            { value: 'daemon', label: '后台服务日志' },
             ...containers.map((c) => ({ value: c.id, label: `容器 ${c.id}` })),
           ]}
         />
       </div>
 
       <LogConsole
-        title={logSource === 'daemon' ? 'stratad.log' : `${logSource}.log`}
+        title={logSource === 'daemon' ? 'Strata 后台服务日志' : `容器 ${logSource} SSH 日志`}
         entries={entries}
         searchable
         filterable

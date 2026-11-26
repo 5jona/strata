@@ -77,7 +77,8 @@ pub struct DaemonSummarySnapshot {
     pub pid: u32,
     pub uid: u32,
     pub uptime_ms: u64,
-    pub default_container: String,
+    #[serde(default)]
+    pub default_container: Option<String>,
     pub total_containers: usize,
     pub running_containers: usize,
     pub active_tasks: usize,

@@ -48,7 +48,7 @@ export function ServiceRowCard({
         <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 font-mono text-[11px] text-[var(--text-secondary)]">
           {spec && <span className="truncate">{spec.command.join(' ')}</span>}
           <span>运行 {formatUptime(service.uptimeMs)}</span>
-          <span>重启 {service.restartCount} 次</span>
+          <span>已重启 {service.restartCount} 次</span>
           {service.lastError && (
             <span className="text-[var(--danger)]">错误：{service.lastError}</span>
           )}

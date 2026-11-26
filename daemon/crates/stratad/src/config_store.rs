@@ -95,6 +95,14 @@ impl ConfigStore {
         let mut candidate = self.inner.read().await.clone();
         let target_id = candidate
             .resolve_container_id(params.container.as_deref())
+            .ok_or_else(|| {
+                DaemonError::ContainerNotFound(
+                    params
+                        .container
+                        .clone()
+                        .unwrap_or_else(|| "default".to_owned()),
+                )
+            })?
             .to_owned();
 
         let Some(entry) = candidate.containers.get_mut(&target_id) else {
@@ -115,6 +123,9 @@ impl ConfigStore {
         }
         if let Some(v) = params.hostname {
             entry.hostname = v;
+        }
+        if let Some(v) = params.ssh_enabled {
+            entry.ssh.enabled = v;
         }
         if let Some(v) = params.ssh_port {
             entry.ssh.port = v;
@@ -223,6 +234,14 @@ mod tests {
         let path = dir.join("config.json");
 
         let store = ConfigStore::load_or_seed(path).expect("seed config");
+        let _ = store
+            .add_container(
+                "main".to_owned(),
+                ContainerConfig::default_for_id("main"),
+                true,
+            )
+            .await
+            .expect("seed main container");
         let (id, updated) = store
             .patch_container(ContainerConfigPatchParams {
                 extra_char_devs: Some(vec!["uinput".to_owned()]),

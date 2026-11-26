@@ -1,5 +1,5 @@
 import { Badge, Button, Card, SettingRow, Switch } from '@gojona/ui';
-import { Cpu } from 'lucide-react';
+import { Cpu, Save } from 'lucide-react';
 import {
   COMMON_DEBUG_CHAR_DEVS,
   getCustomCharDevs,
@@ -19,6 +19,8 @@ export interface DebugPassthroughCardProps {
   extraMounts: readonly BindMount[];
   onExtraMountsChange: (next: BindMount[]) => void;
   disabled?: boolean;
+  hasUnsavedChanges?: boolean;
+  onSave?: () => void;
 }
 
 /** Card controlling opt-in host runtime virtual FS passthrough, L5 read-only mounts, and char devices. */
@@ -30,6 +32,8 @@ export function DebugPassthroughCard({
   extraMounts,
   onExtraMountsChange,
   disabled = false,
+  hasUnsavedChanges = false,
+  onSave,
 }: DebugPassthroughCardProps) {
   const l5Enabled = hasL5DiagMounts(extraMounts);
   const customCharDevs = getCustomCharDevs(extraCharDevs);
@@ -41,7 +45,7 @@ export function DebugPassthroughCard({
         <div className="flex min-w-0 items-center gap-1.5">
           <Cpu className="size-3.5 shrink-0 text-[var(--accent)]" />
           <span className="truncate text-xs font-medium text-[var(--text-primary)]">
-            调试透传与 L5 诊断
+            调试透传与内核诊断
           </span>
         </div>
         <Badge className="shrink-0" variant="neutral">
@@ -51,14 +55,14 @@ export function DebugPassthroughCard({
 
       <SettingRow
         variant="plain"
-        title="宿主机运行时"
-        description="直通宿主机 /proc、/sys、/dev 并启用 FullHostRuntime 完整权限集（重启容器后生效）"
+        title="宿主机环境直通 (FullHostRuntime)"
+        description="直通宿主机 /proc、/sys、/dev 并授予完整权限（保存后需重启容器生效）"
         control={
           <Switch
             checked={hostRuntime}
             disabled={disabled}
             onCheckedChange={onHostRuntimeChange}
-            aria-label="宿主机运行时"
+            aria-label="宿主机环境直通"
           />
         }
       />
@@ -67,8 +71,8 @@ export function DebugPassthroughCard({
 
       <SettingRow
         variant="plain"
-        title="L5 内核诊断只读挂载"
-        description="只读挂载 /sys/fs/pstore、/sys/kernel/tracing 与 /sys/fs/bpf"
+        title="内核深度诊断只读挂载"
+        description="只读挂载 pstore、tracing 与 bpf 内核调试接口（/sys/fs/pstore、/sys/kernel/tracing、/sys/fs/bpf）"
         control={
           <Switch
             checked={l5Enabled}
@@ -76,7 +80,7 @@ export function DebugPassthroughCard({
             onCheckedChange={(checked) =>
               onExtraMountsChange(toggleL5DiagMounts(extraMounts, checked))
             }
-            aria-label="L5 内核诊断只读挂载"
+            aria-label="内核深度诊断只读挂载"
           />
         }
       />
@@ -85,7 +89,7 @@ export function DebugPassthroughCard({
 
       <div className="flex flex-col gap-1.5">
         <span className="text-[11px] font-medium text-[var(--text-secondary)]">
-          字符设备透传（/dev/*）
+          硬件与虚拟设备透传（/dev/*）
         </span>
         <div className="flex flex-wrap gap-1.5">
           {COMMON_DEBUG_CHAR_DEVS.map((opt) => {
@@ -145,6 +149,21 @@ export function DebugPassthroughCard({
                 </Badge>
               ))}
             </div>
+          </div>
+        </>
+      ) : null}
+
+      {hasUnsavedChanges && onSave ? (
+        <>
+          <div className="pochita-divider" />
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-[11px] font-medium text-[var(--warning)]">
+              有未保存的配置修改
+            </span>
+            <Button size="sm" variant="primary" disabled={disabled} onClick={onSave}>
+              <Save className="size-3.5" />
+              保存配置
+            </Button>
           </div>
         </>
       ) : null}

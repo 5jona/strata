@@ -24,8 +24,8 @@
         "DEFAULT_WEB_LISTEN_LAN": { "value": "0.0.0.0", "type": "string", "doc": "LAN-mode Web console bind address (restricted to RFC1918 peers)." },
         "DEFAULT_DISTRO_MIRROR_TUNA": { "value": "https://mirrors.tuna.tsinghua.edu.cn/lxc-images", "type": "string", "doc": "Primary China-accessible Simplestreams ARM64 rootfs mirror." },
         "DEFAULT_DISTRO_MIRROR_OFFICIAL": { "value": "https://images.linuxcontainers.org", "type": "string", "doc": "Official LinuxContainers Simplestreams fallback mirror." },
-        "CONTAINER_LAYOUT_SCHEMA_VERSION": { "value": 1, "type": "u32", "doc": "Canonical in-container directory and env layout schema version." },
-        "DEFAULT_CONTAINER_PATH": { "value": "/opt/strata/mise/shims:/opt/strata/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", "type": "string", "doc": "Unified container PATH across PTY, exec, TaskRunner, services, and Dropbear SSH." },
+        "CONTAINER_LAYOUT_SCHEMA_VERSION": { "value": 2, "type": "u32", "doc": "Canonical in-container directory and env layout schema version." },
+        "DEFAULT_CONTAINER_PATH": { "value": "/root/.local/share/mise/shims:/root/.local/bin:/root/.cargo/bin:/opt/strata/mise/shims:/opt/strata/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", "type": "string", "doc": "Unified container PATH prioritizing user-installed runtimes with legacy /opt/strata fallback." },
         "DEFAULT_CONTAINER_WORKDIR": { "value": "/workspace", "type": "string", "doc": "Canonical default working directory inside Strata containers." }
       }
     },
@@ -197,7 +197,11 @@
         { "name": "Apt" },
         { "name": "Uv" },
         { "name": "Bundle" },
-        { "name": "System" }
+        { "name": "System" },
+        { "name": "Apk" },
+        { "name": "Pacman" },
+        { "name": "Dnf" },
+        { "name": "Manual" }
       ]
     },
     "ToolGroupKind": {
@@ -208,7 +212,26 @@
         { "name": "MiseRuntimes" },
         { "name": "CliDev" },
         { "name": "DebugL3L5" },
-        { "name": "PythonUv" }
+        { "name": "PythonUv" },
+        { "name": "Shell" },
+        { "name": "Discovered" }
+      ]
+    },
+    "ToolInstallSource": {
+      "doc": "Provenance of a discovered tool manager or binary inside a container.",
+      "renameAll": "kebab-case",
+      "variants": [
+        { "name": "UserInstalled" },
+        { "name": "StrataManaged" },
+        { "name": "System" }
+      ]
+    },
+    "ToolUseScope": {
+      "doc": "Configuration scope when pinning/activating a tool version via tools.use.",
+      "renameAll": "snake_case",
+      "variants": [
+        { "name": "Global" },
+        { "name": "Workspace" }
       ]
     },
     "ToolMirrorPreset": {
@@ -328,7 +351,7 @@
       "rustDerives": ["Debug", "Clone", "PartialEq", "Eq", "Serialize", "Deserialize"],
       "fields": [
         { "name": "version", "type": "u32", "default": 1 },
-        { "name": "default_container", "type": "string", "default": "main" },
+        { "name": "default_container", "type": "string", "optional": true },
         { "name": "sideveil", "type": { "ref": "SideVeilBridgeConfig" }, "default": {} },
         { "name": "web", "type": { "ref": "WebConsoleConfig" }, "default": {} },
         { "name": "containers", "type": { "map": ["string", { "ref": "ContainerConfig" }] }, "default": {} }
@@ -345,12 +368,30 @@
         { "name": "image_path", "type": "string", "optional": true },
         { "name": "mount_dir", "type": "string", "optional": true },
         { "name": "hostname", "type": "string", "optional": true },
+        { "name": "ssh_enabled", "type": "bool", "optional": true, "skipSerializingIfNone": true },
         { "name": "ssh_port", "type": "u16", "optional": true },
         { "name": "host_bridge", "type": "bool", "optional": true },
         { "name": "host_runtime", "type": "bool", "optional": true },
         { "name": "noatime", "type": "bool", "optional": true, "skipSerializingIfNone": true },
         { "name": "extra_char_devs", "type": { "list": "string" }, "optional": true },
         { "name": "extra_mounts", "type": { "list": { "ref": "BindMount" } }, "optional": true }
+      ]
+    },
+    "ContainerSetDefaultParams": {
+      "doc": "Parameters for container.setDefault.",
+      "renameAll": "camelCase",
+      "rustDerives": ["Debug", "Clone", "PartialEq", "Eq", "Serialize", "Deserialize"],
+      "fields": [
+        { "name": "id", "type": "string" }
+      ]
+    },
+    "ContainerSetDefaultResult": {
+      "doc": "Result returned by container.setDefault.",
+      "renameAll": "camelCase",
+      "rustDerives": ["Debug", "Clone", "PartialEq", "Eq", "Serialize", "Deserialize"],
+      "fields": [
+        { "name": "default_container", "type": "string" },
+        { "name": "previous_default_container", "type": "string", "optional": true, "skipSerializingIfNone": true }
       ]
     },
     "ContainerConfigResult": {
@@ -459,7 +500,7 @@
         { "name": "pid", "type": "u32" },
         { "name": "uid", "type": "u32" },
         { "name": "uptime_ms", "type": "u64" },
-        { "name": "default_container", "type": "string" },
+        { "name": "default_container", "type": "string", "optional": true },
         { "name": "total_containers", "type": "usize" },
         { "name": "running_containers", "type": "usize" },
         { "name": "active_tasks", "type": "usize" },
@@ -879,10 +920,15 @@
         { "name": "expected_sha256", "type": "string", "optional": true },
         { "name": "size_mb", "type": "u64", "default": 8192 },
         { "name": "hostname", "type": "string", "optional": true },
+        { "name": "enable_ssh", "type": "bool", "default": false },
         { "name": "ssh_port", "type": "u16", "optional": true },
         { "name": "ssh_public_keys", "type": { "list": "string" }, "default": [] },
         { "name": "auto_start", "type": "bool", "default": false },
+        { "name": "set_default", "type": "bool", "default": false },
         { "name": "host_bridge", "type": "bool", "default": true },
+        { "name": "extra_char_devs", "type": { "list": "string" }, "optional": true, "skipSerializingIfNone": true },
+        { "name": "l5_diagnostic_mounts", "type": "bool", "default": false },
+        { "name": "sync_android_dns", "type": "bool", "default": true },
         { "name": "noatime", "type": "bool", "default": true }
       ]
     },
@@ -1107,7 +1153,8 @@
       "fields": [
         { "name": "installed", "type": "bool" },
         { "name": "version", "type": "string", "optional": true, "skipSerializingIfNone": true },
-        { "name": "bin_path", "type": "string", "optional": true, "skipSerializingIfNone": true }
+        { "name": "bin_path", "type": "string", "optional": true, "skipSerializingIfNone": true },
+        { "name": "source", "type": { "ref": "ToolInstallSource" }, "optional": true, "skipSerializingIfNone": true }
       ]
     },
     "ToolsStatusResult": {
@@ -1120,6 +1167,10 @@
         { "name": "layout_compliant", "type": "bool" },
         { "name": "workspace_dir", "type": "string" },
         { "name": "mise_config_path", "type": "string" },
+        { "name": "mise_data_dir", "type": "string", "optional": true, "skipSerializingIfNone": true },
+        { "name": "mise_config_paths", "type": { "list": "string" }, "default": [] },
+        { "name": "legacy_strata_mise_detected", "type": "bool", "default": false },
+        { "name": "system_pkg_manager", "type": "string", "optional": true, "skipSerializingIfNone": true },
         { "name": "mise", "type": { "ref": "ToolManagerHealth" } },
         { "name": "uv", "type": { "ref": "ToolManagerHealth" } },
         { "name": "apt", "type": { "ref": "ToolManagerHealth" } },
@@ -1159,6 +1210,7 @@
         { "name": "backend", "type": "string", "optional": true, "skipSerializingIfNone": true },
         { "name": "install_path", "type": "string", "optional": true, "skipSerializingIfNone": true },
         { "name": "source_path", "type": "string", "optional": true, "skipSerializingIfNone": true },
+        { "name": "source", "type": { "ref": "ToolInstallSource" }, "optional": true, "skipSerializingIfNone": true },
         { "name": "active", "type": "bool", "default": true },
         { "name": "installed", "type": "bool", "default": true },
         { "name": "broken", "type": "bool", "default": false }
@@ -1221,6 +1273,7 @@
       "rustDerives": ["Debug", "Clone", "PartialEq", "Eq", "Serialize", "Deserialize"],
       "fields": [
         { "name": "container", "type": "string" },
+        { "name": "registry_available", "type": "bool", "default": false },
         { "name": "entries", "type": { "list": { "ref": "ToolCatalogEntry" } } },
         { "name": "bundles", "type": { "list": { "ref": "ToolBundleSpec" } } }
       ]
@@ -1230,7 +1283,8 @@
       "renameAll": "camelCase",
       "rustDerives": ["Debug", "Clone", "Default", "PartialEq", "Eq", "Serialize", "Deserialize"],
       "fields": [
-        { "name": "container", "type": "string", "optional": true }
+        { "name": "container", "type": "string", "optional": true },
+        { "name": "config_path", "type": "string", "optional": true, "skipSerializingIfNone": true }
       ]
     },
     "ToolsConfigResult": {
@@ -1239,6 +1293,8 @@
       "rustDerives": ["Debug", "Clone", "PartialEq", "Eq", "Serialize", "Deserialize"],
       "fields": [
         { "name": "container", "type": "string" },
+        { "name": "config_path", "type": "string", "optional": true, "skipSerializingIfNone": true },
+        { "name": "config_paths", "type": { "list": "string" }, "default": [] },
         { "name": "mirror_preset", "type": { "ref": "ToolMirrorPreset" } },
         { "name": "apt_mirror_url", "type": "string", "optional": true, "skipSerializingIfNone": true },
         { "name": "node_mirror_url", "type": "string", "optional": true, "skipSerializingIfNone": true },
@@ -1263,6 +1319,7 @@
       "rustDerives": ["Debug", "Clone", "Default", "PartialEq", "Eq", "Serialize", "Deserialize"],
       "fields": [
         { "name": "container", "type": "string", "optional": true },
+        { "name": "config_path", "type": "string", "optional": true, "skipSerializingIfNone": true },
         { "name": "mirror_preset", "type": { "ref": "ToolMirrorPreset" }, "optional": true },
         { "name": "apt_mirror_url", "type": "string", "optional": true },
         { "name": "node_mirror_url", "type": "string", "optional": true },
@@ -1376,6 +1433,53 @@
         { "name": "freed_bytes", "type": "u64" }
       ]
     },
+    "ToolsVersionsParams": {
+      "doc": "Parameters for tools.versions querying remote/installable versions.",
+      "renameAll": "camelCase",
+      "rustDerives": ["Debug", "Clone", "PartialEq", "Eq", "Serialize", "Deserialize"],
+      "fields": [
+        { "name": "container", "type": "string", "optional": true },
+        { "name": "manager", "type": { "ref": "ToolManagerKind" } },
+        { "name": "name", "type": "string" },
+        { "name": "include_prerelease", "type": "bool", "default": false }
+      ]
+    },
+    "ToolVersionOption": {
+      "doc": "Single installable or installed version candidate returned by tools.versions.",
+      "renameAll": "camelCase",
+      "rustDerives": ["Debug", "Clone", "PartialEq", "Eq", "Serialize", "Deserialize"],
+      "fields": [
+        { "name": "version", "type": "string" },
+        { "name": "created_at", "type": "string", "optional": true, "skipSerializingIfNone": true },
+        { "name": "installed", "type": "bool", "default": false },
+        { "name": "active", "type": "bool", "default": false },
+        { "name": "prerelease", "type": "bool", "default": false }
+      ]
+    },
+    "ToolsVersionsResult": {
+      "doc": "Result returned by tools.versions.",
+      "renameAll": "camelCase",
+      "rustDerives": ["Debug", "Clone", "PartialEq", "Eq", "Serialize", "Deserialize"],
+      "fields": [
+        { "name": "container", "type": "string" },
+        { "name": "manager", "type": { "ref": "ToolManagerKind" } },
+        { "name": "name", "type": "string" },
+        { "name": "versions", "type": { "list": { "ref": "ToolVersionOption" } } }
+      ]
+    },
+    "ToolsUseParams": {
+      "doc": "Parameters for tools.use switching or pinning an active tool version.",
+      "renameAll": "camelCase",
+      "rustDerives": ["Debug", "Clone", "PartialEq", "Eq", "Serialize", "Deserialize"],
+      "fields": [
+        { "name": "container", "type": "string", "optional": true },
+        { "name": "manager", "type": { "ref": "ToolManagerKind" } },
+        { "name": "name", "type": "string" },
+        { "name": "version", "type": "string" },
+        { "name": "scope", "type": { "ref": "ToolUseScope" }, "optional": true, "skipSerializingIfNone": true },
+        { "name": "config_path", "type": "string", "optional": true, "skipSerializingIfNone": true }
+      ]
+    },
     "ToolsStateChangedPayload": {
       "doc": "Event payload emitted when a container tools mutation task completes.",
       "renameAll": "camelCase",
@@ -1405,6 +1509,7 @@
     "CONTAINER_RESTART": { "method": "container.restart", "params": { "ref": "ContainerSelectorParams" }, "result": { "ref": "ContainerStatusSnapshot" } },
     "CONTAINER_CREATE": { "method": "container.create", "params": { "ref": "ContainerCreateParams" }, "result": { "ref": "ContainerJobStartResult" } },
     "CONTAINER_DELETE": { "method": "container.delete", "params": { "ref": "ContainerDeleteParams" }, "result": { "ref": "ContainerDeleteResult" } },
+    "CONTAINER_SET_DEFAULT": { "method": "container.setDefault", "params": { "ref": "ContainerSetDefaultParams" }, "result": { "ref": "ContainerSetDefaultResult" } },
     "CONTAINER_RESIZE": { "method": "container.resize", "params": { "ref": "ContainerResizeParams" }, "result": { "ref": "ContainerResizeResult" } },
     "CONTAINER_CLONE": { "method": "container.clone", "params": { "ref": "ContainerCloneParams" }, "result": { "ref": "ContainerCloneResult" } },
     "CONTAINER_JOB_STATUS": { "method": "container.jobStatus", "params": { "ref": "ContainerJobSelectorParams" }, "result": { "ref": "ContainerJobProgressPayload" } },
@@ -1445,6 +1550,8 @@
     "TOOLS_INSTALL": { "method": "tools.install", "params": { "ref": "ToolsInstallParams" }, "result": { "ref": "TaskRunResult" } },
     "TOOLS_UNINSTALL": { "method": "tools.uninstall", "params": { "ref": "ToolsUninstallParams" }, "result": { "ref": "TaskRunResult" } },
     "TOOLS_UPGRADE": { "method": "tools.upgrade", "params": { "ref": "ToolsUpgradeParams" }, "result": { "ref": "TaskRunResult" } },
+    "TOOLS_VERSIONS": { "method": "tools.versions", "params": { "ref": "ToolsVersionsParams" }, "result": { "ref": "ToolsVersionsResult" } },
+    "TOOLS_USE": { "method": "tools.use", "params": { "ref": "ToolsUseParams" }, "result": { "ref": "TaskRunResult" } },
     "TOOLS_DOCTOR": { "method": "tools.doctor", "params": { "ref": "ToolsDoctorParams" }, "result": { "ref": "ToolsDoctorResult" } },
     "TOOLS_CACHE_CLEAN": { "method": "tools.cacheClean", "params": { "ref": "ToolsCacheCleanParams" }, "result": { "ref": "ToolsCacheCleanResult" } }
   },
@@ -1528,12 +1635,16 @@
           "ContainerJobState",
           "ToolManagerKind",
           "ToolGroupKind",
+          "ToolInstallSource",
+          "ToolUseScope",
           "ToolMirrorPreset",
           "ToolDiagnosticStatus",
           "ToolsBootstrapProfile"
         ],
         "structs": [
           "ContainerSelectorParams",
+          "ContainerSetDefaultParams",
+          "ContainerSetDefaultResult",
           "PingResult",
           "DaemonHealthResult",
           "KernelCapabilitiesResult",
@@ -1589,6 +1700,10 @@
           "ToolsInstallParams",
           "ToolsUninstallParams",
           "ToolsUpgradeParams",
+          "ToolsVersionsParams",
+          "ToolVersionOption",
+          "ToolsVersionsResult",
+          "ToolsUseParams",
           "ToolsDoctorParams",
           "ToolDiagnosticItem",
           "ToolsDoctorResult",
@@ -1644,6 +1759,8 @@
           "ContainerJobState",
           "ToolManagerKind",
           "ToolGroupKind",
+          "ToolInstallSource",
+          "ToolUseScope",
           "ToolMirrorPreset",
           "ToolDiagnosticStatus",
           "ToolsBootstrapProfile"
@@ -1662,6 +1779,8 @@
           "BackupStartResult",
           "MaintenanceDonePayload",
           "ContainerSelectorParams",
+          "ContainerSetDefaultParams",
+          "ContainerSetDefaultResult",
           "PingResult",
           "DaemonHealthResult",
           "KernelCapabilitiesResult",
@@ -1719,6 +1838,10 @@
           "ToolsInstallParams",
           "ToolsUninstallParams",
           "ToolsUpgradeParams",
+          "ToolsVersionsParams",
+          "ToolVersionOption",
+          "ToolsVersionsResult",
+          "ToolsUseParams",
           "ToolsDoctorParams",
           "ToolDiagnosticItem",
           "ToolsDoctorResult",
@@ -1738,7 +1861,7 @@
       "eventMapName": "StrataEventPayloadMap",
       "imports": [
         "import type {\n  AttachLease,\n  ContainerConfigPatchParams,\n  ContainerConfigResult,\n  ContainerServiceRuntime,\n  ServiceDeleteResult,\n  ServiceLogsParams,\n  ServiceLogsResult,\n  ServiceSelectorParams,\n  ServiceStateChangedPayload,\n  ServiceUpsertParams,\n  SessionAcquireParams,\n  SessionReleaseParams,\n  SessionReleaseResult,\n  StrataConfig,\n} from './configTypes.ts';",
-        "import type {\n  BackupParams,\n  BackupResult,\n  BackupStartResult,\n  CompactResult,\n  ContainerCloneParams,\n  ContainerCloneResult,\n  ContainerCreateParams,\n  ContainerDeleteParams,\n  ContainerDeleteResult,\n  ContainerJobCancelResult,\n  ContainerJobProgressPayload,\n  ContainerJobSelectorParams,\n  ContainerJobStartResult,\n  ContainerLogsParams,\n  ContainerLogsResult,\n  ContainerResizeParams,\n  ContainerResizeResult,\n  ContainerSelectorParams,\n  ContainerStateChangedPayload,\n  ContainerStatusSnapshot,\n  DaemonHealthResult,\n  DaemonLogsParams,\n  DaemonLogsResult,\n  DaemonSummarySnapshot,\n  DistroCatalogParams,\n  DistroCatalogResult,\n  EventsSubscribeResult,\n  FsckResult,\n  HudSetParams,\n  HudStateResult,\n  KernelCapabilitiesResult,\n  MaintenanceDonePayload,\n  PingResult,\n  SshKeyAddParams,\n  SshKeyRemoveParams,\n  SshKeyRemoveResult,\n  SshKeysResult,\n  StorageCleanupReport,\n  SyncDnsResult,\n  TaskCancelParams,\n  TaskCancelResult,\n  TaskExitPayload,\n  TaskLogsParams,\n  TaskLogsResult,\n  TaskOutputPayload,\n  TaskRunParams,\n  TaskRunResult,\n  TaskSummary,\n  ToolsBootstrapParams,\n  ToolsCacheCleanParams,\n  ToolsCacheCleanResult,\n  ToolsCatalogParams,\n  ToolsCatalogResult,\n  ToolsConfigGetParams,\n  ToolsConfigResult,\n  ToolsConfigSetParams,\n  ToolsDoctorParams,\n  ToolsDoctorResult,\n  ToolsInstallParams,\n  ToolsListParams,\n  ToolsListResult,\n  ToolsStateChangedPayload,\n  ToolsStatusParams,\n  ToolsStatusResult,\n  ToolsUninstallParams,\n  ToolsUpgradeParams,\n  WebConfigureParams,\n  WebRotateTokenResult,\n  WebStatusResult,\n} from './runtimeTypes.ts';"
+        "import type {\n  BackupParams,\n  BackupResult,\n  BackupStartResult,\n  CompactResult,\n  ContainerCloneParams,\n  ContainerCloneResult,\n  ContainerCreateParams,\n  ContainerDeleteParams,\n  ContainerDeleteResult,\n  ContainerJobCancelResult,\n  ContainerJobProgressPayload,\n  ContainerJobSelectorParams,\n  ContainerJobStartResult,\n  ContainerLogsParams,\n  ContainerLogsResult,\n  ContainerResizeParams,\n  ContainerResizeResult,\n  ContainerSelectorParams,\n  ContainerSetDefaultParams,\n  ContainerSetDefaultResult,\n  ContainerStateChangedPayload,\n  ContainerStatusSnapshot,\n  DaemonHealthResult,\n  DaemonLogsParams,\n  DaemonLogsResult,\n  DaemonSummarySnapshot,\n  DistroCatalogParams,\n  DistroCatalogResult,\n  EventsSubscribeResult,\n  FsckResult,\n  HudSetParams,\n  HudStateResult,\n  KernelCapabilitiesResult,\n  MaintenanceDonePayload,\n  PingResult,\n  SshKeyAddParams,\n  SshKeyRemoveParams,\n  SshKeyRemoveResult,\n  SshKeysResult,\n  StorageCleanupReport,\n  SyncDnsResult,\n  TaskCancelParams,\n  TaskCancelResult,\n  TaskExitPayload,\n  TaskLogsParams,\n  TaskLogsResult,\n  TaskOutputPayload,\n  TaskRunParams,\n  TaskRunResult,\n  TaskSummary,\n  ToolsBootstrapParams,\n  ToolsCacheCleanParams,\n  ToolsCacheCleanResult,\n  ToolsCatalogParams,\n  ToolsCatalogResult,\n  ToolsConfigGetParams,\n  ToolsConfigResult,\n  ToolsConfigSetParams,\n  ToolsDoctorParams,\n  ToolsDoctorResult,\n  ToolsInstallParams,\n  ToolsListParams,\n  ToolsListResult,\n  ToolsStateChangedPayload,\n  ToolsStatusParams,\n  ToolsStatusResult,\n  ToolsUninstallParams,\n  ToolsUpgradeParams,\n  ToolsUseParams,\n  ToolsVersionsParams,\n  ToolsVersionsResult,\n  WebConfigureParams,\n  WebRotateTokenResult,\n  WebStatusResult,\n} from './runtimeTypes.ts';"
       ],
       "include": { "rpcs": true, "events": true }
     },

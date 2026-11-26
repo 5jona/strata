@@ -181,9 +181,70 @@ fn wait_pid_gone(pid: u32, timeout: Duration) -> bool {
     !namespace::pid_exists(pid)
 }
 
+/// Builds the container login shell invocation for `auto|bash|zsh|fish|nu` PTY requests.
+#[must_use]
+pub(crate) fn build_pty_shell_command(shell_pref: Option<&str>) -> Vec<String> {
+    let normalized = match shell_pref.map(str::trim) {
+        Some("bash") => "bash",
+        Some("zsh") => "zsh",
+        Some("fish") => "fish",
+        Some("nu" | "nushell") => "nu",
+        _ => "auto",
+    };
+
+    let script = if normalized == "auto" {
+        concat!(
+            "shell=$(awk -F: '$1==\"root\"{print $7; exit}' /etc/passwd 2>/dev/null || true); ",
+            "if [ -n \"$shell\" ] && [ -x \"$shell\" ]; then ",
+            "export SHELL=\"$shell\"; ",
+            "case \"$(basename \"$shell\")\" in nu) exec \"$shell\" --login ;; *) exec \"$shell\" -l ;; esac; ",
+            "fi; ",
+            "if [ -x /bin/bash ]; then export SHELL=/bin/bash; exec /bin/bash -l; fi; ",
+            "export SHELL=/bin/sh; exec /bin/sh -l"
+        )
+        .to_owned()
+    } else {
+        let login_flag = if normalized == "nu" { "--login" } else { "-l" };
+        format!(
+            concat!(
+                "target=\"\"; ",
+                "for d in /root/.local/share/mise/shims /root/.local/bin /opt/strata/mise/shims /opt/strata/bin /usr/local/bin /usr/bin /bin; do ",
+                "if [ -x \"$d/{sh}\" ]; then target=\"$d/{sh}\"; break; fi; ",
+                "done; ",
+                "if [ -z \"$target\" ]; then target=$(command -v {sh} 2>/dev/null || true); fi; ",
+                "if [ -n \"$target\" ] && [ -x \"$target\" ]; then export SHELL=\"$target\"; exec \"$target\" {flag}; fi; ",
+                "printf '[strata] requested shell \"{sh}\" is not installed; falling back to default shell.\\r\\n' >&2; ",
+                "if [ -x /bin/bash ]; then export SHELL=/bin/bash; exec /bin/bash -l; fi; ",
+                "export SHELL=/bin/sh; exec /bin/sh -l"
+            ),
+            sh = normalized,
+            flag = login_flag
+        )
+    };
+
+    vec!["/bin/sh".to_owned(), "-c".to_owned(), script]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn builds_safe_pty_shell_commands_for_auto_and_modern_shells() {
+        let auto = build_pty_shell_command(None);
+        assert_eq!(auto[0], "/bin/sh");
+        assert!(auto[2].contains("/etc/passwd"));
+
+        let zsh = build_pty_shell_command(Some("zsh"));
+        assert!(zsh[2].contains("/root/.local/share/mise/shims"));
+        assert!(zsh[2].contains("exec \"$target\" -l"));
+
+        let nu = build_pty_shell_command(Some("nushell"));
+        assert!(nu[2].contains("exec \"$target\" --login"));
+
+        let unknown = build_pty_shell_command(Some("zsh;rm -rf /"));
+        assert!(unknown[2].contains("/etc/passwd"));
+    }
 
     #[test]
     fn encodes_and_decodes_binary_pty_frames_and_watermark_backpressure() {

@@ -1,13 +1,18 @@
-import type { DistroEntry, ToolBundleSpec, ToolCatalogEntry } from '../types/protocol.ts';
+import type {
+  DistroEntry,
+  ToolBundleSpec,
+  ToolCatalogEntry,
+  ToolVersionOption,
+} from '../types/protocol.ts';
 
 const MB = 1024 * 1024;
 
 export const MOCK_DISTRO_CATALOG: DistroEntry[] = [
   {
-    id: 'ubuntu/24.04',
+    id: 'ubuntu:noble:arm64:default',
     os: 'Ubuntu',
     release: 'noble',
-    releaseTitle: 'Ubuntu 24.04 LTS (Noble)',
+    releaseTitle: '24.04 LTS (Noble)',
     arch: 'arm64',
     variant: 'default',
     version: '20261120',
@@ -17,10 +22,10 @@ export const MOCK_DISTRO_CATALOG: DistroEntry[] = [
       'https://mirrors.tuna.tsinghua.edu.cn/lxc-images/images/ubuntu/noble/arm64/default/rootfs.tar.xz',
   },
   {
-    id: 'debian/12',
+    id: 'debian:bookworm:arm64:default',
     os: 'Debian',
     release: 'bookworm',
-    releaseTitle: 'Debian 12 (Bookworm)',
+    releaseTitle: '12 (Bookworm)',
     arch: 'arm64',
     variant: 'default',
     version: '20261120',
@@ -30,10 +35,10 @@ export const MOCK_DISTRO_CATALOG: DistroEntry[] = [
       'https://mirrors.tuna.tsinghua.edu.cn/lxc-images/images/debian/bookworm/arm64/default/rootfs.tar.xz',
   },
   {
-    id: 'alpine/3.21',
+    id: 'alpine:3.21:arm64:default',
     os: 'Alpine',
     release: '3.21',
-    releaseTitle: 'Alpine Linux 3.21',
+    releaseTitle: '3.21',
     arch: 'arm64',
     variant: 'default',
     version: '20261120',
@@ -43,7 +48,7 @@ export const MOCK_DISTRO_CATALOG: DistroEntry[] = [
       'https://mirrors.tuna.tsinghua.edu.cn/lxc-images/images/alpine/3.21/arm64/default/rootfs.tar.xz',
   },
   {
-    id: 'archlinux/current',
+    id: 'archlinux:current:arm64:default',
     os: 'Arch Linux',
     release: 'current',
     releaseTitle: 'Arch Linux ARM (Rolling)',
@@ -60,8 +65,8 @@ export const MOCK_DISTRO_CATALOG: DistroEntry[] = [
 export const MOCK_TOOL_BUNDLES: ToolBundleSpec[] = [
   {
     id: 'core-dev',
-    name: 'Core Dev',
-    summary: 'Python 3.12, Node LTS, uv, git, curl, tmux, ripgrep, fd, jq',
+    name: '核心开发套件',
+    summary: 'Python 3.12、Node.js LTS、uv、git、curl、tmux、ripgrep、fd、jq 一键就绪',
     tools: [
       'apt:git',
       'apt:curl',
@@ -69,26 +74,61 @@ export const MOCK_TOOL_BUNDLES: ToolBundleSpec[] = [
       'mise:python@3.12',
       'mise:node@lts',
       'mise:uv@latest',
-      'mise:ripgrep@latest',
     ],
   },
   {
     id: 'python-uv',
-    name: 'Python + uv',
-    summary: 'Python 3.12 managed by mise alongside uv, ruff, and httpie',
+    name: 'Python + uv 套件',
+    summary: '通过 mise 管理 Python 3.12，搭配 uv、ruff 代码检查与 httpie 调试工具',
     tools: ['mise:python@3.12', 'mise:uv@latest', 'uv:ruff', 'uv:httpie'],
   },
   {
     id: 'node-ts',
-    name: 'Node + Bun',
-    summary: 'Node.js LTS and Bun TypeScript runtime',
+    name: 'Node + Bun 套件',
+    summary: 'Node.js LTS 与 Bun TypeScript 运行时组合',
     tools: ['mise:node@lts', 'mise:bun@latest'],
   },
   {
     id: 'debug-l3-l5',
-    name: 'Debug L3-L5',
-    summary: 'Android/GKI container diagnostics: strace, tcpdump, bpftrace, sqlite3',
+    name: '系统诊断套件',
+    summary: 'Android/GKI 容器调试工具：strace、tcpdump、bpftrace 与 sqlite3',
     tools: ['apt:strace', 'apt:tcpdump', 'apt:bpftrace', 'apt:sqlite3'],
+  },
+  {
+    id: 'shell-zsh',
+    name: '现代 Zsh 体验套件',
+    summary: 'Zsh + Starship 提示符 + 自动建议/语法高亮 + zoxide + eza + fzf，完全兼容 POSIX',
+    tools: [
+      'apt:zsh',
+      'mise:starship@latest',
+      'mise:zoxide@latest',
+      'mise:eza@latest',
+      'mise:fzf@latest',
+    ],
+  },
+  {
+    id: 'shell-fish',
+    name: '现代 Fish 体验套件',
+    summary: 'Fish 智能补全 Shell + Starship + zoxide + eza + fzf，开箱即用免折腾',
+    tools: [
+      'apt:fish',
+      'mise:starship@latest',
+      'mise:zoxide@latest',
+      'mise:eza@latest',
+      'mise:fzf@latest',
+    ],
+  },
+  {
+    id: 'shell-nushell',
+    name: 'Nushell 结构化套件',
+    summary:
+      'Nushell + Starship + Carapace 补全 + zoxide + eza + fzf（非 POSIX 语法，适合进阶用户）',
+    tools: [
+      'mise:nushell@latest',
+      'mise:starship@latest',
+      'mise:carapace@latest',
+      'mise:zoxide@latest',
+    ],
   },
 ];
 
@@ -96,7 +136,7 @@ export const MOCK_TOOL_CATALOG: ToolCatalogEntry[] = [
   {
     id: 'python',
     name: 'Python',
-    summary: 'CPython prebuilt runtime via python-build-standalone',
+    summary: 'CPython 预编译运行时（python-build-standalone）',
     manager: 'mise',
     group: 'mise-runtimes',
     defaultVersion: '3.12',
@@ -109,7 +149,7 @@ export const MOCK_TOOL_CATALOG: ToolCatalogEntry[] = [
   {
     id: 'node',
     name: 'Node.js',
-    summary: 'Node.js LTS ARM64 runtime for web & MCP tooling',
+    summary: 'Node.js LTS ARM64 运行时，适用于 Web 与 MCP 工具链',
     manager: 'mise',
     group: 'mise-runtimes',
     defaultVersion: 'lts',
@@ -122,7 +162,7 @@ export const MOCK_TOOL_CATALOG: ToolCatalogEntry[] = [
   {
     id: 'uv',
     name: 'uv',
-    summary: 'Fast Rust-based Python package and tool manager',
+    summary: 'Rust 编写的超快 Python 包管理与虚拟环境工具',
     manager: 'mise',
     group: 'mise-runtimes',
     defaultVersion: 'latest',
@@ -133,22 +173,22 @@ export const MOCK_TOOL_CATALOG: ToolCatalogEntry[] = [
     tags: ['python', 'uv'],
   },
   {
-    id: 'bun',
-    name: 'Bun',
-    summary: 'Fast all-in-one JavaScript/TypeScript runtime',
+    id: 'starship',
+    name: 'Starship',
+    summary: '极速跨 Shell 提示符（支持 Bash / Zsh / Fish / Nushell）',
     manager: 'mise',
-    group: 'mise-runtimes',
+    group: 'shell',
     defaultVersion: 'latest',
-    backendHint: 'core:bun',
+    backendHint: 'aqua:starship/starship',
     arm64Verified: true,
-    estimatedMb: 90,
-    recommended: false,
-    tags: ['runtime', 'js', 'ts'],
+    estimatedMb: 12,
+    recommended: true,
+    tags: ['shell', 'prompt'],
   },
   {
     id: 'ripgrep',
     name: 'ripgrep',
-    summary: 'Fast recursive code search (`rg`) via aqua',
+    summary: '高速递归代码搜索工具 (rg)',
     manager: 'mise',
     group: 'cli-dev',
     defaultVersion: 'latest',
@@ -159,22 +199,9 @@ export const MOCK_TOOL_CATALOG: ToolCatalogEntry[] = [
     tags: ['search', 'cli'],
   },
   {
-    id: 'jq',
-    name: 'jq',
-    summary: 'Command-line JSON processor via aqua',
-    manager: 'mise',
-    group: 'cli-dev',
-    defaultVersion: 'latest',
-    backendHint: 'aqua:jqlang/jq',
-    arm64Verified: true,
-    estimatedMb: 4,
-    recommended: true,
-    tags: ['json', 'cli'],
-  },
-  {
     id: 'git',
     name: 'git',
-    summary: 'Distributed version control system (APT)',
+    summary: '分布式版本控制工具 (系统包)',
     manager: 'apt',
     group: 'cli-dev',
     defaultVersion: 'system',
@@ -187,7 +214,7 @@ export const MOCK_TOOL_CATALOG: ToolCatalogEntry[] = [
   {
     id: 'strace',
     name: 'strace',
-    summary: 'System call tracer for L3/L5 debugging (APT)',
+    summary: '系统调用跟踪器 (系统包)',
     manager: 'apt',
     group: 'debug-l3-l5',
     defaultVersion: 'system',
@@ -198,22 +225,9 @@ export const MOCK_TOOL_CATALOG: ToolCatalogEntry[] = [
     tags: ['debug', 'l5'],
   },
   {
-    id: 'bpftrace',
-    name: 'bpftrace',
-    summary: 'eBPF tracing frontend for GKI kernels (APT)',
-    manager: 'apt',
-    group: 'debug-l3-l5',
-    defaultVersion: 'system',
-    backendHint: 'apt:bpftrace',
-    arm64Verified: true,
-    estimatedMb: 48,
-    recommended: false,
-    tags: ['ebpf', 'l5'],
-  },
-  {
     id: 'ruff',
     name: 'ruff',
-    summary: 'Fast Python linter & formatter via `uv tool`',
+    summary: '极速 Python 代码检查与格式化工具 (uv tool)',
     manager: 'uv',
     group: 'python-uv',
     defaultVersion: 'latest',
@@ -223,17 +237,57 @@ export const MOCK_TOOL_CATALOG: ToolCatalogEntry[] = [
     recommended: true,
     tags: ['python', 'lint'],
   },
+];
+
+export const MOCK_MISE_REGISTRY_EXTRAS: ToolCatalogEntry[] = [
   {
-    id: 'httpie',
-    name: 'httpie',
-    summary: 'Human-friendly HTTP CLI (`http`) via `uv tool`',
-    manager: 'uv',
-    group: 'python-uv',
+    id: 'lazygit',
+    name: 'lazygit',
+    summary: 'mise 注册表工具 (aqua:jesseduffield/lazygit)',
+    manager: 'mise',
+    group: 'cli-dev',
     defaultVersion: 'latest',
-    backendHint: 'uv:httpie',
+    backendHint: 'aqua:jesseduffield/lazygit',
     arm64Verified: true,
-    estimatedMb: 30,
+    estimatedMb: 18,
     recommended: false,
-    tags: ['http', 'uv'],
+    tags: ['git', 'tui', 'mise-registry'],
+  },
+  {
+    id: 'gh',
+    name: 'gh',
+    summary: 'GitHub 官方命令行客户端 (mise registry)',
+    manager: 'mise',
+    group: 'cli-dev',
+    defaultVersion: 'latest',
+    backendHint: 'aqua:cli/cli',
+    arm64Verified: true,
+    estimatedMb: 28,
+    recommended: false,
+    tags: ['github', 'cli', 'mise-registry'],
   },
 ];
+
+const ver = (
+  version: string,
+  createdAt: string,
+  installed = false,
+  active = false,
+  prerelease = false,
+): ToolVersionOption => ({ version, createdAt, installed, active, prerelease });
+
+export const MOCK_TOOL_VERSIONS_MAP: Record<string, ToolVersionOption[]> = {
+  python: [
+    ver('3.14.0a5', '2026-11-18', false, false, true),
+    ver('3.13.2', '2026-11-10'),
+    ver('3.12.9', '2026-10-20', true, true),
+    ver('3.11.11', '2026-09-14', true),
+  ],
+  node: [
+    ver('24.0.0-rc.1', '2026-11-15', false, false, true),
+    ver('22.14.0', '2026-11-05'),
+    ver('22.12.0', '2026-10-01', true, true),
+    ver('20.19.0', '2026-09-01'),
+  ],
+  uv: [ver('0.9.12', '2026-11-19', true, true), ver('0.9.4', '2026-10-12')],
+};

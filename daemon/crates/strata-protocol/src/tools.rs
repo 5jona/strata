@@ -9,7 +9,8 @@ const MAX_URL_LEN: usize = 256;
 const MAX_SECRET_LEN: usize = 256;
 
 /// Packages forbidden inside ColorOS/GKI Strata containers (ADR-005 / ADR-008).
-const FORBIDDEN_INSTALL_PACKAGES: [&str; 5] = [
+const FORBIDDEN_INSTALL_PACKAGES: [&str; 6] = [
+    "openssh",
     "openssh-server",
     "openssh-sftp-server-privsep",
     "sshd",
@@ -107,10 +108,13 @@ pub fn validate_package_spec(
     }
 
     let valid_chars = match manager {
-        ToolManagerKind::Apt => trimmed.bytes().all(|b| {
+        ToolManagerKind::Apt
+        | ToolManagerKind::Apk
+        | ToolManagerKind::Pacman
+        | ToolManagerKind::Dnf => trimmed.bytes().all(|b| {
             b.is_ascii_lowercase()
                 || b.is_ascii_digit()
-                || matches!(b, b'+' | b'.' | b'_' | b'-' | b'=' | b':' | b'~')
+                || matches!(b, b'+' | b'.' | b'_' | b'-' | b'=' | b':')
         }),
         ToolManagerKind::Mise => trimmed.bytes().all(|b| {
             b.is_ascii_alphanumeric()
@@ -126,10 +130,10 @@ pub fn validate_package_spec(
         ToolManagerKind::Bundle => trimmed
             .bytes()
             .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-'),
-        ToolManagerKind::System => {
+        ToolManagerKind::System | ToolManagerKind::Manual => {
             return Err(ToolValidationError::InvalidPackageSpec(
                 trimmed.to_owned(),
-                "system manager does not accept install/uninstall mutations",
+                "read-only manager does not accept install/uninstall mutations",
             ));
         }
     };
@@ -353,11 +357,25 @@ mod tests {
 
     #[test]
     fn enforces_coloros_openssh_blocklist_and_protected_uninstall() {
-        for forbidden in ["openssh-server", "openssh-server=1:9.6", "sudo", "sshd"] {
+        for forbidden in [
+            "openssh",
+            "openssh-server",
+            "openssh-server=1:9.6",
+            "sudo",
+            "sshd",
+        ] {
             let err = validate_package_spec(ToolManagerKind::Apt, forbidden, true)
                 .expect_err("must block forbidden package");
             assert!(matches!(err, ToolValidationError::ForbiddenPackage(_, _)));
         }
+        assert!(matches!(
+            validate_package_spec(ToolManagerKind::Apk, "openssh", true),
+            Err(ToolValidationError::ForbiddenPackage(_, _))
+        ));
+        assert!(matches!(
+            validate_package_spec(ToolManagerKind::Pacman, "openssh", true),
+            Err(ToolValidationError::ForbiddenPackage(_, _))
+        ));
         assert!(validate_package_spec(ToolManagerKind::Apt, "openssh-client", true).is_ok());
 
         for protected in ["dropbear-bin", "openssh-sftp-server", "ca-certificates"] {

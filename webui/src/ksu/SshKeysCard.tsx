@@ -45,7 +45,7 @@ export function SshKeysCard({ sshKeys, busy, onAddSshKey, onRemoveSshKey }: SshK
       <div className="flex flex-col gap-1.5">
         {sshKeys.length === 0 ? (
           <p className="text-[11px] text-[var(--text-secondary)]">
-            尚未配置公钥（Dropbear 仅允许公钥登录）。
+            尚未配置公钥（SSH 服务仅允许公钥免密登录）。
           </p>
         ) : (
           sshKeys.map((line) => {

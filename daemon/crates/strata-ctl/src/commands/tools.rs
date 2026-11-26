@@ -88,7 +88,11 @@ fn handle_config_subcommand(
 ) -> Result<i32, String> {
     let action = args.first().map_or("get", String::as_str);
     if action == "get" || action == "show" {
-        let params = serde_json::to_value(ToolsConfigGetParams { container }).ok();
+        let params = serde_json::to_value(ToolsConfigGetParams {
+            container,
+            config_path: None,
+        })
+        .ok();
         let val = rpc_or_err(client.call(methods::TOOLS_CONFIG_GET, params))?;
         emit_typed(&val, json_mode, format::print_tools_config)?;
         return Ok(0);

@@ -1,5 +1,4 @@
-import { Button, copyTextWithFallback, EmptyState, Input, useToast } from '@gojona/ui';
-import { Box, Plus, RefreshCw, Search } from 'lucide-react';
+import { copyTextWithFallback, useToast } from '@gojona/ui';
 import { useState } from 'react';
 import { formatBytes, formatSshCommand } from '../lib/format.ts';
 import { buildPreviewSshTarget, resolveLaunchSshTarget } from '../lib/sshTarget.ts';
@@ -16,6 +15,7 @@ import { STRATA_METHODS } from '../types/rpc.ts';
 import { ContainerCard } from './ContainerCard.tsx';
 import { ContainerConfigModal } from './ContainerConfigModal.tsx';
 import { type ContainerModalMode, ContainerModals } from './ContainerModals.tsx';
+import { ContainersEmptyState, ContainersHeader } from './ContainersEmptyState.tsx';
 import { ContainersKpiStrip } from './ContainersKpiStrip.tsx';
 
 export interface ContainersViewProps {
@@ -23,7 +23,10 @@ export interface ContainersViewProps {
   transport: StrataTransport | null;
   daemonStatus: DaemonSummarySnapshot | null;
   containers: ContainerStatusSnapshot[];
+  selectedContainerId?: string;
+  onSelectContainer: (id: string | undefined) => void;
   servicesByContainer: Record<string, ContainerServiceRuntime[]>;
+  configsByContainer: Record<string, ContainerConfig>;
   loading: boolean;
   onRefresh: () => Promise<void>;
   onOpenTerminal: (containerId: string) => void;
@@ -32,14 +35,16 @@ export interface ContainersViewProps {
 }
 
 /**
- * Primary desktop overview displaying KPI tiles and progressive-disclosure container cards.
+ * Primary desktop overview displaying KPI tiles, zero-container onboarding, and container cards.
  */
 export function ContainersView({
   device,
   transport,
   daemonStatus,
   containers,
+  onSelectContainer,
   servicesByContainer,
+  configsByContainer,
   loading,
   onRefresh,
   onOpenTerminal,
@@ -61,7 +66,6 @@ export function ContainersView({
       c.id.toLowerCase().includes(query.toLowerCase()) ||
       c.hostname.toLowerCase().includes(query.toLowerCase()),
   );
-
   const totalRunningServices = Object.values(servicesByContainer)
     .flat()
     .filter((s) => s.status === 'running').length;
@@ -77,7 +81,7 @@ export function ContainersView({
   };
 
   const handleOpenVsCode = (c: ContainerStatusSnapshot) => {
-    void runAction('打开 VS Code Remote-SSH', async () => {
+    void runAction('打开 VS Code 远程开发', async () => {
       const { target, forwardedLocalPort } = await resolveLaunchSshTarget(device, c);
       await tauriDeviceBridge.openVsCodeRemote(target);
       pushToast(
@@ -91,26 +95,15 @@ export function ContainersView({
 
   return (
     <div className="flex h-full flex-col gap-4 overflow-y-auto p-5 strata-scroll">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="text-lg font-semibold text-[var(--text-primary)]">
-            容器实例 · {device?.label ?? '未选择设备'}
-          </h1>
-          <p className="text-xs text-[var(--text-secondary)]">
-            一键启停、连接终端或 VS Code Remote-SSH，展开卡片可执行空间回收、DNS 同步与透传配置
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          <Button size="sm" variant="secondary" disabled={loading} onClick={() => void onRefresh()}>
-            <RefreshCw className={`size-3.5 ${loading ? 'animate-spin' : ''}`} />
-            刷新
-          </Button>
-          <Button size="sm" variant="primary" onClick={onNavigateInstall}>
-            <Plus className="size-3.5" />
-            新建 / 导入容器
-          </Button>
-        </div>
-      </div>
+      <ContainersHeader
+        deviceLabel={device?.label ?? '未选择设备'}
+        loading={loading}
+        showSearch={containers.length > 0}
+        query={query}
+        onQueryChange={setQuery}
+        onRefresh={() => void onRefresh()}
+        onNavigateInstall={onNavigateInstall}
+      />
 
       <ContainersKpiStrip
         containers={containers}
@@ -118,37 +111,27 @@ export function ContainersView({
         daemonStatus={daemonStatus}
       />
 
-      <div className="relative max-w-sm">
-        <Search className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-[var(--text-secondary)]" />
-        <Input
-          className="pl-8"
-          value={query}
-          placeholder="搜索容器名称或主机名…"
-          aria-label="搜索容器"
-          onChange={(e) => setQuery(e.target.value)}
-        />
-      </div>
-
-      {filtered.length === 0 ? (
-        <EmptyState
-          icon={<Box className="size-8" />}
-          title={containers.length === 0 ? '尚无容器实例' : '没有匹配的容器'}
-          description="前往「安装与导入」从国内镜像站拉取 ARM64 发行版，或拖拽导入本地镜像。"
-          action={
-            <Button size="sm" variant="primary" onClick={onNavigateInstall}>
-              立即创建容器
-            </Button>
-          }
+      {filtered.length === 0 && !loading ? (
+        <ContainersEmptyState
+          hasAnyContainers={containers.length > 0}
+          onNavigateInstall={onNavigateInstall}
+          onClearQuery={() => setQuery('')}
         />
       ) : (
         <div className="flex flex-col gap-3">
           {filtered.map((c) => {
             const svcs = servicesByContainer[c.id] ?? [];
             const runningSvcs = svcs.filter((s) => s.status === 'running').length;
+            const cfg = configsByContainer[c.id];
+            const isDefault = daemonStatus?.defaultContainer
+              ? daemonStatus.defaultContainer === c.id
+              : c.isDefault;
             return (
               <ContainerCard
                 key={c.id}
                 container={c}
+                isDefault={isDefault}
+                hasUinput={cfg ? cfg.extraCharDevs.includes('uinput') : undefined}
                 serviceCount={svcs.length}
                 runningServiceCount={runningSvcs}
                 expanded={expandedId === c.id}
@@ -167,9 +150,12 @@ export function ContainersView({
                     const rep = await transport.invoke(STRATA_METHODS.CONTAINER_STOP, {
                       container: c.id,
                     });
+                    const clean = rep.residualMounts === 0 && rep.residualLoops === 0;
                     pushToast(
-                      `容器 ${c.id} 已停止（残留挂载 ${rep.residualMounts} / 回环 ${rep.residualLoops}）`,
-                      'success',
+                      clean
+                        ? `容器 ${c.id} 已安全停止`
+                        : `容器 ${c.id} 已停止（残留挂载 ${rep.residualMounts} / 回环 ${rep.residualLoops}）`,
+                      clean ? 'success' : 'warning',
                     );
                   })
                 }
@@ -185,29 +171,37 @@ export function ContainersView({
                 onCopySsh={() => {
                   const cmd = formatSshCommand(buildPreviewSshTarget(device, c));
                   void copyTextWithFallback(cmd).then((ok) =>
-                    pushToast(ok ? `已复制: ${cmd}` : '复制失败', ok ? 'success' : 'warning'),
+                    pushToast(ok ? `已复制：${cmd}` : '复制失败', ok ? 'success' : 'warning'),
                   );
                 }}
+                onSetDefault={() =>
+                  transport &&
+                  void withBusy(c.id, `设为默认调试容器 ${c.id}`, async () => {
+                    await transport.invoke(STRATA_METHODS.CONTAINER_SET_DEFAULT, { id: c.id });
+                    onSelectContainer(c.id);
+                    pushToast(`已将 ${c.id} 设为默认调试容器`, 'success');
+                  })
+                }
                 onCompact={() =>
                   transport &&
-                  void withBusy(c.id, `空间回收 ${c.id}`, async () => {
+                  void withBusy(c.id, `回收磁盘空间 ${c.id}`, async () => {
                     const res = await transport.invoke(STRATA_METHODS.CONTAINER_COMPACT, {
                       container: c.id,
                     });
-                    pushToast(`空间回收完成，释放 ${formatBytes(res.trimmedBytes)}`, 'success');
+                    pushToast(`磁盘空间回收完成，释放 ${formatBytes(res.trimmedBytes)}`, 'success');
                   })
                 }
                 onFsck={() =>
                   transport &&
-                  void withBusy(c.id, `磁盘检查 ${c.id}`, async () => {
+                  void withBusy(c.id, `磁盘修复检查 ${c.id}`, async () => {
                     const res = await transport.invoke(STRATA_METHODS.CONTAINER_FSCK, {
                       container: c.id,
                     });
                     pushToast(
-                      res.exitCode === 0
-                        ? `fsck 通过: ${res.output}`
-                        : `fsck 返回码 ${res.exitCode}`,
-                      res.exitCode === 0 ? 'success' : 'warning',
+                      res.exitCode <= 1
+                        ? '磁盘修复检查完成，文件系统正常'
+                        : `磁盘修复检查发现异常（退出码 ${res.exitCode}）`,
+                      res.exitCode <= 1 ? 'success' : 'warning',
                     );
                   })
                 }

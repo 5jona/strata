@@ -7,8 +7,9 @@ use std::sync::Arc;
 use strata_protocol::constants::DEFAULT_CONTAINERS_ROOT;
 use strata_protocol::rpc::{
     ContainerCloneParams, ContainerCloneResult, ContainerDeleteParams, ContainerDeleteResult,
-    ContainerResizeParams, ContainerResizeResult, DaemonLogsParams, DaemonLogsResult,
-    SshKeyRemoveParams, SshKeyRemoveResult,
+    ContainerResizeParams, ContainerResizeResult, ContainerSetDefaultParams,
+    ContainerSetDefaultResult, DaemonLogsParams, DaemonLogsResult, SshKeyRemoveParams,
+    SshKeyRemoveResult,
 };
 use strata_protocol::{ContainerConfig, validate_container_id};
 use strata_runtime::{provision, storage, sync};
@@ -25,12 +26,6 @@ impl ContainerManager {
         params: ContainerDeleteParams,
     ) -> DaemonResult<ContainerDeleteResult> {
         let (id, cfg, is_default) = self.resolve_container(Some(&params.id)).await?;
-        let snapshot = self.config_store.snapshot().await;
-        if snapshot.containers.len() <= 1 {
-            return Err(DaemonError::InvalidParams(
-                "cannot delete the only configured container".to_owned(),
-            ));
-        }
         if is_default && !params.force {
             return Err(DaemonError::InvalidParams(format!(
                 "container '{id}' is the defaultContainer; pass force=true to delete"
@@ -80,6 +75,35 @@ impl ContainerManager {
             image_deleted,
             cleanup,
             new_default_container,
+        })
+    }
+
+    /// Promotes an existing container to `defaultContainer`, persists config, and broadcasts state.
+    pub(crate) async fn set_default_container(
+        &self,
+        params: ContainerSetDefaultParams,
+    ) -> DaemonResult<ContainerSetDefaultResult> {
+        let id = params.id.trim().to_owned();
+        validate_container_id(&id)?;
+        let previous = self.config_store.set_default_container(&id).await?;
+        let cur_phase = self.get_or_create_slot(&id).await.state.read().await.phase;
+        self.emit_state_changed(&id, cur_phase, cur_phase).await;
+        if let Some(prev_id) = previous.as_deref()
+            && prev_id != id
+        {
+            let prev_phase = self
+                .get_or_create_slot(prev_id)
+                .await
+                .state
+                .read()
+                .await
+                .phase;
+            self.emit_state_changed(prev_id, prev_phase, prev_phase)
+                .await;
+        }
+        Ok(ContainerSetDefaultResult {
+            default_container: id,
+            previous_default_container: previous,
         })
     }
 
@@ -134,8 +158,9 @@ impl ContainerManager {
         validate_container_id(&params.target_id)?;
         let (src_id, src_cfg, _) = self.resolve_container(Some(&params.source_id)).await?;
         let snapshot = self.config_store.snapshot().await;
+        let enable_ssh = src_cfg.ssh.enabled || params.ssh_port.is_some();
         let (ssh_port, _reservation) =
-            self.reserve_provision(&params.target_id, &snapshot, params.ssh_port)?;
+            self.reserve_provision(&params.target_id, &snapshot, params.ssh_port, enable_ssh)?;
 
         let src_slot = self.get_or_create_slot(&src_id).await;
         let _guard = src_slot.lifecycle_lock.lock().await;
@@ -153,11 +178,16 @@ impl ContainerManager {
             .map(str::trim)
             .filter(|s| !s.is_empty())
             .map_or_else(|| format!("strata-{}", params.target_id), ToOwned::to_owned);
+        target_cfg.ssh.enabled = enable_ssh;
         target_cfg.ssh.port = ssh_port;
         target_cfg.host_bridge = src_cfg.host_bridge;
         target_cfg.host_runtime = src_cfg.host_runtime;
+        target_cfg.extra_char_devs = src_cfg.extra_char_devs.clone();
+        target_cfg.sync_android_dns = src_cfg.sync_android_dns;
+        target_cfg.dns_servers = src_cfg.dns_servers.clone();
         target_cfg.noatime = src_cfg.noatime;
         target_cfg.auto_start = false;
+        strata_protocol::config::validate_container_config(&params.target_id, &target_cfg)?;
 
         let src_img = PathBuf::from(&src_cfg.image_path);
         let dst_img = PathBuf::from(&target_cfg.image_path);
@@ -171,7 +201,7 @@ impl ContainerManager {
         let image_path = target_cfg.image_path.clone();
         if let Err(err) = self
             .config_store
-            .add_container(params.target_id.clone(), target_cfg)
+            .add_container(params.target_id.clone(), target_cfg, false)
             .await
         {
             let _ = tokio::task::spawn_blocking(move || {

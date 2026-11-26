@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createMockStrataTransport } from '../src/plugin/mockStrataBridge.ts';
+import {
+  isSideveilPermissionError,
+  SIDEVEIL_PERMISSION_GUIDE,
+} from '../src/plugin/permissionGuide.ts';
 import { createStrataClient, invokeStrataRpc } from '../src/plugin/strataRpc.ts';
 import {
   getCustomCharDevs,
@@ -16,6 +20,7 @@ import {
   formatMaintenanceToast,
   formatUptime,
   parseSshPort,
+  SERVICE_STATUS_META,
   summarizeSshKey,
   toLogEntries,
 } from '../src/shared/strataFormat.ts';
@@ -28,9 +33,11 @@ test('formatters produce stable human-readable output', () => {
   assert.equal(formatBytes(2 * 1024 * 1024 * 1024), '2.00 GiB');
 
   assert.equal(formatUptime(0), '未运行');
-  assert.equal(formatUptime(42_000), '42s');
-  assert.equal(formatUptime(125_000), '2m 5s');
-  assert.equal(formatUptime(3_660_000), '1h 1m');
+  assert.equal(formatUptime(42_000), '42秒');
+  assert.equal(formatUptime(125_000), '2分 5秒');
+  assert.equal(formatUptime(3_660_000), '1小时 1分');
+  assert.equal(formatUptime(93_600_000), '1天 2小时');
+  assert.equal(SERVICE_STATUS_META['circuit-open'].label, '已熔断（连续失败过多）');
 });
 
 test('task command builders and SSH summaries handle shell/python and public keys', () => {
@@ -164,7 +171,7 @@ test('parseSshPort and formatMaintenanceToast validate ports and format op label
       summary: 'e2fsck failed',
       error: 'exit=4',
     }),
-    { title: '磁盘检查失败', tone: 'danger', description: 'exit=4' },
+    { title: '停机磁盘检查失败', tone: 'danger', description: 'exit=4' },
   );
   assert.deepEqual(
     formatMaintenanceToast({
@@ -237,4 +244,12 @@ test('toLogEntries classifies info, warn, and error log lines accurately', () =>
   assert.equal(entries[0].level, 'info');
   assert.equal(entries[1].level, 'warn');
   assert.equal(entries[2].level, 'error');
+});
+
+test('isSideveilPermissionError detects SideVeil capability denial errors accurately', () => {
+  assert.equal(isSideveilPermissionError(new Error('RPC -32003: permission denied')), true);
+  assert.equal(isSideveilPermissionError({ code: -32003, message: 'unauthorized' }), true);
+  assert.equal(isSideveilPermissionError('capability clipboard denied'), true);
+  assert.equal(isSideveilPermissionError(new Error('network timeout')), false);
+  assert.match(SIDEVEIL_PERMISSION_GUIDE, /SideVeil 控制中心/);
 });

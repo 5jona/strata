@@ -29,6 +29,7 @@ export interface KsuOverviewTabProps {
   onLifecycle: (action: 'start' | 'stop' | 'restart') => Promise<void>;
   onMaintenance: (op: KsuMaintenanceOp) => Promise<void>;
   onCopyText: (text: string, label: string) => Promise<void>;
+  onOpenSettings?: () => void;
 }
 
 /** Tab 1: container overview, metrics, SSH copy, missing-image recovery, and safe maintenance. */
@@ -38,6 +39,7 @@ export function KsuOverviewTab({
   onLifecycle,
   onMaintenance,
   onCopyText,
+  onOpenSettings,
 }: KsuOverviewTabProps) {
   const [confirmFsck, setConfirmFsck] = useState(false);
 
@@ -46,16 +48,36 @@ export function KsuOverviewTab({
   const busy = busyKey !== null;
   const imageMissing = !container.disk.imageExists;
   const sshCommand = buildSshCommand(container);
+  const createCmd = `strata rpc container.create '{"id":"${container.id}","distroId":"debian-12","sizeMb":4096}'`;
   const allocated = splitBytes(container.disk.imageAllocatedBytes);
   const rootfsUsed = splitBytes(container.disk.rootfsUsedBytes ?? 0);
+  const hostPrefix =
+    container.hostname && container.hostname !== container.id ? `${container.hostname} · ` : '';
 
   return (
     <div className="flex flex-col gap-3">
       {imageMissing ? (
         <StatusBanner
           tone="warning"
-          title="未检测到容器 rootfs 镜像"
-          description={`镜像路径 ${container.imagePath} 尚未初始化。请通过 PC 端 Strata Desktop 的在线发行版目录创建，或在 Root 终端执行 strata create ${container.id} 初始化容器。`}
+          title="尚未初始化系统镜像"
+          description={`镜像路径 ${container.imagePath} 尚未创建。可前往「系统设置 → 电脑端配对连接」使用 Strata Desktop 创建，或在 Root 终端执行：${createCmd}`}
+          action={
+            <div className="flex flex-wrap items-center gap-1.5">
+              <Button
+                size="sm"
+                variant="secondary"
+                onClick={() => void onCopyText(createCmd, '初始化命令')}
+              >
+                <Copy className="size-3.5" />
+                复制初始化命令
+              </Button>
+              {onOpenSettings ? (
+                <Button size="sm" variant="primary" onClick={onOpenSettings}>
+                  去开启 PC 配对
+                </Button>
+              ) : null}
+            </div>
+          }
         />
       ) : null}
 
@@ -66,16 +88,16 @@ export function KsuOverviewTab({
               <div className="min-w-0">
                 <div className="flex items-center gap-2">
                   <span className="truncate text-sm font-semibold text-[var(--text-primary)]">
-                    {container.hostname}
+                    {container.id}
                   </span>
                   <Badge variant={phaseMeta.variant} dot pulse={isRunning}>
                     {phaseMeta.label}
                   </Badge>
                 </div>
-                <p className="mt-1 font-mono text-[11px] text-[var(--text-secondary)]">
+                <p className="mt-1 truncate font-mono text-[11px] text-[var(--text-secondary)]">
                   {isRunning
-                    ? `PID ${container.nsPid ?? '-'} · 运行 ${formatUptime(container.uptimeMs)}`
-                    : container.imagePath}
+                    ? `${hostPrefix}PID ${container.nsPid ?? '-'} · 运行 ${formatUptime(container.uptimeMs)}`
+                    : `${hostPrefix}${container.imagePath}`}
                 </p>
               </div>
             </div>
@@ -118,14 +140,17 @@ export function KsuOverviewTab({
           <Card className="flex items-center justify-between gap-2 p-3">
             <div className="min-w-0">
               <span className="text-[11px] font-medium text-[var(--text-secondary)]">
-                Dropbear SSH 连接
+                SSH 终端连接（仅公钥免密）
               </span>
-              <p className="truncate font-mono text-xs text-[var(--text-primary)]">{sshCommand}</p>
+              <p className="truncate font-mono text-xs text-[var(--text-primary)]">
+                {container.sshEnabled ? sshCommand : 'SSH 未启用（可在「配置与安全」中开启）'}
+              </p>
             </div>
             <Button
               className="shrink-0"
               size="sm"
               variant="pill"
+              disabled={!container.sshEnabled}
               onClick={() => void onCopyText(sshCommand, 'SSH 命令')}
             >
               <Copy className="size-3.5" />
@@ -143,9 +168,9 @@ export function KsuOverviewTab({
             icon={<HardDrive className="size-3.5" />}
           />
           <MetricTile
-            label="Dropbear SSH"
-            value={`:${container.sshPort}`}
-            hint={container.primaryIpv4}
+            label="SSH 服务"
+            value={container.sshEnabled ? `:${container.sshPort}` : '未启用'}
+            hint={container.sshEnabled ? container.primaryIpv4 : '纯容器模式'}
             statusLabel={container.sshEnabled ? '启用' : '关闭'}
             statusVariant={container.sshEnabled ? 'success' : 'neutral'}
           />
@@ -158,7 +183,7 @@ export function KsuOverviewTab({
           <MetricTile
             label="运行模式"
             value={
-              container.hostRuntime ? 'HostRuntime' : container.hostBridge ? 'Bridge' : 'Isolated'
+              container.hostRuntime ? '宿主机直通' : container.hostBridge ? '桥接模式' : '标准隔离'
             }
             hint={container.mountDir}
             statusLabel={container.mounted ? '已挂载' : '未挂载'}
@@ -168,10 +193,10 @@ export function KsuOverviewTab({
       </div>
 
       <Card className="flex flex-col gap-2.5 p-4">
-        <div className="flex items-center justify-between gap-2">
-          <span className="text-xs font-medium text-[var(--text-primary)]">零残留维护操作</span>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <span className="text-xs font-medium text-[var(--text-primary)]">磁盘与网络维护</span>
           <span className="text-[11px] text-[var(--text-secondary)]">
-            串行持锁执行 · 安全卸载防残留
+            按顺序安全执行，避免文件冲突
           </span>
         </div>
 
@@ -192,7 +217,7 @@ export function KsuOverviewTab({
             onClick={() => void onMaintenance('compact')}
           >
             <Sparkles className="size-3.5" />
-            回收空间 compact
+            回收空闲空间
           </Button>
           <Button
             size="sm"
@@ -201,7 +226,7 @@ export function KsuOverviewTab({
             onClick={() => setConfirmFsck((prev) => !prev)}
           >
             <ShieldCheck className="size-3.5" />
-            停机检盘 fsck
+            停机磁盘检查
           </Button>
           <Button
             size="sm"
@@ -218,11 +243,16 @@ export function KsuOverviewTab({
           </Button>
         </div>
 
+        <p className="text-[11px] text-[var(--text-secondary)]">
+          提示：「回收空闲空间」将压缩镜像未用块，耗时约 5–30
+          秒；「停机磁盘检查」会先安全停止容器再校验修复。
+        </p>
+
         {confirmFsck ? (
           <StatusBanner
             tone="warning"
-            title="确认执行停机检盘 (e2fsck)？"
-            description="该操作会先安全停止当前容器并卸载镜像，再执行 ext4 文件系统检查修复。"
+            title="确认执行停机磁盘检查 (e2fsck)？"
+            description="该操作会先安全停止当前容器并卸载镜像，再检查并修复 ext4 文件系统。"
             action={
               <div className="flex items-center gap-1.5">
                 <Button
@@ -234,7 +264,7 @@ export function KsuOverviewTab({
                     void onMaintenance('fsck');
                   }}
                 >
-                  确认检盘
+                  确认检查
                 </Button>
                 <Button size="sm" variant="ghost" onClick={() => setConfirmFsck(false)}>
                   取消

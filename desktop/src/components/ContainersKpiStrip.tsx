@@ -39,7 +39,7 @@ export function ContainersKpiStrip({
         icon={<HardDrive className="size-4 text-[var(--accent)]" />}
       />
       <MetricTile
-        label="stratad 运行时长"
+        label="后台服务运行时长"
         value={daemonStatus ? formatUptime(daemonStatus.uptimeMs) : '—'}
         hint={daemonStatus ? `PID ${daemonStatus.pid}` : undefined}
         icon={<Shield className="size-4 text-[var(--accent)]" />}

@@ -1,6 +1,7 @@
 import { Badge, Button, Card, Input, SettingRow, Switch } from '@gojona/ui';
 import { X } from 'lucide-react';
 import { useEffect, useState } from 'react';
+import { parsePortInRange } from '../lib/format.ts';
 import { hasL5DiagMounts, toggleL5DiagMounts } from '../lib/passthrough.ts';
 import type {
   BindMount,
@@ -32,7 +33,9 @@ export function ContainerConfigModal({
   onSave,
 }: ContainerConfigModalProps) {
   const [hostname, setHostname] = useState('');
+  const [sshEnabled, setSshEnabled] = useState(false);
   const [sshPort, setSshPort] = useState('2222');
+  const [sshPortError, setSshPortError] = useState<string | null>(null);
   const [autoStart, setAutoStart] = useState(false);
   const [hostBridge, setHostBridge] = useState(true);
   const [hostRuntime, setHostRuntime] = useState(false);
@@ -43,7 +46,9 @@ export function ContainerConfigModal({
   useEffect(() => {
     if (!open || !config) return;
     setHostname(config.hostname);
+    setSshEnabled(config.ssh.enabled);
     setSshPort(String(config.ssh.port));
+    setSshPortError(null);
     setAutoStart(config.autoStart);
     setHostBridge(config.hostBridge);
     setHostRuntime(config.hostRuntime);
@@ -56,6 +61,32 @@ export function ContainerConfigModal({
 
   const l5Enabled = hasL5DiagMounts(extraMounts);
 
+  const handleSave = async () => {
+    let parsedPort: number | undefined;
+    if (sshEnabled) {
+      const port = parsePortInRange(sshPort, 1024, 65535);
+      if (port === null) {
+        setSshPortError('SSH 端口须为 1024–65535 之间的整数');
+        return;
+      }
+      parsedPort = port;
+    }
+    setSshPortError(null);
+    await onSave({
+      container: container.id,
+      hostname: hostname.trim() || undefined,
+      sshEnabled,
+      ...(parsedPort !== undefined ? { sshPort: parsedPort } : {}),
+      autoStart,
+      hostBridge,
+      hostRuntime,
+      noatime,
+      extraCharDevs,
+      extraMounts,
+    });
+    onClose();
+  };
+
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-4 backdrop-blur-xs"
@@ -66,9 +97,9 @@ export function ContainerConfigModal({
         <div className="flex items-center justify-between gap-2">
           <div className="flex items-center gap-2">
             <h3 className="text-base font-semibold text-[var(--text-primary)]">
-              高级配置 · {container.id}
+              容器配置 · {container.id}
             </h3>
-            <Badge variant="neutral">部分透传需重启生效</Badge>
+            <Badge variant="neutral">部分透传需重启容器生效</Badge>
           </div>
           <Button size="icon-sm" variant="ghost" aria-label="关闭" onClick={onClose}>
             <X className="size-4" />
@@ -82,39 +113,75 @@ export function ContainerConfigModal({
               <Input mono value={hostname} onChange={(e) => setHostname(e.target.value)} />
             </div>
             <div className="flex flex-col gap-1">
-              <span className="text-xs text-[var(--text-secondary)]">Dropbear SSH 端口</span>
-              <Input mono value={sshPort} onChange={(e) => setSshPort(e.target.value)} />
+              <span className="text-xs text-[var(--text-secondary)]">SSH 端口 (1024–65535)</span>
+              <Input
+                mono
+                inputMode="numeric"
+                disabled={!sshEnabled}
+                value={sshPort}
+                aria-invalid={sshPortError !== null}
+                onChange={(e) => {
+                  setSshPort(e.target.value);
+                  if (sshPortError && parsePortInRange(e.target.value, 1024, 65535) !== null) {
+                    setSshPortError(null);
+                  }
+                }}
+              />
             </div>
           </div>
 
+          {sshPortError && (
+            <p role="alert" className="text-xs text-[var(--danger)]">
+              {sshPortError}
+            </p>
+          )}
+
           <SettingRow
             variant="plain"
-            title="开机自动启动"
-            description="设备启动完成后自动拉起该容器及其自启服务"
+            title="启用 Dropbear SSH 服务"
+            description="仅公钥免密登录（纯容器未装 dropbear-bin 时请保持关闭）"
+            control={
+              <Switch
+                checked={sshEnabled}
+                onCheckedChange={(next) => {
+                  setSshEnabled(next);
+                  setSshPortError(null);
+                  if (next && parsePortInRange(sshPort, 1024, 65535) === null) {
+                    setSshPort('2222');
+                  }
+                }}
+              />
+            }
+          />
+
+          <SettingRow
+            variant="plain"
+            title="开机自启"
+            description="后台服务启动时自动挂载并拉起该容器及其自启服务"
             control={<Switch checked={autoStart} onCheckedChange={setAutoStart} />}
           />
           <SettingRow
             variant="plain"
-            title="宿主机桥接 (hostBridge)"
-            description="允许容器通过受控通道调用宿主机调试工具"
+            title="Android 宿主机桥接 (hostBridge)"
+            description="允许容器内通过 host-exec 调用 Android 宿主机调试能力"
             control={<Switch checked={hostBridge} onCheckedChange={setHostBridge} />}
           />
           <SettingRow
             variant="plain"
-            title="宿主机完整运行时 (hostRuntime)"
-            description="直通宿主机 /proc、/sys、/dev 与完整权限集"
+            title="宿主机环境直通 (高权限)"
+            description="直通宿主机 /proc、/sys、/dev 与完整权限集，保存后需重启容器生效"
             control={<Switch checked={hostRuntime} onCheckedChange={setHostRuntime} />}
           />
           <SettingRow
             variant="plain"
-            title="noatime 挂载"
-            description="减少闪存写入放大并提升 I/O 吞吐"
+            title="减少闪存写入 (noatime)"
+            description="挂载镜像时禁用访问时间更新，提升读写性能并延长闪存寿命"
             control={<Switch checked={noatime} onCheckedChange={setNoatime} />}
           />
           <SettingRow
             variant="plain"
-            title="L5 内核诊断只读挂载"
-            description="只读挂载 /sys/fs/pstore、/sys/kernel/tracing 与 /sys/fs/bpf"
+            title="内核深度诊断只读挂载"
+            description="只读挂载 pstore、tracing 与 bpf 内核调试接口（/sys/fs/pstore、/sys/kernel/tracing、/sys/fs/bpf）"
             control={
               <Switch
                 checked={l5Enabled}
@@ -137,25 +204,7 @@ export function ContainerConfigModal({
           <Button size="sm" variant="secondary" onClick={onClose}>
             取消
           </Button>
-          <Button
-            size="sm"
-            variant="primary"
-            disabled={busy}
-            onClick={async () => {
-              await onSave({
-                container: container.id,
-                hostname: hostname.trim(),
-                sshPort: Number(sshPort) || 2222,
-                autoStart,
-                hostBridge,
-                hostRuntime,
-                noatime,
-                extraCharDevs,
-                extraMounts,
-              });
-              onClose();
-            }}
-          >
+          <Button size="sm" variant="primary" disabled={busy} onClick={() => void handleSave()}>
             保存配置
           </Button>
         </div>

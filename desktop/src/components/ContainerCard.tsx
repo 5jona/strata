@@ -15,6 +15,7 @@ import {
   ShieldCheck,
   Sparkles,
   Square,
+  Star,
   Terminal,
   Trash2,
 } from 'lucide-react';
@@ -23,6 +24,8 @@ import type { ContainerStatusSnapshot } from '../types/protocol.ts';
 
 export interface ContainerCardProps {
   container: ContainerStatusSnapshot;
+  isDefault: boolean;
+  hasUinput?: boolean;
   serviceCount: number;
   runningServiceCount: number;
   expanded: boolean;
@@ -34,6 +37,7 @@ export interface ContainerCardProps {
   onOpenTerminal: () => void;
   onOpenVsCode: () => void;
   onCopySsh: () => void;
+  onSetDefault: () => void;
   onCompact: () => void;
   onFsck: () => void;
   onResize: () => void;
@@ -45,11 +49,13 @@ export interface ContainerCardProps {
 }
 
 /**
- * Progressive-disclosure container card inspired by `owu/wsl-dashboard`:
- * compact primary row for 1-click daily actions + smooth expandable tray for maintenance.
+ * Progressive-disclosure container card with debug readiness badges,
+ * 1-click daily actions, and expandable maintenance tray.
  */
 export function ContainerCard({
   container,
+  isDefault,
+  hasUinput,
   serviceCount,
   runningServiceCount,
   expanded,
@@ -61,6 +67,7 @@ export function ContainerCard({
   onOpenTerminal,
   onOpenVsCode,
   onCopySsh,
+  onSetDefault,
   onCompact,
   onFsck,
   onResize,
@@ -82,9 +89,8 @@ export function ContainerCard({
 
   return (
     <Card className="overflow-hidden border-[var(--border-hairline)] p-0">
-      {/* Compact Primary Row */}
       <div className="flex flex-wrap items-center gap-3 px-4 py-3">
-        <div className="flex min-w-[200px] flex-1 items-center gap-3">
+        <div className="flex min-w-[220px] flex-1 items-center gap-3">
           <div
             className={cn(
               'flex size-10 shrink-0 items-center justify-center rounded-xl border',
@@ -101,24 +107,33 @@ export function ContainerCard({
                 {container.id}
               </span>
               <Badge variant={phase.variant}>{phase.label}</Badge>
-              {container.isDefault && <Badge variant="accent">默认</Badge>}
+              {isDefault && <Badge variant="accent">默认 · 调试通道</Badge>}
               {container.autoStart && <Badge variant="neutral">开机自启</Badge>}
               {serviceCount > 0 && (
                 <Badge variant={runningServiceCount > 0 ? 'success' : 'neutral'}>
                   服务 {runningServiceCount}/{serviceCount}
                 </Badge>
               )}
+              <Badge variant={container.sshEnabled ? 'success' : 'neutral'}>
+                SSH :{container.sshPort}
+              </Badge>
+              <Badge variant={container.hostBridge ? 'success' : 'neutral'}>
+                {container.hostBridge ? '宿主机桥接' : '桥接关闭'}
+              </Badge>
+              {hasUinput !== undefined && (
+                <Badge variant={hasUinput ? 'success' : 'neutral'}>
+                  {hasUinput ? 'uinput 已透传' : '无 uinput'}
+                </Badge>
+              )}
             </div>
             <div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-0.5 font-mono text-[11px] text-[var(--text-secondary)]">
               <span>{container.hostname}</span>
-              <span>SSH :{container.sshPort}</span>
               <span>运行 {formatUptime(container.uptimeMs)}</span>
-              {container.nsPid && <span>nsPID {container.nsPid}</span>}
+              {container.nsPid && <span>进程 PID {container.nsPid}</span>}
             </div>
           </div>
         </div>
 
-        {/* Disk Usage Bar */}
         <div className="w-44 shrink-0">
           <div className="mb-1 flex items-center justify-between text-[11px] text-[var(--text-secondary)]">
             <span className="flex items-center gap-1">
@@ -138,7 +153,6 @@ export function ContainerCard({
           />
         </div>
 
-        {/* Primary Quick Actions */}
         <div className="flex shrink-0 items-center gap-1.5">
           {running ? (
             <Button size="sm" variant="secondary" disabled={busy} onClick={onStop}>
@@ -184,7 +198,7 @@ export function ContainerCard({
             size="icon-sm"
             variant="ghost"
             aria-expanded={expanded}
-            aria-label={expanded ? '收起高级操作栏' : '展开高级操作栏'}
+            aria-label={expanded ? '收起更多操作' : '展开更多操作'}
             onClick={onToggleExpand}
           >
             {expanded ? <ChevronUp className="size-4" /> : <ChevronDown className="size-4" />}
@@ -192,21 +206,26 @@ export function ContainerCard({
         </div>
       </div>
 
-      {/* Expandable Secondary Tray */}
       {expanded && (
         <div className="strata-tray-expand flex flex-wrap items-center justify-between gap-2 border-t border-[var(--border-hairline)] bg-[var(--surface-elevated)]/75 px-4 py-2.5">
           <div className="flex flex-wrap items-center gap-1.5">
+            {!isDefault && (
+              <Button size="sm" variant="ghost" disabled={busy} onClick={onSetDefault}>
+                <Star className="size-3.5" />
+                设为默认调试容器
+              </Button>
+            )}
             <Button size="sm" variant="ghost" disabled={busy} onClick={onRestart}>
               <RotateCw className="size-3.5" />
               重启
             </Button>
             <Button size="sm" variant="ghost" disabled={busy} onClick={onCompact}>
               <Sparkles className="size-3.5" />
-              回收空间 (FITRIM)
+              回收磁盘空间
             </Button>
             <Button size="sm" variant="ghost" disabled={busy} onClick={onFsck}>
               <ShieldCheck className="size-3.5" />
-              磁盘检查 (fsck)
+              磁盘修复检查
             </Button>
             <Button size="sm" variant="ghost" disabled={busy} onClick={onResize}>
               <Maximize2 className="size-3.5" />
@@ -230,7 +249,7 @@ export function ContainerCard({
             </Button>
             <Button size="sm" variant="ghost" disabled={busy} onClick={onConfig}>
               <Settings className="size-3.5" />
-              高级配置
+              容器配置
             </Button>
           </div>
           <Button size="sm" variant="danger" disabled={busy} onClick={onDelete}>

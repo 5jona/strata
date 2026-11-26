@@ -54,7 +54,7 @@ pub(crate) struct ContainerManager {
     pub(crate) logs_dir: PathBuf,
     pub(crate) module_dir: Option<PathBuf>,
     slots: RwLock<HashMap<String, Arc<ContainerSlot>>>,
-    in_flight_provisions: StdMutex<HashMap<String, u16>>,
+    in_flight_provisions: StdMutex<HashMap<String, Option<u16>>>,
     pub(crate) leases: LeaseRegistry,
     pub(crate) pty_registry: RwLock<Option<Arc<PtyRegistry>>>,
     pub(crate) service_supervisor: RwLock<Option<Arc<ServiceSupervisor>>>,
@@ -110,10 +110,14 @@ impl ContainerManager {
     ) -> DaemonResult<(String, ContainerConfig, bool)> {
         let cfg = self.config_store.snapshot().await;
         let Some((id, entry)) = cfg.get_container(requested) else {
-            let name = cfg.resolve_container_id(requested);
-            return Err(DaemonError::ContainerNotFound(name.to_owned()));
+            let name = cfg
+                .resolve_container_id(requested)
+                .map(str::to_owned)
+                .or_else(|| requested.map(str::to_owned))
+                .unwrap_or_else(|| "default".to_owned());
+            return Err(DaemonError::ContainerNotFound(name));
         };
-        Ok((id.to_owned(), entry.clone(), id == cfg.default_container))
+        Ok((id.to_owned(), entry.clone(), cfg.is_default_container(id)))
     }
 
     /// Starts all enabled `autoStart` containers whose backing images exist on disk.
@@ -206,7 +210,7 @@ impl ContainerManager {
         let cfg = self.config_store.snapshot().await;
         let mut out = Vec::with_capacity(cfg.containers.len());
         for (id, entry) in &cfg.containers {
-            let is_default = id == &cfg.default_container;
+            let is_default = cfg.is_default_container(id);
             out.push(self.build_snapshot(id, entry, is_default).await);
         }
         out
@@ -252,12 +256,13 @@ impl ContainerManager {
         )))
     }
 
-    /// Atomically reserves `(container_id, ssh_port)` across concurrent create/import/clone calls.
+    /// Atomically reserves `(container_id, optional ssh_port)` across concurrent create/import/clone calls.
     pub(crate) fn reserve_provision(
         self: &Arc<Self>,
         container_id: &str,
         snapshot: &StrataConfig,
         requested_port: Option<u16>,
+        reserve_ssh_port: bool,
     ) -> DaemonResult<(u16, ProvisionReservation)> {
         let mut guard = self
             .in_flight_provisions
@@ -266,14 +271,20 @@ impl ContainerManager {
         if snapshot.containers.contains_key(container_id) || guard.contains_key(container_id) {
             return Err(DaemonError::ContainerAlreadyExists(container_id.to_owned()));
         }
-        let reserved: HashSet<u16> = guard.values().copied().collect();
-        let port = allocate_ssh_port(snapshot, &reserved, requested_port);
-        if reserved.contains(&port) {
-            return Err(DaemonError::InvalidParams(format!(
-                "SSH port {port} is already reserved by an in-flight provisioning job"
-            )));
-        }
-        guard.insert(container_id.to_owned(), port);
+        let port = if reserve_ssh_port {
+            let reserved: HashSet<u16> = guard.values().flatten().copied().collect();
+            let allocated = allocate_ssh_port(snapshot, &reserved, requested_port);
+            if reserved.contains(&allocated) {
+                return Err(DaemonError::InvalidParams(format!(
+                    "SSH port {allocated} is already reserved by an in-flight provisioning job"
+                )));
+            }
+            guard.insert(container_id.to_owned(), Some(allocated));
+            allocated
+        } else {
+            guard.insert(container_id.to_owned(), None);
+            0
+        };
         drop(guard);
         Ok((
             port,

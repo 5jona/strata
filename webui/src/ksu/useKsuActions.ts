@@ -68,7 +68,7 @@ export function useKsuActions({
     try {
       if (op === 'dns') {
         await invokeStrataKsuRpc(bridge, STRATA_METHODS.CONTAINER_SYNC_DNS, { container: cid });
-        pushToast('DNS 与宿主机桥接已同步', 'success');
+        pushToast('已同步容器 DNS 解析', 'success');
       } else if (op === 'compact') {
         const res = await invokeStrataKsuRpc(
           bridge,
@@ -77,7 +77,7 @@ export function useKsuActions({
           45_000,
         );
         pushToast(
-          `FITRIM 完成：${formatBytes(res.beforeBytes)} → ${formatBytes(res.afterBytes)}`,
+          `空闲空间回收完成：${formatBytes(res.beforeBytes)} → ${formatBytes(res.afterBytes)}`,
           'success',
         );
       } else if (op === 'fsck') {
@@ -87,7 +87,12 @@ export function useKsuActions({
           { container: cid },
           45_000,
         );
-        pushToast(`磁盘检查完成 (exit=${res.exitCode})`, res.exitCode <= 1 ? 'success' : 'danger');
+        pushToast(
+          res.exitCode <= 1
+            ? '磁盘检查完成，文件系统正常'
+            : `磁盘检查异常（退出码 ${res.exitCode}）`,
+          res.exitCode <= 1 ? 'success' : 'danger',
+        );
       } else {
         const res = await invokeStrataKsuRpc(bridge, STRATA_METHODS.CONTAINER_BACKUP_START, {
           container: cid,
@@ -171,7 +176,7 @@ export function useKsuActions({
     setBusyKey('daemon:rescue');
     try {
       await startStrataDaemonViaKsu(bridge);
-      pushToast('已发送守护进程拉起指令', 'info');
+      pushToast('正在启动 Strata 后台服务，请稍候…', 'info');
       await refreshAll();
     } catch (err) {
       pushToast(errMsg(err), 'danger');

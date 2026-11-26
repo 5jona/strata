@@ -1,4 +1,8 @@
-import { type ContainerConfig, STRATA_PATHS } from '../types/protocol.ts';
+import {
+  type ContainerConfig,
+  type ContainerServiceRuntime,
+  STRATA_PATHS,
+} from '../types/protocol.ts';
 import { STRATA_EVENTS, STRATA_METHODS, StrataRpcError } from '../types/rpc.ts';
 import {
   cloneMockContainer,
@@ -7,10 +11,66 @@ import {
   patchMockContainerConfig,
   requireMockContainer,
   setMockContainerPhase,
-  setMockServiceStatus,
+  setMockDefaultContainer,
   startMockCreateJob,
-  upsertMockService,
 } from './mockHandlers.ts';
+
+function upsertMockService(
+  ctx: MockRuntimeContext,
+  containerId: string | undefined,
+  spec: ContainerConfig['services'][number],
+): ContainerServiceRuntime {
+  const rec = requireMockContainer(ctx.dataset, containerId);
+  const idx = rec.config.services.findIndex((s) => s.id === spec.id);
+  if (idx >= 0) rec.config.services[idx] = spec;
+  else rec.config.services.push(spec);
+  let runtime = rec.services.find((s) => s.id === spec.id);
+  if (!runtime) {
+    runtime = {
+      id: spec.id,
+      name: spec.name,
+      status: 'stopped',
+      uptimeMs: 0,
+      restartCount: 0,
+      autoStart: spec.autoStart,
+    };
+    rec.services.push(runtime);
+    rec.serviceLogs[spec.id] = [`[service:${spec.id}] 已注册服务，等待启动`];
+  } else {
+    Object.assign(runtime, { name: spec.name, autoStart: spec.autoStart });
+  }
+  return runtime;
+}
+
+function setMockServiceStatus(
+  ctx: MockRuntimeContext,
+  containerId: string | undefined,
+  serviceId: string,
+  next: 'running' | 'stopped',
+  incrementRestart = false,
+): ContainerServiceRuntime {
+  const rec = requireMockContainer(ctx.dataset, containerId);
+  const svc = rec.services.find((s) => s.id === serviceId);
+  if (!svc) throw new StrataRpcError(-32028, `服务不存在: ${serviceId}`);
+  const prev = svc.status;
+  svc.status = next;
+  svc.pid = next === 'running' ? 20_000 + Math.floor(Math.random() * 900) : undefined;
+  svc.uptimeMs = next === 'running' ? 1000 : 0;
+  if (incrementRestart) svc.restartCount += 1;
+  rec.serviceLogs[serviceId] = [
+    ...(rec.serviceLogs[serviceId] ?? []),
+    `${new Date().toISOString()} [${serviceId}] transitioned ${prev} -> ${next}`,
+  ];
+  ctx.emit(STRATA_EVENTS.SERVICE_STATE_CHANGED, {
+    container: rec.snapshot.id,
+    serviceId,
+    prevStatus: prev,
+    status: next,
+    pid: svc.pid,
+    restartCount: svc.restartCount,
+  });
+  return svc;
+}
 
 export function dispatchMockContainerAndServiceRpc(
   ctx: MockRuntimeContext,
@@ -115,6 +175,8 @@ export function dispatchMockContainerAndServiceRpc(
       );
     case STRATA_METHODS.CONTAINER_DELETE:
       return deleteMockContainer(dataset, String(p.id), Boolean(p.deleteImage));
+    case STRATA_METHODS.CONTAINER_SET_DEFAULT:
+      return setMockDefaultContainer(ctx, String(p.id));
     case STRATA_METHODS.CONTAINER_CREATE:
       return startMockCreateJob(ctx, p);
     case STRATA_METHODS.CONTAINER_JOB_STATUS: {

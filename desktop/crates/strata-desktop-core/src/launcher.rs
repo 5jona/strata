@@ -75,7 +75,11 @@ pub fn validate_ssh_target(target: &SshTarget) -> Result<(), LauncherError> {
         return Err(LauncherError::InvalidPort);
     }
     if let Some(path) = &target.remote_path
-        && (!path.starts_with('/') || path.chars().any(|c| c.is_control() || c == '?' || c == '#'))
+        && (!path.starts_with('/')
+            || path.len() > 256
+            || path
+                .chars()
+                .any(|c| c.is_control() || c.is_whitespace() || "?#&|<>^%\"'`;$\\".contains(c)))
     {
         return Err(LauncherError::InvalidRemotePath(path.clone()));
     }
@@ -264,8 +268,16 @@ mod tests {
         bad.host = "-oProxyCommand=calc".to_owned();
         assert!(build_vscode_remote_uri(&bad).is_err());
 
-        let mut bad_path = sample_target();
-        bad_path.remote_path = Some("relative/path".to_owned());
-        assert!(build_vscode_remote_uri(&bad_path).is_err());
+        for p in [
+            "relative/path",
+            "/root&calc.exe",
+            "/root|whoami",
+            "/root%TEMP%",
+            "/root;id",
+        ] {
+            let mut bad_path = sample_target();
+            bad_path.remote_path = Some(p.to_owned());
+            assert!(build_vscode_remote_uri(&bad_path).is_err(), "reject {p}");
+        }
     }
 }
