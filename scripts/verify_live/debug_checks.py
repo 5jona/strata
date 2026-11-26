@@ -25,13 +25,13 @@ def verify_debug_tools(dev: DeviceRunner) -> None:
     ).stdout.strip()
     assert rel, "host-exec getprop returned empty"
 
-    fwd_list = dev.container_cmd("strata-debug forward --list", check=False)
-    assert fwd_list.returncode == 0, f"strata-debug forward --list failed: {fwd_list.stderr}"
-
-    probe_out = dev.container_cmd("strata-debug sys-probe --no-sf --no-sideveil", check=False)
-    assert probe_out.returncode == 0 and "package" in probe_out.stdout, (
-        f"strata-debug sys-probe failed: {probe_out.stderr or probe_out.stdout}"
+    ver_out = dev.container_cmd("strata-debug --version", check=False)
+    assert ver_out.returncode == 0 and "strata-debug" in ver_out.stdout, (
+        f"strata-debug --version failed: {ver_out.stderr or ver_out.stdout}"
     )
+
+    probe = _run_debug_json(dev, "strata-debug health --no-sf --no-sideveil")
+    assert "package" in probe, f"strata-debug health missing package field: {probe}"
 
     legacy_adb = dev.container_cmd("test ! -e /usr/local/bin/adb && echo clean", check=False)
     assert legacy_adb.stdout.strip() == "clean", "legacy /usr/local/bin/adb still exists in container"
@@ -45,11 +45,11 @@ def verify_debug_tools(dev: DeviceRunner) -> None:
     finally:
         dev.container_cmd(f"rm -f {cursor_path}", check=False)
 
-    _run_debug_json(dev, "strata-debug kernel pstore")
+    _run_debug_json(dev, "strata-debug system pstore")
 
     visual_path = "/tmp/strata-verify-visual.png"
     try:
-        visual = _run_debug_json(dev, f"strata-debug visual --out {visual_path}")
+        visual = _run_debug_json(dev, f"strata-debug visual --format png --out {visual_path}")
         health = visual.get("health") if isinstance(visual.get("health"), dict) else {}
         width = visual.get("width") if isinstance(visual.get("width"), int) else health.get("width")
         assert isinstance(width, int) and width > 0, f"expected positive visual width: {visual}"

@@ -9,7 +9,9 @@ use tokio::process::Command;
 use crate::devices::DeviceRegistry;
 use crate::params::{PerfettoTraceParams, ReloadVerifyParams};
 use crate::perfetto_pc;
-use crate::transport::{TargetOverride, build_routes, ssh_exec_argv, transfer_pull};
+use crate::transport::{
+    TargetOverride, build_routes, ssh_exec_argv, ssh_exec_argv_once, transfer_pull,
+};
 
 fn now_millis() -> u128 {
     SystemTime::now()
@@ -77,7 +79,11 @@ pub(crate) async fn handle_perfetto(reg: &DeviceRegistry, p: PerfettoTraceParams
     push_opt(&mut cmd, "--out", p.remote_path.as_deref());
 
     let timeout = f64::from(p.duration_sec.unwrap_or(5)) + 30.0;
-    let mut res = ssh_exec_argv(reg, &target, &cmd, timeout).await;
+    let mut res = if action == "status" {
+        ssh_exec_argv(reg, &target, &cmd, timeout).await
+    } else {
+        ssh_exec_argv_once(reg, &target, &cmd, timeout).await
+    };
 
     let want_pull = matches!(action, "capture" | "snapshot" | "stop")
         && (p.pull_to_local.unwrap_or(false)

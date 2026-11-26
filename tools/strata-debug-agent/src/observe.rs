@@ -1,16 +1,19 @@
 //! L4 atomic single-shot observe step: mark -> action -> settle -> concurrent signal collection.
 
+mod gesture_spec;
+
 use std::path::Path;
 use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 
 use crate::cdp;
-use crate::gesture::{GestureKind, run_gesture};
+use crate::gesture::run_gesture;
 use crate::health::{collect_health, detect_foreground};
 use crate::host::run_host;
 use crate::logcat::{DEFAULT_CURSOR_PATH, mark_cursor, read_incremental};
 use crate::visual::{VisualOpts, run_visual};
+use gesture_spec::parse_gesture_spec;
 
 const STRATA_BIN: &str = "/data/adb/ksu/bin/strata";
 
@@ -33,35 +36,6 @@ pub(crate) struct ObserveOpts {
     pub(crate) visual_out: Option<String>,
     pub(crate) inline_image: bool,
     pub(crate) max_width: Option<u32>,
-}
-
-fn parse_gesture_spec(spec: &Value) -> Result<GestureKind, String> {
-    let kind = spec["kind"].as_str().unwrap_or("edge-swipe");
-    match kind {
-        "tap" => Ok(GestureKind::Tap {
-            x: spec["x"].as_i64().ok_or("gesture.x required")? as i32,
-            y: spec["y"].as_i64().ok_or("gesture.y required")? as i32,
-        }),
-        "long-press" => Ok(GestureKind::LongPress {
-            x: spec["x"].as_i64().ok_or("gesture.x required")? as i32,
-            y: spec["y"].as_i64().ok_or("gesture.y required")? as i32,
-            duration_ms: spec["durationMs"].as_u64().unwrap_or(600),
-        }),
-        "swipe" => Ok(GestureKind::Swipe {
-            x0: spec["x0"].as_i64().ok_or("gesture.x0 required")? as i32,
-            y0: spec["y0"].as_i64().ok_or("gesture.y0 required")? as i32,
-            x1: spec["x1"].as_i64().ok_or("gesture.x1 required")? as i32,
-            y1: spec["y1"].as_i64().ok_or("gesture.y1 required")? as i32,
-            duration_ms: spec["durationMs"].as_u64().unwrap_or(240),
-        }),
-        _ => Ok(GestureKind::EdgeSwipe {
-            side: spec["side"].as_str().unwrap_or("right").to_owned(),
-            y_percent: spec["yPercent"].as_f64().unwrap_or(50.0),
-            distance_dp: spec["distanceDp"].as_f64().unwrap_or(96.0),
-            duration_ms: spec["durationMs"].as_u64().unwrap_or(240),
-            cancel_back: spec["cancelBack"].as_bool().unwrap_or(false),
-        }),
-    }
 }
 
 async fn execute_action(opts: &ObserveOpts, pkg: Option<&str>) -> (Option<Value>, Option<String>) {
@@ -213,26 +187,4 @@ pub(crate) async fn run_observe(opts: &ObserveOpts) -> Value {
         "cdp": cdp_info,
         "visual": vis_info,
     })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn parses_all_gesture_spec_variants() {
-        let tap = parse_gesture_spec(&json!({"kind": "tap", "x": 10, "y": 20})).expect("tap");
-        assert!(matches!(tap, GestureKind::Tap { x: 10, y: 20 }));
-
-        let edge =
-            parse_gesture_spec(&json!({"kind": "edge-swipe", "side": "left", "cancelBack": true}))
-                .expect("edge");
-        assert!(matches!(
-            edge,
-            GestureKind::EdgeSwipe {
-                cancel_back: true,
-                ..
-            }
-        ));
-    }
 }

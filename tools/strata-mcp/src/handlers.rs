@@ -1,6 +1,7 @@
 //! Core device, shell, file transfer, and app lifecycle MCP handlers.
 
 pub(crate) mod extra;
+mod gesture_arg;
 pub(crate) mod inspect;
 pub(crate) mod perfetto_reload;
 
@@ -11,7 +12,9 @@ use serde_json::{Value, json};
 
 use crate::devices::DeviceRegistry;
 use crate::params::{AppManageParams, DeviceExecParams, DeviceManageParams, FileTransferParams};
-use crate::transport::{TargetOverride, ssh_exec_argv, transfer_pull, transfer_push};
+use crate::transport::{
+    TargetOverride, ssh_exec_argv, ssh_exec_argv_once, transfer_pull, transfer_push,
+};
 
 pub(crate) use inspect::{
     handle_kernel_probe, handle_logcat, handle_sqlite, handle_system, handle_ui_interact,
@@ -86,7 +89,7 @@ pub(crate) async fn handle_device_exec(reg: &DeviceRegistry, p: DeviceExecParams
         timeout.to_string(),
         p.command,
     ];
-    ssh_exec_argv(reg, &target, &cmd, timeout + 10.0).await
+    ssh_exec_argv_once(reg, &target, &cmd, timeout + 10.0).await
 }
 
 /// Handles `file_transfer` (`push` | `pull`).
@@ -132,7 +135,7 @@ pub(crate) async fn handle_app_manage(reg: &DeviceRegistry, p: AppManageParams) 
             push_opt(&mut cmd, "--activity", p.activity.as_deref());
             push_opt(&mut cmd, "--intent-action", p.intent_action.as_deref());
             push_opt(&mut cmd, "--data-uri", p.data_uri.as_deref());
-            ssh_exec_argv(reg, &target, &cmd, 25.0).await
+            ssh_exec_argv_once(reg, &target, &cmd, 25.0).await
         }
         "install" => handle_apk_install(reg, &target, p).await,
         other => json!({"ok": false, "error": format!("unsupported app_manage action '{other}'")}),
@@ -199,7 +202,7 @@ async fn handle_apk_install(
     if p.replace == Some(false) {
         cmd.push("--no-replace".to_owned());
     }
-    let res = ssh_exec_argv(reg, target, &cmd, 90.0).await;
+    let res = ssh_exec_argv_once(reg, target, &cmd, 90.0).await;
     if let Some(rp) = cleanup_path {
         let rm = [
             "host-exec".to_owned(),

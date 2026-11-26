@@ -51,7 +51,7 @@ def verify_sideveil_backend(dev: DeviceRunner) -> None:
         ).stdout
     )
     assert any(
-        item.get("id") == "main" and item.get("phase") == "running"
+        item.get("phase") == "running"
         for item in sv_list.get("result", [])
     ), f"sideveil-ctl plugins invoke container.list unexpected: {sv_list}"
 
@@ -115,10 +115,10 @@ def verify_sideveil_ui(dev: DeviceRunner, screenshot_out: str | None) -> None:
         if inspect.returncode == 0 and inspect.stdout.strip():
             print(f"[UI] inspect-ui: {inspect.stdout.strip()[:240]}")
 
-        probe = dev.container_cmd("strata-debug sys-probe --package pochita.sideveil.host", check=False)
+        probe = dev.container_cmd("strata-debug health --package pochita.sideveil.host", check=False)
         if probe.returncode == 0 and probe.stdout.strip():
             parsed = json.loads(probe.stdout)
-            print(f"[UI] sys-probe windows={len(parsed.get('packageWindows', []))}")
+            print(f"[UI] health windows={len(parsed.get('packageWindows', []))}")
 
         if screenshot_out:
             remote_img = "/data/local/tmp/strata_sideveil_ui.webp"

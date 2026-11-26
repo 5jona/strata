@@ -6,7 +6,7 @@ use crate::devices::DeviceRegistry;
 use crate::params::{
     KernelProbeParams, LogcatReadParams, SqliteInspectParams, SystemInspectParams, UiInteractParams,
 };
-use crate::transport::ssh_exec_argv;
+use crate::transport::{ssh_exec_argv, ssh_exec_argv_once};
 
 fn push_opt(cmd: &mut Vec<String>, flag: &str, val: Option<&str>) {
     if let Some(v) = val.map(str::trim).filter(|s| !s.is_empty()) {
@@ -51,7 +51,7 @@ pub(crate) async fn handle_ui_interact(reg: &DeviceRegistry, p: UiInteractParams
                 cmd.extend(["--index".to_owned(), i.to_string()]);
             }
             push_opt(&mut cmd, "--method", p.method.as_deref());
-            ssh_exec_argv(reg, &target, &cmd, 25.0).await
+            ssh_exec_argv_once(reg, &target, &cmd, 25.0).await
         }
         "gesture" => {
             let kind = p.kind.as_deref().unwrap_or("edge-swipe");
@@ -91,7 +91,7 @@ pub(crate) async fn handle_ui_interact(reg: &DeviceRegistry, p: UiInteractParams
                         p.duration_ms.unwrap_or(240).to_string(),
                     ]);
                 }
-                _ => {
+                "edge-swipe" => {
                     cmd.extend([
                         "--side".to_owned(),
                         p.side.unwrap_or_else(|| "right".to_owned()),
@@ -106,8 +106,11 @@ pub(crate) async fn handle_ui_interact(reg: &DeviceRegistry, p: UiInteractParams
                         cmd.push("--cancel-back".to_owned());
                     }
                 }
+                other => {
+                    return json!({"ok": false, "error": format!("unsupported gesture kind '{other}'; use tap|long-press|swipe|edge-swipe")});
+                }
             }
-            ssh_exec_argv(reg, &target, &cmd, 25.0).await
+            ssh_exec_argv_once(reg, &target, &cmd, 25.0).await
         }
         other => json!({"ok": false, "error": format!("unsupported ui_interact action '{other}'")}),
     }

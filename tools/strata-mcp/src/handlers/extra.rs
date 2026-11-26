@@ -4,10 +4,12 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde_json::{Value, json};
 
+use super::gesture_arg::normalize_action_gesture;
 use crate::devices::DeviceRegistry;
 use crate::params::{CdpDebugParams, ObserveStepParams, VisualCaptureParams};
 use crate::transport::{
-    open_ssh_port_forward, shell_quote, ssh_exec_argv, ssh_exec_raw, transfer_pull,
+    RetryPolicy, open_ssh_port_forward, shell_quote, ssh_exec_argv, ssh_exec_argv_once,
+    ssh_exec_raw_with_policy, transfer_pull,
 };
 
 fn now_millis() -> u128 {
@@ -133,7 +135,7 @@ pub(crate) async fn handle_cdp(reg: &DeviceRegistry, p: CdpDebugParams) -> Value
             push_opt(&mut cmd, "--url-match", p.url_match.as_deref());
             let t = p.timeout_sec.unwrap_or(5.0);
             cmd.extend(["--timeout".to_owned(), t.to_string()]);
-            ssh_exec_argv(reg, &target, &cmd, t + 10.0).await
+            ssh_exec_argv_once(reg, &target, &cmd, t + 10.0).await
         }
         "audit" => {
             let mut cmd = vec![
@@ -174,7 +176,9 @@ pub(crate) async fn handle_cdp(reg: &DeviceRegistry, p: CdpDebugParams) -> Value
                 launch.push_str(&format!(" --pid {pid}"));
             }
             launch.push_str(" </dev/null >/dev/null 2>&1 & echo $!");
-            let start = ssh_exec_raw(reg, &target, &launch, 10.0).await;
+            let start =
+                ssh_exec_raw_with_policy(reg, &target, &launch, 10.0, RetryPolicy::SideEffect)
+                    .await;
             let tun = open_ssh_port_forward(reg, &target, port, port).await;
             json!({
                 "ok": start["ok"] == json!(true) && tun["ok"] == json!(true),
@@ -185,9 +189,7 @@ pub(crate) async fn handle_cdp(reg: &DeviceRegistry, p: CdpDebugParams) -> Value
     }
 }
 
-/// Runs L4 atomic observe step with optional inline visual capture.
-pub(crate) async fn handle_observe(reg: &DeviceRegistry, p: ObserveStepParams) -> Value {
-    let target = p.target.to_override();
+fn build_observe_argv(p: ObserveStepParams) -> Result<(Vec<String>, bool), String> {
     let mut cmd = vec![
         "strata-debug".to_owned(),
         "observe".to_owned(),
@@ -210,15 +212,84 @@ pub(crate) async fn handle_observe(reg: &DeviceRegistry, p: ObserveStepParams) -
     if p.return_image.unwrap_or(false) {
         cmd.push("--inline-image".to_owned());
     }
+    let mut has_action = false;
     if let Some(rpc) = p.action_rpc
         && rpc.len() == 2
     {
+        has_action = true;
         cmd.extend(["--action-rpc".to_owned(), rpc[0].clone(), rpc[1].clone()]);
     }
-    push_opt(&mut cmd, "--action-shell", p.action_shell.as_deref());
-    push_opt(&mut cmd, "--action-cdp-eval", p.action_cdp_eval.as_deref());
-    if let Some(g) = p.action_gesture {
-        cmd.extend(["--action-gesture".to_owned(), g.to_string()]);
+    if p.action_shell
+        .as_deref()
+        .is_some_and(|s| !s.trim().is_empty())
+    {
+        has_action = true;
     }
-    ssh_exec_argv(reg, &target, &cmd, 45.0).await
+    push_opt(&mut cmd, "--action-shell", p.action_shell.as_deref());
+    if p.action_cdp_eval
+        .as_deref()
+        .is_some_and(|s| !s.trim().is_empty())
+    {
+        has_action = true;
+    }
+    push_opt(&mut cmd, "--action-cdp-eval", p.action_cdp_eval.as_deref());
+    if let Some(g) = p.action_gesture.filter(|v| !v.is_null()) {
+        let encoded = normalize_action_gesture(g)?;
+        has_action = true;
+        cmd.extend(["--action-gesture".to_owned(), encoded]);
+    }
+    Ok((cmd, has_action))
+}
+
+/// Runs L4 atomic observe step with optional inline visual capture.
+pub(crate) async fn handle_observe(reg: &DeviceRegistry, p: ObserveStepParams) -> Value {
+    let target = p.target.to_override();
+    let (cmd, has_action) = match build_observe_argv(p) {
+        Ok(v) => v,
+        Err(err) => return json!({"ok": false, "error": err}),
+    };
+    if has_action {
+        ssh_exec_argv_once(reg, &target, &cmd, 45.0).await
+    } else {
+        ssh_exec_argv(reg, &target, &cmd, 45.0).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::params::TargetArgs;
+
+    #[test]
+    fn builds_observe_argv_with_single_encoded_swipe_gesture() {
+        let params = ObserveStepParams {
+            action_rpc: None,
+            action_shell: None,
+            action_cdp_eval: None,
+            action_gesture: Some(Value::String(
+                r#"{"kind":"swipe","x0":10,"y0":336,"x1":900,"y1":336,"durationMs":240}"#
+                    .to_owned(),
+            )),
+            cursor: None,
+            settle_ms: None,
+            package: None,
+            priority: None,
+            tag: None,
+            include_cdp: None,
+            include_visual: None,
+            return_image: None,
+            roi: None,
+            target: TargetArgs::default(),
+        };
+        let (argv, has_action) = build_observe_argv(params).expect("argv");
+        assert!(has_action);
+        let idx = argv
+            .iter()
+            .position(|a| a == "--action-gesture")
+            .expect("flag");
+        let parsed: Value = serde_json::from_str(&argv[idx + 1]).expect("single-level JSON");
+        assert_eq!(parsed["kind"], json!("swipe"));
+        assert_eq!(parsed["x0"], json!(10));
+        assert_eq!(parsed["x1"], json!(900));
+    }
 }

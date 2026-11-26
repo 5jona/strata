@@ -239,7 +239,7 @@ mod tests {
         let recs = vec![DeviceRecord {
             id: "demo-tab".to_owned(),
             alias: Some("demo-tab".to_owned()),
-            model: Some("OPD2513".to_owned()),
+            model: Some("TESTDEV1".to_owned()),
             product: None,
             adb_serial: Some("SER123".to_owned()),
             adb_state: Some("device".to_owned()),
@@ -253,7 +253,7 @@ mod tests {
             prefer_transport: "ssh".to_owned(),
             sources: vec!["adb".to_owned()],
         }];
-        assert_eq!(match_devices(&recs, "opd2513").len(), 1);
+        assert_eq!(match_devices(&recs, "testdev1").len(), 1);
         let key = safe_device_key("192.0.2.10:2222/foo");
         assert!(!key.contains('/') && !key.contains(':'));
     }

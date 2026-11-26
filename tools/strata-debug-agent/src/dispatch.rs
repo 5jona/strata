@@ -96,15 +96,8 @@ pub(crate) async fn dispatch(cmd: Command) -> Value {
             max_width,
         } => {
             let rpc = action_rpc.and_then(|v| (v.len() == 2).then(|| (v[0].clone(), v[1].clone())));
-            let gest = match action_gesture.as_deref() {
-                Some(raw) => match serde_json::from_str::<Value>(raw) {
-                    Ok(v) => Some(v),
-                    Err(e) => {
-                        return json!({"ok": false, "error": format!("invalid action-gesture JSON: {e}")});
-                    }
-                },
-                None => None,
-            };
+            let gest = action_gesture
+                .map(|raw| serde_json::from_str::<Value>(&raw).unwrap_or(Value::String(raw)));
             observe::run_observe(&observe::ObserveOpts {
                 action_rpc: rpc,
                 action_shell,

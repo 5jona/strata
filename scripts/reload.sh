@@ -202,7 +202,7 @@ if [ -n "$ADB_SERIAL" ]; then
         adb -s "${ADB_SERIAL}" shell "su -c 'nohup /system/bin/sh ${REMOTE_MOD_DIR}/service.sh --now >/dev/null 2>&1 </dev/null &'"
         for _ in $(seq 1 25); do
             if adb -s "${ADB_SERIAL}" shell "su -c '/data/adb/ksu/bin/strata daemon ping'" >/dev/null 2>&1; then
-                adb -s "${ADB_SERIAL}" shell "su -c '/data/adb/ksu/bin/strata status'"
+                adb -s "${ADB_SERIAL}" shell "su -c '/data/adb/ksu/bin/strata daemon status'"
                 echo "[+] Strata ADB hot-reload succeeded (${ADB_SERIAL})."
                 exit 0
             fi
@@ -238,7 +238,7 @@ if [ -n "$SSH_TARGET" ]; then
     last_ssh_err=""
     ERR_FILE="$(mktemp)"
     for _ in $(seq 1 25); do
-        if ssh "${SSH_OPTS[@]}" "${SSH_TARGET}" "host-exec /data/adb/ksu/bin/strata status" 2>"${ERR_FILE}"; then
+        if ssh "${SSH_OPTS[@]}" "${SSH_TARGET}" "host-exec /data/adb/ksu/bin/strata daemon status" 2>"${ERR_FILE}"; then
             echo "[+] Strata SSH hot-reload succeeded."
             exit 0
         fi
@@ -271,7 +271,7 @@ install_staged_script | /system/bin/sh -s
 nohup /system/bin/sh -c "${REMOTE_MOD_DIR}/service.sh --now" >/dev/null 2>&1 </dev/null &
 for _ in $(seq 1 25); do
     if /data/adb/ksu/bin/strata daemon ping >/dev/null 2>&1; then
-        /data/adb/ksu/bin/strata status
+        /data/adb/ksu/bin/strata daemon status
         echo "[+] Strata local hot-reload completed."
         exit 0
     fi

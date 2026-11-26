@@ -268,6 +268,14 @@ mod tests {
         ] {
             assert!(names.contains(&expected), "missing tool {expected}");
         }
+        let observe = tools
+            .iter()
+            .find(|t| t.name == "observe_step")
+            .expect("observe_step");
+        let desc = observe.input_schema["properties"]["actionGesture"]["description"]
+            .as_str()
+            .expect("actionGesture description");
+        assert!(desc.contains("swipe") && desc.contains("edge-swipe"));
     }
 
     #[test]

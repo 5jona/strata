@@ -11,7 +11,13 @@ def verify_core(dev: DeviceRunner, *, non_destructive: bool = False) -> None:
     ping = dev.strata_json("daemon ping")
     assert isinstance(ping, dict) and ping.get("pong") is True, f"unexpected ping: {ping}"
     dstatus = dev.strata_json("daemon status")
-    assert isinstance(dstatus, dict) and dstatus["defaultContainer"] == "main"
+    assert isinstance(dstatus, dict), f"unexpected daemon status: {dstatus}"
+    listed_init = dev.strata_json("list")
+    assert isinstance(listed_init, list) and listed_init, (
+        "no containers configured on device; create or import a container before running verify-live"
+    )
+    target_id = dstatus.get("defaultContainer") or listed_init[0]["id"]
+    assert isinstance(target_id, str) and target_id, f"unable to resolve target container: {dstatus}"
 
     if non_destructive:
         print("[2/12] Skipping IMAGE_BUSY stop test (--non-destructive).")
@@ -45,16 +51,16 @@ def verify_core(dev: DeviceRunner, *, non_destructive: bool = False) -> None:
                 check=False,
             )
 
-        print("[3/12] Starting main container and verifying status/list...")
+        print(f"[3/12] Starting container '{target_id}' and verifying status/list...")
         started = dev.strata_json("start")
     assert isinstance(started, dict)
     assert started["phase"] == "running", f"expected running, got {started}"
     assert started["mounted"] is True
     assert started["nsPid"] and started["nsPid"] > 1
     assert started["loopDevices"], "expected active loop device"
-    assert started["cgroupPath"] == "/sys/fs/cgroup/strata/main"
+    assert started["cgroupPath"] == f"/sys/fs/cgroup/strata/{target_id}"
     listed = dev.strata_json("list")
-    assert any(item["id"] == "main" and item["phase"] == "running" for item in listed)
+    assert any(item["id"] == target_id and item["phase"] == "running" for item in listed)
 
     print("[4/12] Verifying Dropbear SSH process (zero OpenSSH privsep) and OEM kevent...")
     ps_out = dev.su("ps -ef | grep dropbear | grep -v grep").stdout
@@ -101,7 +107,9 @@ def verify_core(dev: DeviceRunner, *, non_destructive: bool = False) -> None:
     assert cleanup["residualLoops"] == 0, f"residual loops: {cleanup}"
     sleep_after = dev.su("ps -ef | grep 'sleep 300' | grep -v grep || true").stdout.strip()
     assert not sleep_after, f"background process survived teardown: {sleep_after}"
-    cg_exists = dev.su("test -d /sys/fs/cgroup/strata/main && echo yes || echo no").stdout.strip()
+    cg_exists = dev.su(
+        f"test -d /sys/fs/cgroup/strata/{shlex.quote(target_id)} && echo yes || echo no"
+    ).stdout.strip()
     assert cg_exists == "no", "container cgroup directory was not removed"
 
     print("[9/12] Verifying explicit debug mode (/dev/block visible) and zero-residual exit...")

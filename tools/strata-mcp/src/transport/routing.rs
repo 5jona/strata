@@ -125,7 +125,8 @@ async fn routes_for_record(
     rec: &DeviceRecord,
     port_override: Option<u16>,
 ) -> Result<Vec<TransportRoute>, String> {
-    let ctl = device_control_path(&rec.id);
+    let ssh_ctl = device_control_path(&format!("{}-ssh", rec.id));
+    let adb_ctl = device_control_path(&format!("{}-adb", rec.id));
     let kh = device_known_hosts_path(&rec.id);
     let mut ssh_route = None;
     let mut adb_route = None;
@@ -143,7 +144,7 @@ async fn routes_for_record(
             host: host.clone(),
             port: p,
             user: u,
-            control_path: ctl.clone(),
+            control_path: ssh_ctl,
             known_hosts_path: kh.clone(),
             adb_serial: None,
             local_port: None,
@@ -166,7 +167,7 @@ async fn routes_for_record(
             host: "127.0.0.1".to_owned(),
             port: Some(local_p),
             user: Some(rec.ssh_user.clone().unwrap_or_else(|| "root".to_owned())),
-            control_path: ctl,
+            control_path: adb_ctl,
             known_hosts_path: kh,
             adb_serial: Some(ser.to_owned()),
             local_port: Some(local_p),
@@ -281,5 +282,12 @@ mod tests {
             "document.title; $(rm -rf /); 'x'".to_owned(),
         ]);
         assert!(cmd.contains("'document.title; $(rm -rf /); '\"'\"'x'\"'\"''"));
+    }
+
+    #[test]
+    fn ssh_and_adb_routes_use_distinct_control_paths() {
+        let ssh_ctl = device_control_path("demo-tab-ssh");
+        let adb_ctl = device_control_path("demo-tab-adb");
+        assert_ne!(ssh_ctl, adb_ctl);
     }
 }
