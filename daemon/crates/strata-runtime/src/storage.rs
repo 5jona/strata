@@ -156,13 +156,20 @@ fn drain_container_processes(
         let _ = namespace::send_signal(pid, libc::SIGTERM);
     }
 
+    const DRAIN_BACKOFF_MS: &[u64] = &[15, 30, 50, 100];
     let deadline = Instant::now() + Duration::from_secs(3);
+    let mut step = 0usize;
     while Instant::now() < deadline {
-        let remaining = procfs::collect_container_pids(Some(cgroup_dir), target_mnt_ns, &[]);
-        if remaining.is_empty() && ns_pid.is_none_or(|p| !namespace::pid_exists(p)) {
+        if is_container_drained(cgroup_dir, ns_pid, target_mnt_ns) {
             return initial_count;
         }
-        thread::sleep(Duration::from_millis(100));
+        let sleep_ms = DRAIN_BACKOFF_MS[step.min(DRAIN_BACKOFF_MS.len() - 1)];
+        step = step.saturating_add(1);
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            break;
+        }
+        thread::sleep(Duration::from_millis(sleep_ms).min(remaining));
     }
 
     let _ = cgroup::kill_cgroup(cgroup_dir);
@@ -178,15 +185,37 @@ fn drain_container_processes(
     }
 
     let kill_deadline = Instant::now() + Duration::from_millis(600);
+    let mut kill_step = 0usize;
     while Instant::now() < kill_deadline {
-        let still = procfs::collect_container_pids(Some(cgroup_dir), target_mnt_ns, &[]);
-        if still.is_empty() && ns_pid.is_none_or(|p| !namespace::pid_exists(p)) {
+        if is_container_drained(cgroup_dir, ns_pid, target_mnt_ns) {
             break;
         }
-        thread::sleep(Duration::from_millis(50));
+        let sleep_ms = DRAIN_BACKOFF_MS[kill_step.min(DRAIN_BACKOFF_MS.len() - 1)];
+        kill_step = kill_step.saturating_add(1);
+        let remaining = kill_deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            break;
+        }
+        thread::sleep(Duration::from_millis(sleep_ms).min(remaining));
     }
 
     initial_count.max(survivors.len())
+}
+
+fn is_container_drained(
+    cgroup_dir: &Path,
+    ns_pid: Option<u32>,
+    target_mnt_ns: Option<u64>,
+) -> bool {
+    if ns_pid.is_some_and(namespace::pid_exists) {
+        return false;
+    }
+    match cgroup::read_cgroup_populated(cgroup_dir) {
+        Some(true) => false,
+        Some(false) => target_mnt_ns
+            .is_none_or(|ns| procfs::collect_container_pids(None, Some(ns), &[]).is_empty()),
+        None => procfs::collect_container_pids(Some(cgroup_dir), target_mnt_ns, &[]).is_empty(),
+    }
 }
 
 fn clear_legacy_ruri_markers(mount_dir: &Path) {

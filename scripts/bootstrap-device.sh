@@ -10,8 +10,6 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CACHE_DIR="${XDG_CACHE_HOME:-${HOME}/.cache}/strata-bootstrap"
 REMOTE_MOD_DIR="/data/adb/modules/strata"
-IMAGE_PATH="/data/local/strata/containers/main/rootfs.img"
-MOUNT_DIR="/data/local/strata/containers/main/mnt"
 CONTAINER_STAGE="/data/local/tmp/strata_container_assets"
 ZIP_PATH="${SCRIPT_DIR}/out/strata.zip"
 
@@ -19,6 +17,8 @@ UBUNTU_BASE_URL="${UBUNTU_BASE_URL:-https://cdimage.ubuntu.com/ubuntu-base/relea
 UBUNTU_VERSION="${UBUNTU_VERSION:-auto}"
 
 SERIAL="${STRATA_ADB_SERIAL:-}"
+CONTAINER_ID="main"
+SSH_PORT="2222"
 IMAGE_SIZE="32G"
 PUBKEY_PATH=""
 RECREATE=0
@@ -34,9 +34,11 @@ Usage: scripts/bootstrap-device.sh [options]
 
 Options:
   --serial <adb-serial>   Target ADB serial (auto-detected if single device attached)
+  --container <id>        Target container ID (default: main)
+  --ssh-port <port>       Container Dropbear SSH port (default: 2222)
   --size <size>           Sparse ext4 rootfs image cap (default: 32G)
   --pubkey <path>         SSH public key (default: ~/.ssh/id_ed25519.pub or id_rsa.pub)
-  --recreate              Force recreate /data/local/strata/containers/main/rootfs.img
+  --recreate              Force recreate /data/local/strata/containers/<id>/rootfs.img
   --skip-build            Skip scripts/build.sh and use existing out/strata.zip
   --skip-module-install   Skip module build/install (resume container setup after reboot)
   --no-reboot-wait        Exit 0 with instructions if KernelSU staged modules_update
@@ -52,6 +54,14 @@ while [ "$#" -gt 0 ]; do
         --serial)
             [ "$#" -ge 2 ] || { echo "[!] Option $1 requires a value." >&2; usage >&2; exit 2; }
             SERIAL="$2"; shift 2
+            ;;
+        --container)
+            [ "$#" -ge 2 ] || { echo "[!] Option $1 requires a value." >&2; usage >&2; exit 2; }
+            CONTAINER_ID="$2"; shift 2
+            ;;
+        --ssh-port)
+            [ "$#" -ge 2 ] || { echo "[!] Option $1 requires a value." >&2; usage >&2; exit 2; }
+            SSH_PORT="$2"; shift 2
             ;;
         --size)
             [ "$#" -ge 2 ] || { echo "[!] Option $1 requires a value." >&2; usage >&2; exit 2; }
@@ -72,6 +82,22 @@ while [ "$#" -gt 0 ]; do
         *) echo "[!] Unknown option: $1" >&2; usage >&2; exit 2 ;;
     esac
 done
+
+validate_args() {
+    if [[ ! "${CONTAINER_ID}" =~ ^[a-z][a-z0-9-]{0,30}[a-z0-9]$ ]] || [[ "${CONTAINER_ID}" == *--* ]]; then
+        echo "[!] Invalid --container '${CONTAINER_ID}': expected 2-32 lowercase [a-z0-9-], starting with [a-z], ending with [a-z0-9], no '--'." >&2
+        exit 2
+    fi
+    if [[ ! "${SSH_PORT}" =~ ^[0-9]+$ ]] || [ "${SSH_PORT}" -lt 1 ] || [ "${SSH_PORT}" -gt 65535 ]; then
+        echo "[!] Invalid --ssh-port '${SSH_PORT}': expected integer 1..65535." >&2
+        exit 2
+    fi
+}
+
+validate_args
+CONTAINER_DIR="/data/local/strata/containers/${CONTAINER_ID}"
+IMAGE_PATH="${CONTAINER_DIR}/rootfs.img"
+MOUNT_DIR="${CONTAINER_DIR}/mnt"
 
 adb_cmd() { adb -s "${SERIAL}" "$@"; }
 adb_su() { adb -s "${SERIAL}" shell "su -c $(printf '%q' "$1")"; }
@@ -145,7 +171,7 @@ install_module_zip() {
             /system/bin/rm -f /data/local/tmp/strata.zip
             /system/bin/chown 0:0 /data/adb/strata /data/adb/strata/run /data/adb/strata/run/logs
             /system/bin/chmod 0700 /data/adb/strata /data/adb/strata/run /data/adb/strata/run/logs
-            /system/bin/chmod 0755 /data/local/strata /data/local/strata/containers /data/local/strata/containers/main ${MOUNT_DIR} \
+            /system/bin/chmod 0755 /data/local/strata /data/local/strata/containers ${CONTAINER_DIR} ${MOUNT_DIR} \
                 ${REMOTE_MOD_DIR}/service.sh ${REMOTE_MOD_DIR}/post-fs-data.sh ${REMOTE_MOD_DIR}/customize.sh \
                 ${REMOTE_MOD_DIR}/uninstall.sh ${REMOTE_MOD_DIR}/bin/stratad ${REMOTE_MOD_DIR}/bin/strata \
                 ${REMOTE_MOD_DIR}/bin/strata-debug \
@@ -168,10 +194,55 @@ install_module_zip() {
         echo "[!] Stage 1 complete: KernelSU staged Strata under /data/adb/modules_update/strata."
         echo "[!] Reboot the device to activate ${REMOTE_MOD_DIR}, then run Stage 2:"
         echo "    adb -s ${SERIAL} reboot"
-        echo "    bash scripts/bootstrap-device.sh --serial ${SERIAL} --skip-module-install --size ${IMAGE_SIZE}${PUBKEY_PATH:+ --pubkey ${PUBKEY_PATH}}"
+        echo "    bash scripts/bootstrap-device.sh --serial ${SERIAL} --container ${CONTAINER_ID} --ssh-port ${SSH_PORT} --skip-module-install --size ${IMAGE_SIZE}${PUBKEY_PATH:+ --pubkey ${PUBKEY_PATH}}"
         [ "${NO_REBOOT_WAIT}" -eq 1 ] && exit 0
         exit 2
     fi
+}
+
+ensure_container_registered() {
+    if adb_su "${REMOTE_MOD_DIR}/bin/strata -c ${CONTAINER_ID} config show >/dev/null 2>&1"; then
+        return 0
+    fi
+    echo "[*] Registering container '${CONTAINER_ID}' (SSH port ${SSH_PORT}) in /data/adb/strata/config.json..."
+    local tmp_cfg
+    tmp_cfg="$(mktemp)"
+    adb_su "/system/bin/cat /data/adb/strata/config.json 2>/dev/null || printf '{}\n'" > "${tmp_cfg}"
+    python3 - "${tmp_cfg}" "${CONTAINER_ID}" "${IMAGE_PATH}" "${MOUNT_DIR}" "${SSH_PORT}" <<'PY'
+import json
+import sys
+
+cfg_path, cid, img_path, mnt_dir, port_str = sys.argv[1:6]
+with open(cfg_path, "r", encoding="utf-8") as f:
+    raw = f.read().strip()
+cfg = json.loads(raw) if raw else {}
+if not isinstance(cfg, dict):
+    cfg = {}
+cfg.setdefault("version", 1)
+if not cfg.get("defaultContainer"):
+    cfg["defaultContainer"] = cid
+containers = cfg.setdefault("containers", {})
+if cid not in containers:
+    containers[cid] = {
+        "enabled": True,
+        "autoStart": True,
+        "imagePath": img_path,
+        "mountDir": mnt_dir,
+        "hostname": cid,
+        "ssh": {
+            "enabled": True,
+            "listenAddr": "127.0.0.1",
+            "port": int(port_str),
+        },
+    }
+with open(cfg_path, "w", encoding="utf-8") as f:
+    json.dump(cfg, f, indent=4)
+    f.write("\n")
+PY
+    adb_cmd push "${tmp_cfg}" /data/local/tmp/strata_config.json.new >/dev/null
+    rm -f "${tmp_cfg}"
+    adb_su "set -e; /system/bin/chown 0:0 /data/local/tmp/strata_config.json.new; /system/bin/chmod 0600 /data/local/tmp/strata_config.json.new; /system/bin/mv -f /data/local/tmp/strata_config.json.new /data/adb/strata/config.json"
+    adb_su "${REMOTE_MOD_DIR}/bin/strata config reload >/dev/null"
 }
 
 start_daemon_and_configure() {
@@ -190,19 +261,23 @@ start_daemon_and_configure() {
         adb_su "/system/bin/cat /data/adb/strata/run/logs/stratad.log 2>/dev/null || true" >&2
         exit 1
     fi
+    ensure_container_registered
+    adb_su "${REMOTE_MOD_DIR}/bin/strata -c ${CONTAINER_ID} config set-port ${SSH_PORT}"
     if [ "${ENABLE_DEBUG_MOUNTS}" -eq 1 ]; then
         echo "[*] Enabling uinput char device and L5 diagnostics read-only mounts..."
-        adb_su "${REMOTE_MOD_DIR}/bin/strata config set-char-devs uinput"
-        adb_su "${REMOTE_MOD_DIR}/bin/strata config set-l5-diag on"
+        adb_su "${REMOTE_MOD_DIR}/bin/strata -c ${CONTAINER_ID} config set-char-devs uinput"
+        adb_su "${REMOTE_MOD_DIR}/bin/strata -c ${CONTAINER_ID} config set-l5-diag on"
     fi
-    echo "[*] Restarting Strata container to apply configuration..."
-    adb_su "${REMOTE_MOD_DIR}/bin/strata stop >/dev/null 2>&1 || true; ${REMOTE_MOD_DIR}/bin/strata start"
-    adb_su "${REMOTE_MOD_DIR}/bin/strata status"
+    echo "[*] Restarting Strata container '${CONTAINER_ID}' to apply configuration..."
+    adb_su "${REMOTE_MOD_DIR}/bin/strata -c ${CONTAINER_ID} stop >/dev/null 2>&1 || true; ${REMOTE_MOD_DIR}/bin/strata -c ${CONTAINER_ID} start"
+    adb_su "${REMOTE_MOD_DIR}/bin/strata -c ${CONTAINER_ID} status"
 }
 
 resolve_serial
 resolve_pubkey
 echo "[*] Target device  : ${SERIAL}"
+echo "[*] Container ID   : ${CONTAINER_ID}"
+echo "[*] SSH port       : ${SSH_PORT}"
 echo "[*] Image cap      : ${IMAGE_SIZE}"
 echo "[*] SSH pubkey     : ${PUBKEY_PATH:-none (warning: SSH login requires authorized_keys)}"
 echo "[*] Debug mounts   : ${ENABLE_DEBUG_MOUNTS}"
@@ -221,5 +296,5 @@ start_daemon_and_configure
 
 echo ""
 echo "[+] Strata device bootstrap completed!"
-echo "    USB SSH forward : adb -s ${SERIAL} forward tcp:2222 tcp:2222 && ssh -p 2222 root@127.0.0.1"
+echo "    USB SSH forward : adb -s ${SERIAL} forward tcp:${SSH_PORT} tcp:${SSH_PORT} && ssh -p ${SSH_PORT} root@127.0.0.1"
 echo "    Live verify     : python3 scripts/verify-live.py --adb ${SERIAL}"

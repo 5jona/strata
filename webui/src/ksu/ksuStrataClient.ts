@@ -74,5 +74,3 @@ export async function startStrataDaemonViaKsu(bridge: Pick<BridgeClient, 'exec'>
     throw new Error(`拉起守护进程失败：${detail}`);
   }
 }
-
-export { createMockKsuStrataTransport } from './mockKsuTransport.ts';

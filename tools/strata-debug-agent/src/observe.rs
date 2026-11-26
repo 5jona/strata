@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 
 use crate::cdp;
 use crate::gesture::run_gesture;
-use crate::health::{collect_health, detect_foreground};
+use crate::health::{collect_health_with_snapshot, fetch_windows_and_foreground};
 use crate::host::run_host;
 use crate::logcat::{DEFAULT_CURSOR_PATH, mark_cursor, read_incremental};
 use crate::visual::{VisualOpts, run_visual};
@@ -107,15 +107,19 @@ async fn execute_action(opts: &ObserveOpts, pkg: Option<&str>) -> (Option<Value>
 /// Runs an atomic L4 observation step with parallel post-settle evidence collection.
 pub(crate) async fn run_observe(opts: &ObserveOpts) -> Value {
     let t0 = Instant::now();
-    let resolved_pkg = if opts.package.is_empty() || opts.package == "auto" {
-        detect_foreground().await.package
-    } else {
-        Some(opts.package.clone())
-    };
+    let auto_pkg = opts.package.is_empty() || opts.package == "auto";
     let has_action = opts.action_rpc.is_some()
         || opts.action_shell.is_some()
         || opts.action_cdp_eval.is_some()
         || opts.action_gesture.is_some();
+
+    let pre_pkg = if !auto_pkg {
+        Some(opts.package.clone())
+    } else if opts.action_cdp_eval.is_some() {
+        fetch_windows_and_foreground().await.1.package
+    } else {
+        None
+    };
 
     let eff_cursor = opts.cursor.as_deref().unwrap_or(DEFAULT_CURSOR_PATH);
 
@@ -126,12 +130,23 @@ pub(crate) async fn run_observe(opts: &ObserveOpts) -> Value {
         None
     };
 
-    let (action_result, action_error) = execute_action(opts, resolved_pkg.as_deref()).await;
+    let (action_result, action_error) = execute_action(opts, pre_pkg.as_deref()).await;
 
     if opts.settle_ms > 0 && (has_action || opts.cursor.is_none()) {
         tokio::time::sleep(Duration::from_millis(opts.settle_ms)).await;
     }
 
+    let (win_text, post_fg) = if auto_pkg {
+        let (wt, fg) = fetch_windows_and_foreground().await;
+        (Some(wt), Some(fg))
+    } else {
+        (None, None)
+    };
+    let resolved_pkg = if auto_pkg {
+        post_fg.as_ref().and_then(|f| f.package.clone())
+    } else {
+        Some(opts.package.clone())
+    };
     let pkg_arg = resolved_pkg.as_deref().unwrap_or("unknown");
     let want_visual =
         opts.include_visual || opts.roi.is_some() || opts.visual_out.is_some() || opts.inline_image;
@@ -144,7 +159,7 @@ pub(crate) async fn run_observe(opts: &ObserveOpts) -> Value {
         60,
         true,
     );
-    let health_fut = collect_health(pkg_arg, true, false, None);
+    let health_fut = collect_health_with_snapshot(pkg_arg, win_text, post_fg, true, false, None);
     let cdp_fut = async {
         if opts.include_cdp {
             Some(cdp::audit_webview(resolved_pkg.as_deref(), opts.cdp_pid, None, None, 5.0).await)

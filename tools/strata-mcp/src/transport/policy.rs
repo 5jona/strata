@@ -4,6 +4,15 @@ use serde_json::{Value, json};
 
 use super::routing::TransportRoute;
 
+/// Whether a tool invocation can degrade to `adb-host` or strictly requires a Strata container.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RouteRequirement {
+    /// Host-capable tool: seamlessly degrades to `adb-host` when no container SSH is available.
+    HostOrContainer,
+    /// Strictly container-bound tool: returns structured container diagnostics instead of `adb-host`.
+    ContainerOnly,
+}
+
 /// Failover/retry policy separating read-only queries from side-effectful device actions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RetryPolicy {
@@ -88,11 +97,16 @@ pub(super) trait RouteRunner {
     async fn reset_control(&self, route: &TransportRoute);
 }
 
-pub(super) async fn execute_routes_with_policy<R: RouteRunner>(
+pub(super) struct RouteExecOutcome {
+    pub(super) payload: Value,
+    pub(super) exhausted_transport: bool,
+}
+
+pub(super) async fn execute_routes_outcome<R: RouteRunner>(
     routes: &[TransportRoute],
     policy: RetryPolicy,
     runner: &R,
-) -> Value {
+) -> RouteExecOutcome {
     let mut last = json!({"ok": false, "rc": 255, "error": "no transport route available"});
 
     for route in routes {
@@ -118,11 +132,26 @@ pub(super) async fn execute_routes_with_policy<R: RouteRunner>(
             if reset_needed {
                 runner.reset_control(route).await;
             }
-            return last;
+            return RouteExecOutcome {
+                payload: last,
+                exhausted_transport: false,
+            };
         }
         runner.reset_control(route).await;
     }
-    last
+    RouteExecOutcome {
+        payload: last,
+        exhausted_transport: true,
+    }
+}
+
+#[cfg(test)]
+pub(super) async fn execute_routes_with_policy<R: RouteRunner>(
+    routes: &[TransportRoute],
+    policy: RetryPolicy,
+    runner: &R,
+) -> Value {
+    execute_routes_outcome(routes, policy, runner).await.payload
 }
 
 #[cfg(test)]

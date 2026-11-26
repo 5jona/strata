@@ -15,10 +15,28 @@ import { invokeStrataKsuRpc } from './ksuStrataClient.ts';
 import { useKsuActions } from './useKsuActions.ts';
 import { useKsuConfigActions } from './useKsuConfigActions.ts';
 
-/** Runtime state and RPC command handlers backing the standalone KernelSU WebUI. */
+export const KSU_TABS = ['overview', 'services', 'config', 'diagnostics', 'settings'] as const;
+export type KsuTab = (typeof KSU_TABS)[number];
+
+/** Type guard for KernelSU workspace tab identifiers. */
+export function isKsuTab(value: string): value is KsuTab {
+  return (
+    value === 'overview' ||
+    value === 'services' ||
+    value === 'config' ||
+    value === 'diagnostics' ||
+    value === 'settings'
+  );
+}
+
+/** Runtime state and lazy per-tab RPC handlers backing the standalone KernelSU WebUI. */
 export function useKsuStrataRuntime() {
   const bridge = useBridge();
   const { pushToast } = useToast();
+
+  const [activeTab, setActiveTabState] = useState<KsuTab>('overview');
+  const activeTabRef = useRef<KsuTab>('overview');
+  const loadedTabsRef = useRef<Set<string>>(new Set());
 
   const [loading, setLoading] = useState(true);
   const [busyKey, setBusyKey] = useState<string | null>(null);
@@ -39,24 +57,29 @@ export function useKsuStrataRuntime() {
   const [webStatus, setWebStatus] = useState<WebStatusResult | null>(null);
   const [pairingToken, setPairingToken] = useState<string | null>(null);
 
-  const refreshContainerDetails = useCallback(
+  const refreshContainerServices = useCallback(
     async (containerId: string) => {
-      const [svcRes, cfgRes, keysRes, logsRes] = await Promise.allSettled([
-        invokeStrataKsuRpc(bridge, STRATA_METHODS.SERVICE_LIST, { container: containerId }),
+      const svcList = await invokeStrataKsuRpc(bridge, STRATA_METHODS.SERVICE_LIST, {
+        container: containerId,
+      });
+      if (selectedIdRef.current === containerId) {
+        setServices(svcList);
+      }
+    },
+    [bridge],
+  );
+
+  const refreshContainerConfig = useCallback(
+    async (containerId: string) => {
+      const [cfgRes, keysRes] = await Promise.allSettled([
         invokeStrataKsuRpc(bridge, STRATA_METHODS.CONTAINER_CONFIG_GET, { container: containerId }),
         invokeStrataKsuRpc(bridge, STRATA_METHODS.CONTAINER_SSH_KEY_LIST, {
           container: containerId,
         }),
-        invokeStrataKsuRpc(bridge, STRATA_METHODS.CONTAINER_LOGS, {
-          container: containerId,
-          lines: 120,
-        }),
       ]);
       if (selectedIdRef.current !== containerId) return;
-      if (svcRes.status === 'fulfilled') setServices(svcRes.value);
       if (cfgRes.status === 'fulfilled') setContainerConfig(cfgRes.value.config);
       if (keysRes.status === 'fulfilled') setSshKeys(keysRes.value.keys);
-      if (logsRes.status === 'fulfilled') setDropbearLogs(toLogEntries(logsRes.value.lines, 'db'));
     },
     [bridge],
   );
@@ -83,22 +106,44 @@ export function useKsuStrataRuntime() {
     [bridge],
   );
 
+  const refreshWebStatus = useCallback(async () => {
+    const web = await invokeStrataKsuRpc(bridge, STRATA_METHODS.WEB_STATUS);
+    setWebStatus(web);
+  }, [bridge]);
+
+  const ensureTabLoaded = useCallback(
+    async (tab: KsuTab, containerId: string | null, force = false) => {
+      const key = `${tab}:${tab === 'settings' ? 'global' : (containerId ?? '')}`;
+      if (!force && loadedTabsRef.current.has(key)) return;
+      loadedTabsRef.current.add(key);
+      try {
+        if (tab === 'services' && containerId) {
+          await refreshContainerServices(containerId);
+        } else if (tab === 'config' && containerId) {
+          await refreshContainerConfig(containerId);
+        } else if (tab === 'diagnostics') {
+          await refreshDiagnostics(containerId);
+        } else if (tab === 'settings') {
+          await refreshWebStatus();
+        }
+      } catch {
+        loadedTabsRef.current.delete(key);
+      }
+    },
+    [refreshContainerConfig, refreshContainerServices, refreshDiagnostics, refreshWebStatus],
+  );
+
   const refreshAll = useCallback(async () => {
     setLoading(true);
     setLastError(null);
+    loadedTabsRef.current.clear();
     try {
-      const [summary, list, web, capsRes, dLogsRes] = await Promise.all([
+      const [summary, list] = await Promise.all([
         invokeStrataKsuRpc(bridge, STRATA_METHODS.DAEMON_STATUS),
         invokeStrataKsuRpc(bridge, STRATA_METHODS.CONTAINER_LIST),
-        invokeStrataKsuRpc(bridge, STRATA_METHODS.WEB_STATUS),
-        invokeStrataKsuRpc(bridge, STRATA_METHODS.DAEMON_CAPABILITIES).catch(() => null),
-        invokeStrataKsuRpc(bridge, STRATA_METHODS.DAEMON_LOGS, { lines: 120 }).catch(() => null),
       ]);
       setDaemon(summary);
       setContainers(list);
-      setWebStatus(web);
-      if (capsRes) setCapabilities(capsRes);
-      if (dLogsRes) setDaemonLogs(toLogEntries(dLogsRes.lines, 'daemon'));
 
       const nextId =
         list.find((c) => c.id === selectedIdRef.current)?.id ??
@@ -107,13 +152,15 @@ export function useKsuStrataRuntime() {
         null;
       selectedIdRef.current = nextId;
       setSelectedId(nextId);
-      if (nextId) {
-        await refreshContainerDetails(nextId);
-      } else {
+
+      if (!nextId) {
         setServices([]);
         setContainerConfig(null);
         setSshKeys([]);
         setDropbearLogs([]);
+      }
+      if (activeTabRef.current !== 'overview') {
+        await ensureTabLoaded(activeTabRef.current, nextId, true);
       }
     } catch (err) {
       setDaemon(null);
@@ -121,7 +168,7 @@ export function useKsuStrataRuntime() {
     } finally {
       setLoading(false);
     }
-  }, [bridge, refreshContainerDetails]);
+  }, [bridge, ensureTabLoaded]);
 
   useEffect(() => {
     void refreshAll();
@@ -129,13 +176,28 @@ export function useKsuStrataRuntime() {
 
   const activeContainer = containers.find((c) => c.id === selectedId) ?? containers[0] ?? null;
 
+  const setActiveTab = useCallback(
+    (nextTab: KsuTab) => {
+      activeTabRef.current = nextTab;
+      setActiveTabState(nextTab);
+      void ensureTabLoaded(nextTab, selectedIdRef.current);
+    },
+    [ensureTabLoaded],
+  );
+
   const selectContainer = useCallback(
     (containerId: string) => {
       selectedIdRef.current = containerId;
       setSelectedId(containerId);
-      void refreshContainerDetails(containerId);
+      setServices([]);
+      setContainerConfig(null);
+      setSshKeys([]);
+      setDropbearLogs([]);
+      if (activeTabRef.current !== 'overview' && activeTabRef.current !== 'settings') {
+        void ensureTabLoaded(activeTabRef.current, containerId, true);
+      }
     },
-    [refreshContainerDetails],
+    [ensureTabLoaded],
   );
 
   const copyWithFeedback = useCallback(
@@ -188,6 +250,8 @@ export function useKsuStrataRuntime() {
     selectedId,
     selectContainer,
     activeContainer,
+    activeTab,
+    setActiveTab,
     services,
     serviceLogs,
     containerConfig,
@@ -198,7 +262,7 @@ export function useKsuStrataRuntime() {
     webStatus,
     pairingToken,
     refreshAll,
-    refreshContainerDetails,
+    refreshContainerDetails: refreshContainerServices,
     refreshDiagnostics,
     copyWithFeedback,
     copyRawText,

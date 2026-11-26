@@ -6,7 +6,9 @@ use crate::devices::DeviceRegistry;
 use crate::params::{
     KernelProbeParams, LogcatReadParams, SqliteInspectParams, SystemInspectParams, UiInteractParams,
 };
-use crate::transport::{ssh_exec_argv, ssh_exec_argv_once};
+use crate::transport::{
+    RetryPolicy, RouteRequirement, ssh_exec_argv, ssh_exec_argv_once, ssh_exec_argv_with_req,
+};
 
 fn push_opt(cmd: &mut Vec<String>, flag: &str, val: Option<&str>) {
     if let Some(v) = val.map(str::trim).filter(|s| !s.is_empty()) {
@@ -217,5 +219,14 @@ pub(crate) async fn handle_kernel_probe(reg: &DeviceRegistry, p: KernelProbePara
         "--duration".to_owned(),
         dur.to_string(),
     ];
-    ssh_exec_argv(reg, &target, &cmd, (dur as f64) + 15.0).await
+    ssh_exec_argv_with_req(
+        reg,
+        &target,
+        &cmd,
+        (dur as f64) + 15.0,
+        RetryPolicy::Idempotent,
+        RouteRequirement::ContainerOnly,
+        "kernel_probe",
+    )
+    .await
 }

@@ -92,6 +92,31 @@ pub fn read_cgroup_procs(cgroup_dir: &Path) -> Vec<u32> {
     }
 }
 
+/// Parses `populated <0|1>` from a cgroup v2 `cgroup.events` buffer.
+#[must_use]
+pub fn parse_cgroup_events_populated(content: &str) -> Option<bool> {
+    for line in content.lines() {
+        let mut parts = line.split_whitespace();
+        if parts.next() == Some("populated")
+            && let Some(val) = parts.next()
+        {
+            return match val {
+                "0" => Some(false),
+                "1" => Some(true),
+                _ => None,
+            };
+        }
+    }
+    None
+}
+
+/// Reads `cgroup.events` in `cgroup_dir` and returns `Some(false)` when `populated 0`.
+#[must_use]
+pub fn read_cgroup_populated(cgroup_dir: &Path) -> Option<bool> {
+    let raw = fs::read_to_string(cgroup_dir.join("cgroup.events")).ok()?;
+    parse_cgroup_events_populated(&raw)
+}
+
 /// Triggers kernel cgroup v2 `cgroup.kill` (available on Linux 5.14+ / Android 16 GKI).
 /// Returns `true` if the file existed and the write succeeded.
 #[must_use]
@@ -146,5 +171,18 @@ mod tests {
             container_cgroup_v2_path("main"),
             PathBuf::from("/sys/fs/cgroup/strata/main")
         );
+    }
+
+    #[test]
+    fn parses_cgroup_events_populated() {
+        assert_eq!(
+            parse_cgroup_events_populated("populated 0\nfrozen 0\n"),
+            Some(false)
+        );
+        assert_eq!(
+            parse_cgroup_events_populated("populated 1\nfrozen 0\n"),
+            Some(true)
+        );
+        assert_eq!(parse_cgroup_events_populated("frozen 0\n"), None);
     }
 }

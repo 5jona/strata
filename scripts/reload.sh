@@ -114,10 +114,10 @@ prepare_local_stage() {
 install_staged_script() {
     cat <<EOF
 set -e
-/system/bin/mkdir -p ${REMOTE_MOD_DIR}/bin ${REMOTE_MOD_DIR}/container ${REMOTE_MOD_DIR}/scripts ${REMOTE_MOD_DIR}/plugins /data/adb/${MODULE_ID}/run/logs /data/local/strata/containers/main/mnt
+/system/bin/mkdir -p ${REMOTE_MOD_DIR}/bin ${REMOTE_MOD_DIR}/container ${REMOTE_MOD_DIR}/scripts ${REMOTE_MOD_DIR}/plugins /data/adb/${MODULE_ID}/run/logs /data/local/strata/containers
 /system/bin/chown 0:0 /data/adb/${MODULE_ID} /data/adb/${MODULE_ID}/run /data/adb/${MODULE_ID}/run/logs
 /system/bin/chmod 0700 /data/adb/${MODULE_ID} /data/adb/${MODULE_ID}/run /data/adb/${MODULE_ID}/run/logs
-/system/bin/chmod 0755 /data/local/strata /data/local/strata/containers /data/local/strata/containers/main /data/local/strata/containers/main/mnt
+/system/bin/chmod 0755 /data/local/strata /data/local/strata/containers
 
 for f in module.prop config.json service.sh post-fs-data.sh customize.sh uninstall.sh \
     bin/stratad bin/strata bin/strata-debug container/host-exec container/setup-container.sh \

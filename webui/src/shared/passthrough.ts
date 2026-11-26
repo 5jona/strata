@@ -68,3 +68,31 @@ export function toggleCharDev(
 export function getCustomCharDevs(devs: readonly string[]): string[] {
   return devs.filter((item) => !COMMON_CHAR_DEV_SET.has(item));
 }
+
+/** Shallow equality check for string arrays. */
+export function stringArrayEqual(a: readonly string[], b: readonly string[]): boolean {
+  if (a === b) return true;
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i += 1) {
+    if (a[i] !== b[i]) return false;
+  }
+  return true;
+}
+
+/** Shallow equality check for bind-mount arrays. */
+export function bindMountsEqual(a: readonly BindMount[], b: readonly BindMount[]): boolean {
+  if (a === b) return true;
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i += 1) {
+    const left = a[i];
+    const right = b[i];
+    if (
+      left.hostPath !== right.hostPath ||
+      left.containerPath !== right.containerPath ||
+      Boolean(left.readOnly) !== Boolean(right.readOnly)
+    ) {
+      return false;
+    }
+  }
+  return true;
+}

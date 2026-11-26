@@ -63,8 +63,8 @@ fn to_tool_result(mut payload: Value) -> Result<CallToolResult, McpError> {
 impl StrataMcpServer {
     #[tool(
         name = "device_manage",
-        description = "List discovered devices, select/clear session target, or snapshot Strata daemon + Android window/gfxinfo health.",
-        annotations(idempotent_hint = true, open_world_hint = false)
+        description = "List/select devices, snapshot health, list/start/stop Strata containers, or start stratad daemon.",
+        annotations(open_world_hint = false)
     )]
     async fn device_manage(
         &self,

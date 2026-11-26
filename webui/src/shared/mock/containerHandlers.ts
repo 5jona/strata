@@ -152,6 +152,36 @@ export function handleContainerMockInvoke(
       container.restartCount += 1;
       return cloneSnapshot(container);
     }
+    case STRATA_METHODS.CONTAINER_SET_DEFAULT: {
+      const nextDefault = String(params.id ?? defaultId);
+      const previousDefaultContainer = state.defaultId;
+      state.defaultId = nextDefault;
+      container.isDefault = container.id === nextDefault;
+      return { defaultContainer: nextDefault, previousDefaultContainer };
+    }
+    case STRATA_METHODS.CONTAINER_DELETE: {
+      const targetId = String(params.id ?? container.id);
+      const imageDeleted = Boolean(params.deleteImage);
+      return {
+        container: targetId,
+        imageDeleted,
+        cleanup: {
+          drainedPids: 0,
+          unmountedPaths: 0,
+          detachedLoops: 0,
+          residualMounts: 0,
+          residualLoops: 0,
+        },
+      };
+    }
+    case STRATA_METHODS.CONTAINER_CREATE: {
+      const targetId = String(params.id ?? defaultId);
+      return {
+        jobId: `job-create-${targetId}-${Date.now()}`,
+        container: targetId,
+        kind: 'create',
+      };
+    }
     case STRATA_METHODS.CONTAINER_SYNC_DNS:
       return { container: container.id, synced: true };
     case STRATA_METHODS.CONTAINER_COMPACT:

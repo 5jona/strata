@@ -208,10 +208,21 @@ impl ContainerManager {
     /// Returns status snapshots for all configured containers.
     pub(crate) async fn list_containers(&self) -> Vec<ContainerStatusSnapshot> {
         let cfg = self.config_store.snapshot().await;
+        if cfg.containers.is_empty() {
+            return Vec::new();
+        }
+        let host_state = Arc::new(
+            tokio::task::spawn_blocking(snapshot::SharedHostState::collect)
+                .await
+                .unwrap_or_else(|_| snapshot::SharedHostState::fallback()),
+        );
         let mut out = Vec::with_capacity(cfg.containers.len());
         for (id, entry) in &cfg.containers {
             let is_default = cfg.is_default_container(id);
-            out.push(self.build_snapshot(id, entry, is_default).await);
+            out.push(
+                self.build_snapshot_with_host_state(id, entry, is_default, Arc::clone(&host_state))
+                    .await,
+            );
         }
         out
     }

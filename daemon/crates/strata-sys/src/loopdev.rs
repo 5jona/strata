@@ -1,5 +1,6 @@
 //! Direct `/dev/loop-control` and loop block-device ioctl management.
 
+use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
 use std::io;
 use std::os::fd::{AsRawFd, OwnedFd};
@@ -75,6 +76,29 @@ pub fn loop_device_path(index: u32) -> PathBuf {
 pub fn file_dev_inode(path: &Path) -> SysResult<(u64, u64)> {
     let meta = std::fs::metadata(path).map_err(|e| SysError::path_io("stat", path, e))?;
     Ok((meta.dev(), meta.ino()))
+}
+
+/// Scans active loop devices once and returns a `(st_dev, st_ino) -> Vec<PathBuf>` backing map.
+#[must_use]
+pub fn scan_loop_backing_map() -> HashMap<(u64, u64), Vec<PathBuf>> {
+    let mut map: HashMap<(u64, u64), Vec<PathBuf>> = HashMap::new();
+    for dev_path in enumerate_loop_nodes() {
+        let Ok(file) = OpenOptions::new().read(true).open(&dev_path) else {
+            continue;
+        };
+        if let Ok(info) = get_loop_status(&file)
+            && info.lo_inode != 0
+        {
+            map.entry((info.lo_device, info.lo_inode))
+                .or_default()
+                .push(dev_path);
+        }
+    }
+    for paths in map.values_mut() {
+        paths.sort();
+        paths.dedup();
+    }
+    map
 }
 
 /// Scans active loop devices and returns all device paths currently backed by `image_path`.

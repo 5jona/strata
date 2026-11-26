@@ -1,5 +1,6 @@
 //! Mount, unmount, `pivot_root`, `/proc/mounts` parsing, immutable flag clearing, and `FITRIM`.
 
+use std::collections::HashSet;
 use std::ffi::{CString, OsStr};
 use std::fs::File;
 use std::os::fd::AsRawFd;
@@ -71,6 +72,42 @@ pub fn is_ext4_mounted(mount_dir: &Path) -> SysResult<bool> {
     Ok(mounts
         .iter()
         .any(|m| m.target == target.as_ref() && m.fstype == "ext4"))
+}
+
+/// Parses `/proc/self/mountinfo` and returns the set of unescaped `ext4` mount targets.
+#[must_use]
+pub fn parse_mountinfo_ext4_targets(content: &str) -> HashSet<String> {
+    let mut targets = HashSet::new();
+    for line in content.lines() {
+        let Some((left, right)) = line.split_once(" - ") else {
+            continue;
+        };
+        let Some(fstype) = right.split_whitespace().next() else {
+            continue;
+        };
+        if fstype != "ext4" {
+            continue;
+        }
+        if let Some(mount_point) = left.split_whitespace().nth(4) {
+            targets.insert(unescape_mount_field(mount_point));
+        }
+    }
+    targets
+}
+
+/// Reads `/proc/self/mountinfo` once and returns all active `ext4` mountpoint paths.
+pub fn read_ext4_mount_targets() -> SysResult<HashSet<String>> {
+    match std::fs::read_to_string("/proc/self/mountinfo") {
+        Ok(raw) => Ok(parse_mountinfo_ext4_targets(&raw)),
+        Err(_) => {
+            let mounts = read_proc_mounts()?;
+            Ok(mounts
+                .into_iter()
+                .filter(|m| m.fstype == "ext4")
+                .map(|m| m.target)
+                .collect())
+        }
+    }
 }
 
 /// Returns all mount targets equal to or nested beneath `root_dir`, sorted deepest-first.
@@ -294,5 +331,17 @@ tmpfs /data/local/strata/containers/main/mnt/dev/shm tmpfs rw 0 0\n\
                 PathBuf::from("/data/local/strata/containers/main/mnt"),
             ]
         );
+    }
+
+    #[test]
+    fn parses_mountinfo_ext4_targets() {
+        let sample = "\
+35 28 7:9 / /data/local/strata/containers/dev/mnt rw,relatime shared:1 - ext4 /dev/block/loop9 rw\n\
+36 35 0:30 / /data/local/strata/containers/dev/mnt/dev rw - tmpfs tmpfs rw\n\
+37 28 7:2 / /apex/other ro - ext4 /dev/block/loop2 ro\n";
+        let targets = parse_mountinfo_ext4_targets(sample);
+        assert!(targets.contains("/data/local/strata/containers/dev/mnt"));
+        assert!(targets.contains("/apex/other"));
+        assert!(!targets.contains("/data/local/strata/containers/dev/mnt/dev"));
     }
 }

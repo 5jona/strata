@@ -6,10 +6,10 @@ import { fileURLToPath } from 'node:url';
 import { validateValue } from '@gojona/contracts-gen';
 import {
   buildStartDaemonShellCommand,
-  createMockKsuStrataTransport,
   invokeStrataKsuRpc,
   startStrataDaemonViaKsu,
 } from '../src/ksu/ksuStrataClient.ts';
+import { createMockKsuStrataTransport } from '../src/ksu/mockKsuTransport.ts';
 import { createMockStrataTransport } from '../src/plugin/mockStrataBridge.ts';
 import { STRATA_METHODS, STRATA_PATHS } from '../src/types.ts';
 
@@ -93,4 +93,31 @@ test('KSU daemon rescue shell command is non-blocking and supported by mock KSU 
 
   const caps = await invokeStrataKsuRpc(bridge, STRATA_METHODS.DAEMON_CAPABILITIES);
   assertMatchesDef(caps, 'KernelCapabilitiesResult', 'ksu daemon.capabilities');
+
+  const setDefaultRes = await invokeStrataKsuRpc(bridge, STRATA_METHODS.CONTAINER_SET_DEFAULT, {
+    id: 'main',
+  });
+  assertMatchesDef(setDefaultRes, 'ContainerSetDefaultResult', 'ksu container.setDefault');
+
+  const createRes = await invokeStrataKsuRpc(bridge, STRATA_METHODS.CONTAINER_CREATE, {
+    id: 'devbox',
+    distroId: 'debian-12',
+    sizeMb: 4096,
+    enableSsh: true,
+    autoStart: true,
+    setDefault: true,
+    hostBridge: true,
+    l5DiagnosticMounts: false,
+    syncAndroidDns: true,
+    noatime: true,
+    sshPublicKeys: [],
+  });
+  assertMatchesDef(createRes, 'ContainerJobStartResult', 'ksu container.create');
+
+  const deleteRes = await invokeStrataKsuRpc(bridge, STRATA_METHODS.CONTAINER_DELETE, {
+    id: 'devbox',
+    deleteImage: true,
+    force: true,
+  });
+  assertMatchesDef(deleteRes, 'ContainerDeleteResult', 'ksu container.delete');
 });

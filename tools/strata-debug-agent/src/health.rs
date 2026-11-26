@@ -14,12 +14,27 @@ pub(crate) use parsers::{
 const STRATA_BIN: &str = "/data/adb/ksu/bin/strata";
 const SIDEVEIL_CTL: &str = "/data/adb/modules/sideveil/bin/sideveil-ctl";
 
-/// Detects the current foreground Android package via dumpsys fallback chain.
-pub(crate) async fn detect_foreground() -> ForegroundApp {
-    let cmds: [&[&str]; 3] = [
+/// Fetches `dumpsys window windows` once and extracts foreground app if present.
+pub(crate) async fn fetch_windows_and_foreground() -> (String, ForegroundApp) {
+    let win_res = run_host(
+        &["/system/bin/dumpsys", "window", "windows"],
+        None,
+        Duration::from_secs(8),
+    )
+    .await;
+    let win_text = win_res.stdout_text();
+    let parsed = parse_foreground_activity(&win_text);
+    if parsed.package.is_some() {
+        return (win_text, parsed);
+    }
+    let fg = detect_foreground_fallback().await;
+    (win_text, fg)
+}
+
+async fn detect_foreground_fallback() -> ForegroundApp {
+    let cmds: [&[&str]; 2] = [
         &["/system/bin/dumpsys", "activity", "activities"],
         &["/system/bin/dumpsys", "window", "displays"],
-        &["/system/bin/dumpsys", "window", "windows"],
     ];
     for cmd in cmds {
         let res = run_host(cmd, None, Duration::from_secs(6)).await;
@@ -35,6 +50,12 @@ pub(crate) async fn detect_foreground() -> ForegroundApp {
         activity: None,
         component: None,
     }
+}
+
+/// Detects the current foreground Android package via dumpsys fallback chain.
+pub(crate) async fn detect_foreground() -> ForegroundApp {
+    let (_, fg) = fetch_windows_and_foreground().await;
+    fg
 }
 
 async fn query_strata_json(subargs: &[&str]) -> Option<Value> {
@@ -54,27 +75,69 @@ pub(crate) async fn collect_health(
     include_strata: bool,
     include_sideveil: Option<bool>,
 ) -> Value {
-    let fg = if package.is_empty() || package == "auto" {
-        Some(detect_foreground().await)
-    } else {
-        None
+    collect_health_with_snapshot(
+        package,
+        None,
+        None,
+        include_sf,
+        include_strata,
+        include_sideveil,
+    )
+    .await
+}
+
+/// Collects health reusing optional pre-captured `dumpsys window windows` and foreground info.
+pub(crate) async fn collect_health_with_snapshot(
+    package: &str,
+    pre_windows: Option<String>,
+    pre_fg: Option<ForegroundApp>,
+    include_sf: bool,
+    include_strata: bool,
+    include_sideveil: Option<bool>,
+) -> Value {
+    let auto_pkg = package.is_empty() || package == "auto";
+    let (win_text, fg) = match (pre_windows, pre_fg) {
+        (Some(wt), fg_opt) => {
+            let fg_res = if fg_opt.is_some() {
+                fg_opt
+            } else if auto_pkg {
+                let parsed = parse_foreground_activity(&wt);
+                if parsed.package.is_some() {
+                    Some(parsed)
+                } else {
+                    Some(detect_foreground_fallback().await)
+                }
+            } else {
+                None
+            };
+            (wt, fg_res)
+        }
+        (None, fg_opt) if auto_pkg && fg_opt.is_none() => {
+            let (wt, detected) = fetch_windows_and_foreground().await;
+            (wt, Some(detected))
+        }
+        (None, fg_opt) => {
+            let win_res = run_host(
+                &["/system/bin/dumpsys", "window", "windows"],
+                None,
+                Duration::from_secs(8),
+            )
+            .await;
+            (win_res.stdout_text(), fg_opt)
+        }
     };
+
     let resolved = fg
         .as_ref()
         .and_then(|f| f.package.clone())
         .unwrap_or_else(|| {
-            if package.is_empty() || package == "auto" {
+            if auto_pkg {
                 "unknown".to_owned()
             } else {
                 package.to_owned()
             }
         });
 
-    let win_fut = run_host(
-        &["/system/bin/dumpsys", "window", "windows"],
-        None,
-        Duration::from_secs(8),
-    );
     let gfx_fut = async {
         if resolved != "unknown" {
             let cmd = ["/system/bin/dumpsys", "gfxinfo", &resolved];
@@ -112,10 +175,9 @@ pub(crate) async fn collect_health(
         }
     };
 
-    let (win_res, gfx_res, sf_res, daemon, containers) =
-        tokio::join!(win_fut, gfx_fut, sf_fut, daemon_fut, list_fut);
+    let (gfx_res, sf_res, daemon, containers) = tokio::join!(gfx_fut, sf_fut, daemon_fut, list_fut);
 
-    let windows = parse_window_windows(&win_res.stdout_text(), true);
+    let windows = parse_window_windows(&win_text, true);
     let pkg_windows: Vec<Value> = if resolved != "unknown" {
         windows
             .iter()

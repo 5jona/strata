@@ -8,7 +8,7 @@ use serde_json::{Value, json};
 use super::parsers::{
     parse_getevent_devices, parse_module_prop, validate_readonly_sql, validate_sysfs_path,
 };
-use crate::host::{run_host, run_local};
+use crate::host::{is_direct_host, run_host, run_local};
 
 /// Inspects KernelSU modules, input devices (`getevent -lp`), or read-only `/sys`/`/proc` nodes.
 pub(crate) async fn inspect_ksu(mode: &str, path: Option<&str>) -> Value {
@@ -160,18 +160,63 @@ pub(super) async fn create_sqlite_snapshot(src: &str) -> Result<(PathBuf, PathBu
     Ok((tmp_dir, dst))
 }
 
+const HOST_SQLITE3_CANDIDATES: [&str; 4] = [
+    "/system/bin/sqlite3",
+    "/system/xbin/sqlite3",
+    "/vendor/bin/sqlite3",
+    "/data/adb/ksu/bin/sqlite3",
+];
+
+fn select_sqlite3_binary<F: Fn(&str) -> bool>(
+    direct_host: bool,
+    exists: F,
+) -> Option<&'static str> {
+    if direct_host {
+        HOST_SQLITE3_CANDIDATES
+            .iter()
+            .copied()
+            .find(|cand| exists(cand))
+    } else {
+        if exists("/usr/bin/sqlite3") {
+            return Some("/usr/bin/sqlite3");
+        }
+        HOST_SQLITE3_CANDIDATES
+            .iter()
+            .copied()
+            .find(|cand| exists(cand))
+            .or(Some("sqlite3"))
+    }
+}
+
 /// Executes a read-only `sqlite3 -readonly -json` query on a local snapshot file.
 pub(super) async fn query_snapshot_json(dst: &Path, query: &str) -> Result<Vec<Value>, String> {
+    let direct_host = is_direct_host();
+    let Some(sqlite_bin) = select_sqlite3_binary(direct_host, |p| Path::new(p).is_file()) else {
+        return Err(format!(
+            "sqlite3 binary not found on Android host (probed {}); start a Strata container or install sqlite3 for sqlite_inspect",
+            HOST_SQLITE3_CANDIDATES.join(", ")
+        ));
+    };
     let dst_str = dst.to_string_lossy().into_owned();
     let res = run_local(
-        "sqlite3",
+        sqlite_bin,
         &["-readonly", "-json", &dst_str, query],
         None,
         Duration::from_secs(10),
     )
     .await;
     if !res.ok() {
-        return Err(res.stderr_text().trim().to_owned());
+        let stderr = res.stderr_text().trim().to_owned();
+        if direct_host
+            && (stderr.contains("unknown option")
+                || stderr.contains("unrecognized option")
+                || res.code == 127)
+        {
+            return Err(format!(
+                "host sqlite3 ({sqlite_bin}) does not support '-readonly -json' ({stderr}); start a Strata container for full sqlite_inspect support"
+            ));
+        }
+        return Err(stderr);
     }
     let stdout = res.stdout_text();
     if stdout.trim().is_empty() {
@@ -205,4 +250,27 @@ fn now_nanos() -> u128 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos())
         .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn selects_sqlite3_binary_for_direct_host_and_container() {
+        assert_eq!(
+            select_sqlite3_binary(true, |p| p == "/system/bin/sqlite3"),
+            Some("/system/bin/sqlite3")
+        );
+        assert_eq!(
+            select_sqlite3_binary(true, |p| p == "/data/adb/ksu/bin/sqlite3"),
+            Some("/data/adb/ksu/bin/sqlite3")
+        );
+        assert_eq!(select_sqlite3_binary(true, |_| false), None);
+        assert_eq!(
+            select_sqlite3_binary(false, |p| p == "/usr/bin/sqlite3"),
+            Some("/usr/bin/sqlite3")
+        );
+        assert_eq!(select_sqlite3_binary(false, |_| false), Some("sqlite3"));
+    }
 }

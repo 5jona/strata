@@ -83,14 +83,19 @@ pub(crate) async fn handle_visual(reg: &DeviceRegistry, p: VisualCaptureParams) 
                 .to_string_lossy()
                 .into_owned()
         });
-        let pull = transfer_pull(reg, &target, &rpath, &local, false).await;
-        let _ = ssh_exec_argv(
-            reg,
-            &target,
-            &["rm".to_owned(), "-f".to_owned(), rpath],
-            10.0,
-        )
-        .await;
+        let is_adb_host = res["route"] == json!("adb-host");
+        let pull = transfer_pull(reg, &target, &rpath, &local, is_adb_host).await;
+        let rm_cmd = if is_adb_host {
+            vec![
+                "host-exec".to_owned(),
+                "/system/bin/rm".to_owned(),
+                "-f".to_owned(),
+                rpath,
+            ]
+        } else {
+            vec!["rm".to_owned(), "-f".to_owned(), rpath]
+        };
+        let _ = ssh_exec_argv(reg, &target, &rm_cmd, 10.0).await;
         if pull["ok"] == json!(true) {
             res["pulled"] = json!(true);
             res["localPath"] = json!(local);

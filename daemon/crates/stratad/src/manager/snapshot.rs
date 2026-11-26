@@ -1,6 +1,8 @@
 //! Container status snapshot assembly and disk/rootfs usage collection.
 
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use strata_protocol::rpc::{ContainerStateChangedPayload, events};
 use strata_protocol::{
@@ -11,34 +13,71 @@ use strata_sys::{cgroup, loopdev, mount, net, procfs};
 use crate::manager::ContainerManager;
 use crate::sideveil_seam::PluginEventSink;
 
+/// Host-wide mount, loop, and network state collected once per `list_containers` call.
+pub(crate) struct SharedHostState {
+    ext4_mount_targets: HashSet<String>,
+    loop_backing_map: HashMap<(u64, u64), Vec<PathBuf>>,
+    primary_ipv4: String,
+}
+
+impl SharedHostState {
+    pub(crate) fn collect() -> Self {
+        Self {
+            ext4_mount_targets: mount::read_ext4_mount_targets().unwrap_or_default(),
+            loop_backing_map: loopdev::scan_loop_backing_map(),
+            primary_ipv4: net::detect_primary_ipv4(),
+        }
+    }
+
+    pub(crate) fn fallback() -> Self {
+        Self {
+            ext4_mount_targets: HashSet::new(),
+            loop_backing_map: HashMap::new(),
+            primary_ipv4: "127.0.0.1".to_owned(),
+        }
+    }
+}
+
 struct HostProbe {
     mounted: bool,
     loop_devices: Vec<String>,
     disk: ContainerDiskStats,
     cgroup_path: Option<String>,
-    primary_ipv4: String,
 }
 
 impl HostProbe {
-    fn collect(id: &str, image_path: &Path, mount_dir: &Path) -> Self {
-        let mounted = mount::is_ext4_mounted(mount_dir).unwrap_or(false);
-        let loop_devices = loopdev::find_image_loops(image_path)
-            .unwrap_or_default()
-            .into_iter()
-            .map(|p| p.to_string_lossy().into_owned())
-            .collect();
+    fn collect_with_host_state(
+        id: &str,
+        image_path: &Path,
+        mount_dir: &Path,
+        host: &SharedHostState,
+    ) -> Self {
+        let mounted = host
+            .ext4_mount_targets
+            .contains(mount_dir.to_string_lossy().as_ref());
+        let loop_devices = if image_path.is_file() {
+            loopdev::file_dev_inode(image_path)
+                .ok()
+                .and_then(|key| host.loop_backing_map.get(&key))
+                .map(|devs| {
+                    devs.iter()
+                        .map(|p| p.to_string_lossy().into_owned())
+                        .collect()
+                })
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
         let disk = collect_disk_stats(image_path, mount_dir, mounted);
         let cgroup_path = {
             let p = cgroup::container_cgroup_v2_path(id);
             p.exists().then(|| p.to_string_lossy().into_owned())
         };
-        let primary_ipv4 = net::detect_primary_ipv4();
         Self {
             mounted,
             loop_devices,
             disk,
             cgroup_path,
-            primary_ipv4,
         }
     }
 
@@ -55,7 +94,6 @@ impl HostProbe {
                 rootfs_available_bytes: None,
             },
             cgroup_path: None,
-            primary_ipv4: "127.0.0.1".to_owned(),
         }
     }
 }
@@ -90,6 +128,22 @@ impl ContainerManager {
         cfg: &ContainerConfig,
         is_default: bool,
     ) -> ContainerStatusSnapshot {
+        let host_state = Arc::new(
+            tokio::task::spawn_blocking(SharedHostState::collect)
+                .await
+                .unwrap_or_else(|_| SharedHostState::fallback()),
+        );
+        self.build_snapshot_with_host_state(id, cfg, is_default, host_state)
+            .await
+    }
+
+    pub(crate) async fn build_snapshot_with_host_state(
+        &self,
+        id: &str,
+        cfg: &ContainerConfig,
+        is_default: bool,
+        host_state: Arc<SharedHostState>,
+    ) -> ContainerStatusSnapshot {
         let slot = self.get_or_create_slot(id).await;
         let (phase, ns_pid, mnt_ns_inode, uptime_ms, restart_count, last_error) = {
             let live = slot.state.read().await;
@@ -108,10 +162,12 @@ impl ContainerManager {
         let cid = id.to_owned();
         let image_path = PathBuf::from(&cfg.image_path);
         let mount_dir = PathBuf::from(&cfg.mount_dir);
-        let probe =
-            tokio::task::spawn_blocking(move || HostProbe::collect(&cid, &image_path, &mount_dir))
-                .await
-                .unwrap_or_else(|_| HostProbe::fallback());
+        let host_ref = Arc::clone(&host_state);
+        let probe = tokio::task::spawn_blocking(move || {
+            HostProbe::collect_with_host_state(&cid, &image_path, &mount_dir, &host_ref)
+        })
+        .await
+        .unwrap_or_else(|_| HostProbe::fallback());
 
         ContainerStatusSnapshot {
             id: id.to_owned(),
@@ -130,7 +186,7 @@ impl ContainerManager {
             ssh_enabled: cfg.ssh.enabled,
             ssh_listen_addr: cfg.ssh.listen_addr.clone(),
             ssh_port: cfg.ssh.port,
-            primary_ipv4: probe.primary_ipv4,
+            primary_ipv4: host_state.primary_ipv4.clone(),
             host_bridge: cfg.host_bridge,
             host_runtime: cfg.host_runtime,
             uptime_ms,

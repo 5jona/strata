@@ -155,7 +155,15 @@ struct SshBlock {
     user: Option<String>,
 }
 
-/// Parses `~/.ssh/config` keeping Strata-relevant entries (port 2222, default env host, or configured hosts).
+/// Returns true when an SSH port is within Strata's default or custom container range (`2200..=2299`).
+pub(crate) fn is_strata_ssh_port(port: u16) -> bool {
+    (2200..=2299).contains(&port)
+}
+
+/// Parses `~/.ssh/config` keeping Strata-relevant entries:
+/// - Port 2222 (Strata default container SSH port),
+/// - Custom container ports `2200..=2299` when paired with `User root` or a `strata` host alias,
+/// - Explicitly configured hosts (`devices.json` / `STRATA_SSH_HOST`).
 pub(crate) fn parse_ssh_config_text(text: &str, extra_hosts: &HashSet<String>) -> Vec<SshEntry> {
     let env_host = std::env::var("STRATA_SSH_HOST")
         .ok()
@@ -206,7 +214,10 @@ pub(crate) fn parse_ssh_config_text(text: &str, extra_hosts: &HashSet<String>) -
     for b in blocks {
         for h in b.hosts {
             let low = h.to_ascii_lowercase();
+            let custom_strata_port = b.port.is_some_and(is_strata_ssh_port)
+                && (b.user.as_deref() == Some("root") || low.contains("strata"));
             let keep = b.port == Some(2222)
+                || custom_strata_port
                 || extra_hosts.contains(&low)
                 || env_host.as_deref() == Some(low.as_str());
             if keep {
@@ -224,4 +235,41 @@ pub(crate) fn parse_ssh_config_text(text: &str, extra_hosts: &HashSet<String>) -
 
 pub(crate) fn home_dir() -> PathBuf {
     std::env::var_os("HOME").map_or_else(|| PathBuf::from("/tmp"), PathBuf::from)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ssh_config_keeps_strata_ports_and_filters_ordinary_hosts() {
+        let cfg = "\
+Host default-dev
+  HostName 192.0.2.10
+  Port 2222
+  User root
+
+Host strata-alt
+  HostName 192.0.2.11
+  Port 2225
+
+Host custom-root
+  HostName 192.0.2.12
+  Port 2299
+  User root
+
+Host prod-bastion
+  HostName 198.51.100.5
+  Port 2225
+  User deploy
+
+Host regular-ssh
+  HostName 198.51.100.6
+  Port 22
+  User root
+";
+        let entries = parse_ssh_config_text(cfg, &HashSet::new());
+        let hosts: Vec<&str> = entries.iter().map(|e| e.host.as_str()).collect();
+        assert_eq!(hosts, vec!["default-dev", "strata-alt", "custom-root"]);
+    }
 }

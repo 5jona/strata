@@ -1,6 +1,7 @@
 import { Button, Card, Input, SettingRow, Switch } from '@gojona/ui';
 import { RotateCcw, Save } from 'lucide-react';
 import { useEffect, useId, useMemo, useState } from 'react';
+import { bindMountsEqual, stringArrayEqual } from '../shared/passthrough.ts';
 import { parseSshPort } from '../shared/strataFormat.ts';
 import {
   type BindMount,
@@ -70,8 +71,8 @@ export function KsuConfigTab({
       hostBridge !== config.hostBridge ||
       noatime !== config.noatime ||
       hostRuntime !== config.hostRuntime ||
-      JSON.stringify(extraCharDevs) !== JSON.stringify(config.extraCharDevs ?? []) ||
-      JSON.stringify(extraMounts) !== JSON.stringify(config.extraMounts ?? [])
+      !stringArrayEqual(extraCharDevs, config.extraCharDevs ?? []) ||
+      !bindMountsEqual(extraMounts, config.extraMounts ?? [])
     );
   }, [
     autoStart,

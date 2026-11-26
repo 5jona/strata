@@ -6,10 +6,10 @@ import { fileURLToPath } from 'node:url';
 import { collectFixtureFiles, validateFixtureFile, validateValue } from '@gojona/contracts-gen';
 import {
   buildStrataRpcShellCommand,
-  createMockKsuStrataTransport,
   invokeStrataKsuRpc,
   readStrataKsuWebToken,
 } from '../src/ksu/ksuStrataClient.ts';
+import { createMockKsuStrataTransport } from '../src/ksu/mockKsuTransport.ts';
 import { STRATA_MANIFEST } from '../src/manifest.ts';
 import { createMockStrataTransport } from '../src/plugin/mockStrataBridge.ts';
 import { hasL5DiagMounts, isL5DiagMount, toggleL5DiagMounts } from '../src/shared/passthrough.ts';

@@ -132,7 +132,19 @@ export function useKsuActions({
 
   const toggleServiceAutoStart = async (serviceId: string, autoStart: boolean) => {
     if (!activeContainer) return;
-    const spec = containerConfig?.services.find((s) => s.id === serviceId);
+    let spec = containerConfig?.services.find((s) => s.id === serviceId);
+    if (!spec) {
+      try {
+        const cfgRes = await invokeStrataKsuRpc(bridge, STRATA_METHODS.CONTAINER_CONFIG_GET, {
+          container: activeContainer.id,
+        });
+        setContainerConfig(cfgRes.config);
+        spec = cfgRes.config.services.find((s) => s.id === serviceId);
+      } catch (err) {
+        pushToast(errMsg(err), 'danger');
+        return;
+      }
+    }
     if (!spec) {
       pushToast('未找到服务配置定义，请先刷新配置', 'danger');
       return;
@@ -172,6 +184,65 @@ export function useKsuActions({
     }
   };
 
+  const setDefaultContainer = async (containerId: string) => {
+    setBusyKey(`container:default:${containerId}`);
+    try {
+      await invokeStrataKsuRpc(bridge, STRATA_METHODS.CONTAINER_SET_DEFAULT, { id: containerId });
+      pushToast(`已将 ${containerId} 设为默认容器`, 'success');
+      await refreshAll();
+    } catch (err) {
+      pushToast(errMsg(err), 'danger');
+    } finally {
+      setBusyKey(null);
+    }
+  };
+
+  const deleteContainer = async (containerId: string, deleteImage: boolean) => {
+    setBusyKey(`container:delete:${containerId}`);
+    try {
+      await invokeStrataKsuRpc(
+        bridge,
+        STRATA_METHODS.CONTAINER_DELETE,
+        { id: containerId, deleteImage, force: true },
+        30_000,
+      );
+      pushToast(
+        deleteImage ? `已删除容器 ${containerId} 及磁盘镜像` : `已移除容器 ${containerId} 配置`,
+        'success',
+      );
+      await refreshAll();
+    } catch (err) {
+      pushToast(errMsg(err), 'danger');
+    } finally {
+      setBusyKey(null);
+    }
+  };
+
+  const createContainer = async (containerId: string) => {
+    setBusyKey(`container:create:${containerId}`);
+    try {
+      const res = await invokeStrataKsuRpc(bridge, STRATA_METHODS.CONTAINER_CREATE, {
+        id: containerId,
+        distroId: 'debian-12',
+        sizeMb: 4096,
+        enableSsh: true,
+        autoStart: true,
+        setDefault: true,
+        hostBridge: true,
+        l5DiagnosticMounts: false,
+        syncAndroidDns: true,
+        noatime: true,
+        sshPublicKeys: [],
+      });
+      pushToast(`已提交创建任务 ${res.jobId}，后台正在拉取镜像`, 'info');
+      await refreshAll();
+    } catch (err) {
+      pushToast(errMsg(err), 'danger');
+    } finally {
+      setBusyKey(null);
+    }
+  };
+
   const startDaemon = async () => {
     setBusyKey('daemon:rescue');
     try {
@@ -191,6 +262,9 @@ export function useKsuActions({
     runServiceAction,
     toggleServiceAutoStart,
     loadServiceLogs,
+    setDefaultContainer,
+    deleteContainer,
+    createContainer,
     startDaemon,
   };
 }

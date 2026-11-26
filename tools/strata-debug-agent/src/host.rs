@@ -48,6 +48,11 @@ enum HostBackend {
     Nsenter,
 }
 
+/// Returns true when running directly on Android host without container `host-exec`.
+pub(crate) fn is_direct_host() -> bool {
+    detect_host_backend() == HostBackend::DirectHost
+}
+
 fn detect_host_backend() -> HostBackend {
     if host_exec_available() {
         HostBackend::HostExec

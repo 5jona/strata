@@ -1,17 +1,5 @@
 import { Badge, Button, Card, MetricTile, StatusBanner } from '@gojona/ui';
-import {
-  Archive,
-  Copy,
-  HardDrive,
-  Play,
-  RefreshCw,
-  RotateCw,
-  ShieldCheck,
-  Sparkles,
-  Square,
-  Wifi,
-} from 'lucide-react';
-import { useState } from 'react';
+import { Copy, HardDrive, Play, RotateCw, Square } from 'lucide-react';
 import {
   buildSshCommand,
   formatBytes,
@@ -20,6 +8,7 @@ import {
   splitBytes,
 } from '../shared/strataFormat.ts';
 import type { ContainerStatusSnapshot } from '../types.ts';
+import { KsuMaintenanceCard } from './KsuMaintenanceCard.tsx';
 import type { KsuMaintenanceOp } from './useKsuActions.ts';
 
 /** Props accepted by `KsuOverviewTab`. */
@@ -28,6 +17,8 @@ export interface KsuOverviewTabProps {
   busyKey: string | null;
   onLifecycle: (action: 'start' | 'stop' | 'restart') => Promise<void>;
   onMaintenance: (op: KsuMaintenanceOp) => Promise<void>;
+  onSetDefault: (containerId: string) => Promise<void>;
+  onDeleteContainer: (containerId: string, deleteImage: boolean) => Promise<void>;
   onCopyText: (text: string, label: string) => Promise<void>;
   onOpenSettings?: () => void;
 }
@@ -38,11 +29,11 @@ export function KsuOverviewTab({
   busyKey,
   onLifecycle,
   onMaintenance,
+  onSetDefault,
+  onDeleteContainer,
   onCopyText,
   onOpenSettings,
 }: KsuOverviewTabProps) {
-  const [confirmFsck, setConfirmFsck] = useState(false);
-
   const phaseMeta = PHASE_META[container.phase];
   const isRunning = container.phase === 'running';
   const busy = busyKey !== null;
@@ -86,10 +77,11 @@ export function KsuOverviewTab({
           <Card className="flex flex-col gap-3 p-4">
             <div className="flex items-start justify-between gap-2">
               <div className="min-w-0">
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2">
                   <span className="truncate text-sm font-semibold text-[var(--text-primary)]">
                     {container.id}
                   </span>
+                  {container.isDefault ? <Badge variant="accent">默认</Badge> : null}
                   <Badge variant={phaseMeta.variant} dot pulse={isRunning}>
                     {phaseMeta.label}
                   </Badge>
@@ -143,7 +135,7 @@ export function KsuOverviewTab({
                 SSH 终端连接（仅公钥免密）
               </span>
               <p className="truncate font-mono text-xs text-[var(--text-primary)]">
-                {container.sshEnabled ? sshCommand : 'SSH 未启用（可在「配置与安全」中开启）'}
+                {container.sshEnabled ? sshCommand : 'SSH 未启用（可在「配置」中开启）'}
               </p>
             </div>
             <Button
@@ -192,88 +184,13 @@ export function KsuOverviewTab({
         </div>
       </div>
 
-      <Card className="flex flex-col gap-2.5 p-4">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <span className="text-xs font-medium text-[var(--text-primary)]">磁盘与网络维护</span>
-          <span className="text-[11px] text-[var(--text-secondary)]">
-            按顺序安全执行，避免文件冲突
-          </span>
-        </div>
-
-        <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-          <Button
-            size="sm"
-            variant="secondary"
-            disabled={busy || !container.mounted}
-            onClick={() => void onMaintenance('dns')}
-          >
-            <Wifi className="size-3.5" />
-            同步 DNS
-          </Button>
-          <Button
-            size="sm"
-            variant="secondary"
-            disabled={busy || imageMissing}
-            onClick={() => void onMaintenance('compact')}
-          >
-            <Sparkles className="size-3.5" />
-            回收空闲空间
-          </Button>
-          <Button
-            size="sm"
-            variant={confirmFsck ? 'danger' : 'secondary'}
-            disabled={busy || imageMissing}
-            onClick={() => setConfirmFsck((prev) => !prev)}
-          >
-            <ShieldCheck className="size-3.5" />
-            停机磁盘检查
-          </Button>
-          <Button
-            size="sm"
-            variant="secondary"
-            disabled={busy || imageMissing}
-            onClick={() => void onMaintenance('backup')}
-          >
-            {busyKey === 'maint:backup' ? (
-              <RefreshCw className="size-3.5 animate-spin" />
-            ) : (
-              <Archive className="size-3.5" />
-            )}
-            本地镜像备份
-          </Button>
-        </div>
-
-        <p className="text-[11px] text-[var(--text-secondary)]">
-          提示：「回收空闲空间」将压缩镜像未用块，耗时约 5–30
-          秒；「停机磁盘检查」会先安全停止容器再校验修复。
-        </p>
-
-        {confirmFsck ? (
-          <StatusBanner
-            tone="warning"
-            title="确认执行停机磁盘检查 (e2fsck)？"
-            description="该操作会先安全停止当前容器并卸载镜像，再检查并修复 ext4 文件系统。"
-            action={
-              <div className="flex items-center gap-1.5">
-                <Button
-                  size="sm"
-                  variant="danger"
-                  disabled={busy}
-                  onClick={() => {
-                    setConfirmFsck(false);
-                    void onMaintenance('fsck');
-                  }}
-                >
-                  确认检查
-                </Button>
-                <Button size="sm" variant="ghost" onClick={() => setConfirmFsck(false)}>
-                  取消
-                </Button>
-              </div>
-            }
-          />
-        ) : null}
-      </Card>
+      <KsuMaintenanceCard
+        container={container}
+        busyKey={busyKey}
+        onMaintenance={onMaintenance}
+        onSetDefault={onSetDefault}
+        onDeleteContainer={onDeleteContainer}
+      />
     </div>
   );
 }

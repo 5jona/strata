@@ -13,7 +13,8 @@ use serde_json::{Value, json};
 use crate::devices::DeviceRegistry;
 use crate::params::{AppManageParams, DeviceExecParams, DeviceManageParams, FileTransferParams};
 use crate::transport::{
-    TargetOverride, ssh_exec_argv, ssh_exec_argv_once, transfer_pull, transfer_push,
+    RetryPolicy, RouteRequirement, TargetOverride, invalidate_device_caches, ssh_exec_argv,
+    ssh_exec_argv_once, ssh_exec_argv_with_req, transfer_pull, transfer_push,
 };
 
 pub(crate) use inspect::{
@@ -69,8 +70,92 @@ pub(crate) async fn handle_device_manage(reg: &DeviceRegistry, p: DeviceManagePa
             ];
             ssh_exec_argv(reg, &target, &cmd, 25.0).await
         }
+        "containers" => {
+            let target = TargetOverride {
+                device: p.device,
+                host: p.host,
+                port: p.port,
+            };
+            let cmd = vec![
+                "host-exec".to_owned(),
+                "/data/adb/ksu/bin/strata".to_owned(),
+                "--json".to_owned(),
+                "list".to_owned(),
+            ];
+            let res = ssh_exec_argv(reg, &target, &cmd, 15.0).await;
+            if res["ok"] == json!(true)
+                && let Some(arr) = res.get("data").and_then(Value::as_array)
+            {
+                let mut out = json!({
+                    "ok": true,
+                    "daemonOnline": true,
+                    "count": arr.len(),
+                    "containers": arr,
+                    "route": res["route"],
+                });
+                if let Some(reason) = res.get("degradedReason") {
+                    out["degradedReason"] = reason.clone();
+                }
+                return out;
+            }
+            res
+        }
+        "start_container" | "stop_container" => {
+            let target = TargetOverride {
+                device: p.device,
+                host: p.host,
+                port: p.port,
+            };
+            let subcmd = if p.action == "start_container" {
+                "start"
+            } else {
+                "stop"
+            };
+            let mut cmd = vec![
+                "host-exec".to_owned(),
+                "/data/adb/ksu/bin/strata".to_owned(),
+                "--json".to_owned(),
+            ];
+            if let Some(c) = p
+                .container
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+            {
+                cmd.extend(["-c".to_owned(), c.to_owned()]);
+            }
+            cmd.push(subcmd.to_owned());
+            let timeout = if subcmd == "start" { 60.0 } else { 45.0 };
+            let res = ssh_exec_argv_once(reg, &target, &cmd, timeout).await;
+            invalidate_device_caches(reg, &target).await;
+            res
+        }
+        "start_daemon" => {
+            let target = TargetOverride {
+                device: p.device,
+                host: p.host,
+                port: p.port,
+            };
+            let script = concat!(
+                "nohup /system/bin/sh /data/adb/modules/strata/service.sh --now </dev/null >/dev/null 2>&1 & ",
+                "i=0; while [ \"$i\" -lt 20 ]; do ",
+                "if out=$(/data/adb/ksu/bin/strata --json daemon status 2>/dev/null); then ",
+                "printf '%s\\n' \"$out\"; exit 0; ",
+                "fi; /system/bin/sleep 0.25; i=$((i + 1)); done; ",
+                "echo '{\"ok\":false,\"error\":\"stratad did not become ready within 5s\"}'; exit 1"
+            );
+            let cmd = vec![
+                "host-exec".to_owned(),
+                "/system/bin/sh".to_owned(),
+                "-c".to_owned(),
+                script.to_owned(),
+            ];
+            let res = ssh_exec_argv_once(reg, &target, &cmd, 20.0).await;
+            invalidate_device_caches(reg, &target).await;
+            res
+        }
         other => {
-            json!({"ok": false, "error": format!("unsupported device_manage action '{other}'; use list|select|health")})
+            json!({"ok": false, "error": format!("unsupported device_manage action '{other}'; use list|select|health|containers|start_container|stop_container|start_daemon")})
         }
     }
 }
@@ -79,6 +164,11 @@ pub(crate) async fn handle_device_manage(reg: &DeviceRegistry, p: DeviceManagePa
 pub(crate) async fn handle_device_exec(reg: &DeviceRegistry, p: DeviceExecParams) -> Value {
     let target = p.target.to_override();
     let scope = p.scope.unwrap_or_else(|| "host".to_owned());
+    let req = if scope == "container" {
+        RouteRequirement::ContainerOnly
+    } else {
+        RouteRequirement::HostOrContainer
+    };
     let timeout = p.timeout_sec.unwrap_or(30.0).clamp(1.0, 90.0);
     let cmd = vec![
         "strata-debug".to_owned(),
@@ -89,7 +179,16 @@ pub(crate) async fn handle_device_exec(reg: &DeviceRegistry, p: DeviceExecParams
         timeout.to_string(),
         p.command,
     ];
-    ssh_exec_argv_once(reg, &target, &cmd, timeout + 10.0).await
+    ssh_exec_argv_with_req(
+        reg,
+        &target,
+        &cmd,
+        timeout + 10.0,
+        RetryPolicy::SideEffect,
+        req,
+        "device_exec(scope='container')",
+    )
+    .await
 }
 
 /// Handles `file_transfer` (`push` | `pull`).

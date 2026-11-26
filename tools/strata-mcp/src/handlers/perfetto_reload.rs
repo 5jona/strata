@@ -10,7 +10,8 @@ use crate::devices::DeviceRegistry;
 use crate::params::{PerfettoTraceParams, ReloadVerifyParams};
 use crate::perfetto_pc;
 use crate::transport::{
-    TargetOverride, build_routes, ssh_exec_argv, ssh_exec_argv_once, transfer_pull,
+    TargetOverride, build_routes, probe_containers_via_adb, ssh_exec_argv, ssh_exec_argv_once,
+    transfer_pull,
 };
 
 fn now_millis() -> u128 {
@@ -121,16 +122,39 @@ pub(crate) async fn handle_perfetto(reg: &DeviceRegistry, p: PerfettoTraceParams
     res
 }
 
-/// Runs `scripts/reload.sh --ssh` and non-destructive `scripts/verify-live.py` from `STRATA_REPO_ROOT` / CWD.
+/// Runs `scripts/reload.sh` (`--ssh` or `--adb` fallback) and non-destructive `scripts/verify-live.py`.
 pub(crate) async fn handle_reload_verify(reg: &DeviceRegistry, p: ReloadVerifyParams) -> Value {
     let target: TargetOverride = p.target.to_override();
     let routes = match build_routes(reg, &target).await {
         Ok(r) => r,
         Err(e) => return json!({"ok": false, "error": e}),
     };
-    let Some(route) = routes.first() else {
-        return json!({"ok": false, "error": "no route available"});
+    let adb_serial = routes
+        .iter()
+        .find_map(|r| r.adb_serial.as_deref())
+        .map(str::to_owned);
+    let ssh_route = routes.iter().find(|r| r.kind == "ssh");
+
+    let mut degraded_reason: Option<String> = None;
+    let use_adb = if let Some(ser) = adb_serial.as_deref() {
+        if ssh_route.is_none() {
+            let probe = probe_containers_via_adb(ser, false).await;
+            if probe.active_ssh_port.is_none() {
+                degraded_reason = Some(probe.degraded_reason.unwrap_or_else(|| {
+                    "SSH/container transport unavailable; degraded to scripts/reload.sh --adb"
+                        .to_owned()
+                }));
+                true
+            } else {
+                true
+            }
+        } else {
+            false
+        }
+    } else {
+        false
     };
+
     let repo = std::env::var("STRATA_REPO_ROOT")
         .ok()
         .filter(|s| !s.trim().is_empty())
@@ -143,62 +167,139 @@ pub(crate) async fn handle_reload_verify(reg: &DeviceRegistry, p: ReloadVerifyPa
     let reload_sh = Path::new(&repo).join("scripts/reload.sh");
     let verify_py = Path::new(&repo).join("scripts/verify-live.py");
 
-    let mut r_args = vec![
-        reload_sh.to_string_lossy().into_owned(),
-        "--ssh".to_owned(),
-        route.target_spec(),
-    ];
-    if let Some(port) = route.port {
-        r_args.extend(["--ssh-port".to_owned(), port.to_string()]);
-    }
-    if p.skip_build.unwrap_or(true) {
-        r_args.push("--skip-build".to_owned());
-    }
+    let (r_args, v_args, route_kind) = if use_adb {
+        let Some(ser) = adb_serial.as_deref() else {
+            return json!({"ok": false, "error": "no SSH or ADB route available"});
+        };
+        let mut r = vec![
+            reload_sh.to_string_lossy().into_owned(),
+            "--adb".to_owned(),
+            ser.to_owned(),
+        ];
+        if p.skip_build.unwrap_or(true) {
+            r.push("--skip-build".to_owned());
+        }
+        let mut v = vec![
+            verify_py.to_string_lossy().into_owned(),
+            "--mode".to_owned(),
+            "adb".to_owned(),
+            "--adb".to_owned(),
+            ser.to_owned(),
+            "--non-destructive".to_owned(),
+        ];
+        if p.ui_only.unwrap_or(false) {
+            v.push("--ui-only".to_owned());
+        }
+        (r, v, "adb-host")
+    } else {
+        let Some(route) = ssh_route else {
+            return json!({"ok": false, "error": "no SSH or ADB route available"});
+        };
+        let mut r = vec![
+            reload_sh.to_string_lossy().into_owned(),
+            "--ssh".to_owned(),
+            route.target_spec(),
+        ];
+        if let Some(port) = route.port {
+            r.extend(["--ssh-port".to_owned(), port.to_string()]);
+        }
+        if p.skip_build.unwrap_or(true) {
+            r.push("--skip-build".to_owned());
+        }
+        let mut v = vec![
+            verify_py.to_string_lossy().into_owned(),
+            "--mode".to_owned(),
+            "ssh".to_owned(),
+            "--ssh".to_owned(),
+            route.target_spec(),
+            "--non-destructive".to_owned(),
+        ];
+        if let Some(port) = route.port {
+            v.extend(["--ssh-port".to_owned(), port.to_string()]);
+        }
+        if p.ui_only.unwrap_or(false) {
+            v.push("--ui-only".to_owned());
+        }
+        (r, v, route.kind)
+    };
 
+    let mut eff_route = route_kind;
     let r1 = tokio::time::timeout(
         Duration::from_secs(120),
         Command::new("bash").args(&r_args).output(),
     )
     .await;
-    let Ok(Ok(out1)) = r1 else {
-        return json!({"ok": false, "stage": "reload", "error": "scripts/reload.sh timed out or failed to spawn"});
+    let Ok(Ok(mut out1)) = r1 else {
+        return json!({"ok": false, "stage": "reload", "route": eff_route, "error": "scripts/reload.sh timed out or failed to spawn"});
     };
+
+    // If SSH reload failed and an online ADB serial is present, automatically fall back to `--adb`.
+    let mut eff_v_args = v_args;
+    if !out1.status.success()
+        && !use_adb
+        && let Some(ser) = adb_serial.as_deref()
+    {
+        let mut adb_r = vec![
+            reload_sh.to_string_lossy().into_owned(),
+            "--adb".to_owned(),
+            ser.to_owned(),
+        ];
+        if p.skip_build.unwrap_or(true) {
+            adb_r.push("--skip-build".to_owned());
+        }
+        if let Ok(Ok(adb_out)) = tokio::time::timeout(
+            Duration::from_secs(120),
+            Command::new("bash").args(&adb_r).output(),
+        )
+        .await
+        {
+            out1 = adb_out;
+            eff_route = "adb-host";
+            degraded_reason =
+                Some("SSH reload failed; fell back to scripts/reload.sh --adb".to_owned());
+            eff_v_args = vec![
+                verify_py.to_string_lossy().into_owned(),
+                "--mode".to_owned(),
+                "adb".to_owned(),
+                "--adb".to_owned(),
+                ser.to_owned(),
+                "--non-destructive".to_owned(),
+            ];
+            if p.ui_only.unwrap_or(false) {
+                eff_v_args.push("--ui-only".to_owned());
+            }
+        }
+    }
+
     if !out1.status.success() {
-        return json!({
-            "ok": false, "stage": "reload", "rc": out1.status.code(),
+        let mut resp = json!({
+            "ok": false, "stage": "reload", "route": eff_route, "rc": out1.status.code(),
             "stdout": String::from_utf8_lossy(&out1.stdout),
             "stderr": String::from_utf8_lossy(&out1.stderr),
         });
-    }
-
-    let mut v_args = vec![
-        verify_py.to_string_lossy().into_owned(),
-        "--mode".to_owned(),
-        "ssh".to_owned(),
-        "--ssh".to_owned(),
-        route.target_spec(),
-        "--non-destructive".to_owned(),
-    ];
-    if let Some(port) = route.port {
-        v_args.extend(["--ssh-port".to_owned(), port.to_string()]);
-    }
-    if p.ui_only.unwrap_or(false) {
-        v_args.push("--ui-only".to_owned());
+        if let Some(reason) = degraded_reason {
+            resp["degradedReason"] = json!(reason);
+        }
+        return resp;
     }
 
     let r2 = tokio::time::timeout(
         Duration::from_secs(120),
-        Command::new("python3").args(&v_args).output(),
+        Command::new("python3").args(&eff_v_args).output(),
     )
     .await;
-    match r2 {
+    let mut resp = match r2 {
         Ok(Ok(out2)) => json!({
-            "ok": out2.status.success(), "stage": "verify", "rc": out2.status.code(),
+            "ok": out2.status.success(), "stage": "verify", "route": eff_route, "rc": out2.status.code(),
             "stdout": String::from_utf8_lossy(&out2.stdout),
             "stderr": String::from_utf8_lossy(&out2.stderr),
         }),
         _ => {
-            json!({"ok": false, "stage": "verify", "error": "verify-live.py timed out or failed to spawn"})
+            json!({"ok": false, "stage": "verify", "route": eff_route, "error": "verify-live.py timed out or failed to spawn"})
         }
+    };
+    if let Some(reason) = degraded_reason {
+        resp["degradedReason"] = json!(reason);
     }
+    resp
 }

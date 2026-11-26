@@ -31,14 +31,16 @@ impl TargetArgs {
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct DeviceManageParams {
-    /// Action: "list" | "select" | "health".
+    /// Action: "list" | "select" | "health" | "containers" | "start_container" | "stop_container" | "start_daemon".
     pub(crate) action: String,
-    /// Device alias/serial/model (for select or health).
+    /// Device alias/serial/model (for select, health, or container/daemon ops).
     pub(crate) device: Option<String>,
     /// Clear session selected device (when action="select").
     pub(crate) clear: Option<bool>,
     /// Package name or "auto" (when action="health").
     pub(crate) package: Option<String>,
+    /// Optional container id for start_container/stop_container (defaults to default/first container).
+    pub(crate) container: Option<String>,
     pub(crate) host: Option<String>,
     pub(crate) port: Option<u16>,
 }

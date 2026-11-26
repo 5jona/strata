@@ -99,11 +99,9 @@ async fn handle_connection(
     let (out_tx, mut out_rx) = mpsc::channel::<String>(128);
 
     let writer_task = tokio::spawn(async move {
-        while let Some(line) = out_rx.recv().await {
+        while let Some(mut line) = out_rx.recv().await {
+            line.push('\n');
             if write_half.write_all(line.as_bytes()).await.is_err() {
-                break;
-            }
-            if write_half.write_all(b"\n").await.is_err() {
                 break;
             }
             let _ = write_half.flush().await;

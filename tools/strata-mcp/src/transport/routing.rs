@@ -1,4 +1,4 @@
-//! Transport route construction, SSH ControlMaster argument building, and ADB forward setup.
+//! Transport route construction (`ssh` -> `adb-ssh` -> `adb-host`) and ControlMaster management.
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -9,7 +9,7 @@ use crate::devices::{
     DeviceRecord, DeviceRegistry, device_control_path, device_known_hosts_path, is_ip_literal,
 };
 
-/// Single candidate transport path (`ssh` or `adb-ssh`) to reach a device container.
+/// Single candidate transport path (`ssh`, `adb-ssh`, or `adb-host`) to reach a device.
 #[derive(Debug, Clone)]
 pub(crate) struct TransportRoute {
     pub(crate) kind: &'static str,
@@ -29,6 +29,25 @@ impl TransportRoute {
             Some(u) => format!("{u}@{}", self.host),
             None => self.host.clone(),
         }
+    }
+
+    pub(crate) fn session_key(&self) -> String {
+        match self.kind {
+            "adb-host" => format!("adb-host:{}", self.adb_serial.as_deref().unwrap_or("")),
+            "adb-ssh" => format!(
+                "adb-ssh:{}:{}:{}",
+                self.adb_serial.as_deref().unwrap_or(""),
+                self.local_port.unwrap_or(0),
+                self.remote_ssh_port
+            ),
+            _ => format!("ssh:{}:{}", self.target_spec(), self.port.unwrap_or(2222)),
+        }
+    }
+
+    pub(crate) fn with_remote_port(&self, remote_port: u16) -> Self {
+        let mut next = self.clone();
+        next.remote_ssh_port = remote_port;
+        next
     }
 
     pub(crate) fn base_ssh_args(&self) -> Vec<String> {
@@ -152,6 +171,7 @@ async fn routes_for_record(
         });
     }
 
+    let mut adb_host_route = None;
     let serial = rec
         .adb_usb_serial
         .as_deref()
@@ -168,9 +188,20 @@ async fn routes_for_record(
             port: Some(local_p),
             user: Some(rec.ssh_user.clone().unwrap_or_else(|| "root".to_owned())),
             control_path: adb_ctl,
-            known_hosts_path: kh,
+            known_hosts_path: kh.clone(),
             adb_serial: Some(ser.to_owned()),
             local_port: Some(local_p),
+            remote_ssh_port: remote_p,
+        });
+        adb_host_route = Some(TransportRoute {
+            kind: "adb-host",
+            host: "adb-host".to_owned(),
+            port: None,
+            user: None,
+            control_path: PathBuf::new(),
+            known_hosts_path: kh,
+            adb_serial: Some(ser.to_owned()),
+            local_port: None,
             remote_ssh_port: remote_p,
         });
     }
@@ -191,6 +222,9 @@ async fn routes_for_record(
             routes.push(r);
         }
     }
+    if let Some(r) = adb_host_route {
+        routes.push(r);
+    }
     if routes.is_empty() {
         return Err(format!(
             "device '{}' has no usable SSH or online ADB transport",
@@ -200,39 +234,11 @@ async fn routes_for_record(
     Ok(routes)
 }
 
-/// Ensures `adb -s <serial> forward tcp:<local> tcp:<remote>` is active.
-pub(crate) async fn ensure_adb_forward(
-    serial: &str,
-    local_port: u16,
-    remote_port: u16,
-) -> Result<(), String> {
-    let out = tokio::time::timeout(
-        Duration::from_secs(10),
-        Command::new("adb")
-            .args([
-                "-s",
-                serial,
-                "forward",
-                &format!("tcp:{local_port}"),
-                &format!("tcp:{remote_port}"),
-            ])
-            .output(),
-    )
-    .await
-    .map_err(|_| format!("adb forward timed out for {serial}"))?
-    .map_err(|e| format!("failed to invoke adb: {e}"))?;
-
-    if !out.status.success() {
-        return Err(format!(
-            "adb forward failed for {serial}: {}",
-            String::from_utf8_lossy(&out.stderr).trim()
-        ));
-    }
-    Ok(())
-}
-
-/// Closes a stale SSH ControlMaster socket cleanly.
+/// Closes a stale SSH ControlMaster socket cleanly (no-op for `adb-host`).
 pub(crate) async fn reset_control_socket(route: &TransportRoute) {
+    if route.kind == "adb-host" {
+        return;
+    }
     let _ = tokio::time::timeout(
         Duration::from_secs(4),
         Command::new("ssh")
@@ -249,45 +255,39 @@ pub(crate) async fn reset_control_socket(route: &TransportRoute) {
     let _ = std::fs::remove_file(&route.control_path);
 }
 
-/// POSIX single-quote escaping preventing shell injection when composing remote SSH commands.
-pub(crate) fn shell_quote(arg: &str) -> String {
-    if !arg.is_empty()
-        && arg.bytes().all(|b| {
-            b.is_ascii_alphanumeric() || matches!(b, b'/' | b'.' | b'_' | b'-' | b':' | b'=' | b',')
-        })
-    {
-        return arg.to_owned();
-    }
-    format!("'{}'", arg.replace('\'', "'\"'\"'"))
-}
-
-/// Safely formats an argument vector into a POSIX shell command line.
-pub(crate) fn argv_to_shell(argv: &[String]) -> String {
-    argv.iter()
-        .map(|a| shell_quote(a))
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn quotes_shell_arguments_against_injection() {
-        let cmd = argv_to_shell(&[
-            "strata-debug".to_owned(),
-            "cdp".to_owned(),
-            "eval".to_owned(),
-            "document.title; $(rm -rf /); 'x'".to_owned(),
-        ]);
-        assert!(cmd.contains("'document.title; $(rm -rf /); '\"'\"'x'\"'\"''"));
-    }
 
     #[test]
     fn ssh_and_adb_routes_use_distinct_control_paths() {
         let ssh_ctl = device_control_path("demo-tab-ssh");
         let adb_ctl = device_control_path("demo-tab-adb");
         assert_ne!(ssh_ctl, adb_ctl);
+    }
+
+    #[tokio::test]
+    async fn builds_three_tier_routes_ssh_adb_ssh_adb_host() {
+        let reg = DeviceRegistry::default();
+        let rec = DeviceRecord {
+            id: "demo-dev".to_owned(),
+            alias: Some("demo-dev".to_owned()),
+            model: Some("TESTDEV".to_owned()),
+            product: None,
+            adb_serial: Some("SYNTHETIC_SER_1".to_owned()),
+            adb_state: Some("device".to_owned()),
+            adb_transports: vec!["usb".to_owned()],
+            adb_usb_serial: Some("SYNTHETIC_SER_1".to_owned()),
+            adb_tcpip_serial: None,
+            ssh_host: Some("demo-dev".to_owned()),
+            ssh_hostname: None,
+            ssh_port: Some(2222),
+            ssh_user: Some("root".to_owned()),
+            prefer_transport: "ssh".to_owned(),
+            sources: vec!["adb".to_owned(), "ssh".to_owned()],
+        };
+        let routes = routes_for_record(&reg, &rec, None).await.expect("routes");
+        let kinds: Vec<&str> = routes.iter().map(|r| r.kind).collect();
+        assert_eq!(kinds, vec!["ssh", "adb-ssh", "adb-host"]);
     }
 }

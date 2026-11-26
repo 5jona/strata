@@ -4,7 +4,7 @@
 #
 
 prepare_rootfs_image() {
-    adb_su "${REMOTE_MOD_DIR}/bin/strata stop >/dev/null 2>&1 || true"
+    adb_su "${REMOTE_MOD_DIR}/bin/strata -c ${CONTAINER_ID} stop >/dev/null 2>&1 || true"
     local exists
     exists="$(adb_su "[ -f ${IMAGE_PATH} ] && echo YES || echo NO" | tr -d '\r')"
     if [ "${RECREATE}" -eq 0 ] && [ "${exists}" = "YES" ]; then
@@ -37,6 +37,8 @@ prepare_rootfs_image() {
     fi
 
     echo "[*] Pushing ${tarball} and unpacking into sparse ext4 image (${IMAGE_SIZE})..."
+    local volume_label="strata_${CONTAINER_ID}"
+    volume_label="${volume_label:0:16}"
     adb_cmd push "${local_tar}" "/data/local/tmp/${tarball}" >/dev/null
     adb_su "
         set -e
@@ -52,7 +54,7 @@ prepare_rootfs_image() {
         /system/bin/chmod 0755 /data/local/strata /data/local/strata/containers $(dirname "${IMAGE_PATH}") ${MOUNT_DIR}
         /system/bin/rm -f ${IMAGE_PATH}
         /system/bin/truncate -s ${IMAGE_SIZE} ${IMAGE_PATH}
-        /system/bin/mkfs.ext4 -F -L strata_main ${IMAGE_PATH} >/dev/null
+        /system/bin/mkfs.ext4 -F -L ${volume_label} ${IMAGE_PATH} >/dev/null
         /system/bin/chcon u:object_r:vold_data_file:s0 ${IMAGE_PATH} 2>/dev/null || true
         LOOP_DEV=\$(/system/bin/losetup -f --show ${IMAGE_PATH})
         /system/bin/mount -t ext4 -o rw,relatime \"\${LOOP_DEV}\" ${MOUNT_DIR}
@@ -92,7 +94,7 @@ provision_rootfs_via_chroot() {
             /system/bin/rm -rf ${CONTAINER_STAGE}
         }
         trap cleanup EXIT
-        ${REMOTE_MOD_DIR}/bin/strata stop >/dev/null 2>&1 || true
+        ${REMOTE_MOD_DIR}/bin/strata -c ${CONTAINER_ID} stop >/dev/null 2>&1 || true
         /system/bin/mkdir -p ${MOUNT_DIR}
         LOOP_DEV=\$(/system/bin/losetup -f --show ${IMAGE_PATH})
         /system/bin/mount -t ext4 -o rw,relatime \"\${LOOP_DEV}\" ${MOUNT_DIR}
