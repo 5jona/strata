@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-11-27
+
+### Added
+
+- Upgraded zero-container mode, optional SSH (`ssh.enabled=false`), `container.setDefault`, XDG Layout v2 tool management (`mise`, `uv`, distro packages, shell presets), and `KsuContainerFleetCard` multi-container overview.
+- Upgraded `strata-mcp` with 3-tier transport failover, persistent RPC pool, dynamic device discovery, `RetryPolicy` (`Idempotent` / `SideEffect`), and `observe_step` multi-step actions + `waitForText` convergence.
+- Extended `cdp_debug` layout audit with horizontal overflow, toast/bottom-nav overlap, broken images, and DOM node count checks.
+
+### Changed
+
+- Unified module, daemon, `strata-debug-agent`, `strata-mcp`, WebUI, plugin manifest, and Desktop companion versions to `v0.3.0` (`versionCode=300`) with `@gojona/* ^0.3.1`.
+- Redesigned KernelSU and SideVeil plugin WebUIs with full-screen bottom navigation and lazy mock loading.
+
+### Fixed
+
+- Hardened host-side rootfs cache/discovery traversal via `openat2`/`fstatat`/`unlinkat` (`RootDir`), `tools.configSet` TOML path/newline validation, and Desktop SSH URI launcher input validation.
+- Fixed `observe_step` double gesture injection, `serve-rpc` pre-connect vs. in-flight failover distinction, `apt-get` status lookup, scoped `npm`/`uv-python` uninstalls, and clone config preservation.
+
 ## [0.2.0] - 2026-11-25
 
 ### Added

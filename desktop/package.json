@@ -1,7 +1,7 @@
 {
   "name": "strata-desktop",
   "private": true,
-  "version": "0.2.0",
+  "version": "0.3.0",
   "type": "module",
   "packageManager": "pnpm@12.22.0",
   "scripts": {
@@ -15,8 +15,8 @@
     "check": "pnpm lint && pnpm typecheck && pnpm build && pnpm test"
   },
   "dependencies": {
-    "@gojona/config": "^0.2.0",
-    "@gojona/ui": "^0.2.0",
+    "@gojona/config": "^0.3.1",
+    "@gojona/ui": "^0.3.1",
     "@tauri-apps/api": "~2.11.0",
     "@tauri-apps/plugin-clipboard-manager": "^2.5.0",
     "@tauri-apps/plugin-shell": "^2.6.0",

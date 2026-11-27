@@ -1,7 +1,7 @@
 id=strata
 name=Strata
-version=v0.2.0
-versionCode=200
+version=v0.3.0
+versionCode=300
 author=pochita
 description=Zero-GKI pure-Rust multi-container Linux runtime and daemon for Android 16+ (arm64)
 updateJson=https://github.com/5jona/strata/releases/latest/download/update.json

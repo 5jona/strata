@@ -16,7 +16,7 @@ export interface StrataPluginManifestV1 extends PluginManifest {
 const baseManifest = definePluginManifest({
   id: STRATA_PLUGIN_ID,
   name: 'Strata 容器',
-  version: '0.2.0',
+  version: '0.3.0',
   icon: 'web/icon.svg',
   triggers: {
     packages: [],
